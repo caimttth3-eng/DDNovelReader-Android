@@ -52,3 +52,6 @@ android/key.properties
 android/app/*.jks
 android/app/*.keystore
 
+
+# Release APK (hosted on GitHub Releases, not in git)
+releases/android/*.apk
