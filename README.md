@@ -4,7 +4,7 @@
 
 - 中文名：多多朗读
 - 英文名：DDNovelReader
-- 包名：com.duoduo.duoduo_langdu
+- 包名：com.ddnovelreader
 
 ## 功能
 

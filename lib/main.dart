@@ -10,7 +10,7 @@ Future<void> main() async {
     globalAudioHandler = await AudioService.init(
       builder: () => TtsAudioHandler(),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.duoduo.duoduo_langdu.tts',
+        androidNotificationChannelId: 'com.ddnovelreader.tts',
         androidNotificationChannelName: '多多朗读',
         androidNotificationOngoing: true,
       ),

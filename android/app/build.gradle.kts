@@ -13,7 +13,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.duoduo.duoduo_langdu"
+    namespace = "com.ddnovelreader"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -23,7 +23,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.duoduo.duoduo_langdu"
+        applicationId = "com.ddnovelreader"
         minSdk = flutter.minSdkVersion
         // audio_service 0.18.19 startForeground 未传 foregroundServiceType,
         // targetSdk 34+ 抛 MissingForegroundServiceTypeException 致 MediaSession 不活跃.

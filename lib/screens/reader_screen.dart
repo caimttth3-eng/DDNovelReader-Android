@@ -129,7 +129,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   static const _volumeChannel =
-      MethodChannel('com.duoduo.duoduo_langdu/volume_keys');
+      MethodChannel('com.ddnovelreader/volume_keys');
 
   /// 原生音量键回调：上=下一句，下=上一句
   Future<dynamic> _onVolumeKey(MethodCall call) async {

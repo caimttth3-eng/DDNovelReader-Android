@@ -1,4 +1,4 @@
-package com.duoduo.duoduo_langdu
+package com.ddnovelreader
 
 import android.view.KeyEvent
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -6,7 +6,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
-    private val CHANNEL = "com.duoduo.duoduo_langdu/volume_keys"
+    private val CHANNEL = "com.ddnovelreader/volume_keys"
     private var channel: MethodChannel? = null
     private var volumeKeysEnabled = false
 
