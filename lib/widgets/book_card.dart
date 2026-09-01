@@ -98,31 +98,51 @@ class BookCard extends StatelessWidget {
                     right: 0,
                     bottom: 0,
                     child: Container(
-                      height: 10,
-                      color: const Color(0xFF5D3A1A),
+                      height: 24,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF4A2E14),
+                        border: Border(
+                          top: BorderSide(color: Color(0xFF2D1A0A), width: 1.5),
+                        ),
+                      ),
                       alignment: Alignment.center,
                       child: Stack(
                         alignment: Alignment.centerLeft,
                         children: [
+                          // 底槽
                           Container(
-                            width: double.infinity,
-                            height: 2,
-                            color: const Color(0x33FFFFFF),
+                            margin: const EdgeInsets.symmetric(horizontal: 6),
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: const Color(0x33FFFFFF),
+                              borderRadius: BorderRadius.circular(3),
+                            ),
                           ),
+                          // 进度填充
                           FractionallySizedBox(
                             widthFactor: progress.clamp(0.0, 1.0),
                             child: Container(
-                              height: 2,
-                              color: const Color(0xFFFFC107),
+                              margin: const EdgeInsets.symmetric(horizontal: 6),
+                              height: 6,
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [Color(0xFFFFD54F), Color(0xFFFFAB00)],
+                                ),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
                             ),
                           ),
-                          // 百分比
+                          // 百分比文字
                           Center(
                             child: Text(
                               '${(progress * 100).round()}%',
                               style: const TextStyle(
                                 color: Color(0xFFFFE0B2),
-                                fontSize: 8,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                shadows: [
+                                  Shadow(color: Color(0xAA000000), blurRadius: 1),
+                                ],
                               ),
                             ),
                           ),

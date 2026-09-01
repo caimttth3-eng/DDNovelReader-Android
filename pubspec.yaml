@@ -2,7 +2,7 @@ name: duoduo_langdu
 description: "多多朗读 - 安卓本地小说阅读器，支持 Edge TTS 在线朗读、智能分章、句子级高亮跟随。"
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.13.2

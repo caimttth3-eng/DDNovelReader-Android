@@ -46,6 +46,18 @@ class _ShelfScreenState extends State<ShelfScreen> {
       _progress = progressMap;
       _loading = false;
     });
+    // 启动恢复：若有最后阅读的书籍，直接进入阅读页
+    final lastId = await _storage.loadLastBookId();
+    if (lastId != null && mounted) {
+      for (final b in books) {
+        if (b.id == lastId) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _openBook(b);
+          });
+          break;
+        }
+      }
+    }
   }
 
   Future<void> _addBook() async {

@@ -35,6 +35,24 @@ class ReaderScreen extends StatefulWidget {
 }
 
 /// 扁平 item：章节标题 或 句子（段落拆为句子级，便于高亮跟随滚动）
+/// 书页背景主题
+class BookTheme {
+  final String name;
+  final Color bg;
+  final Color text;
+  final Color title;
+  const BookTheme({required this.name, required this.bg, required this.text, required this.title});
+}
+
+const List<BookTheme> _bookThemes = [
+  BookTheme(name: '羊皮纸', bg: Color(0xFFF5EFE0), text: Color(0xFF3A2E1E), title: Color(0xFF5D3A1A)),
+  BookTheme(name: '护眼绿', bg: Color(0xFFC7EDCC), text: Color(0xFF1F3A1F), title: Color(0xFF2D5A2D)),
+  BookTheme(name: '夜间黑', bg: Color(0xFF1A1A1A), text: Color(0xFFBBBBBB), title: Color(0xFFDDDDDD)),
+  BookTheme(name: '纯白', bg: Color(0xFFFFFFFF), text: Color(0xFF333333), title: Color(0xFF555555)),
+  BookTheme(name: '浅灰', bg: Color(0xFFEDEDED), text: Color(0xFF333333), title: Color(0xFF555555)),
+  BookTheme(name: '复古棕', bg: Color(0xFFE8D5B7), text: Color(0xFF4A3728), title: Color(0xFF6B4A2A)),
+];
+
 class _Item {
   final bool isTitle;
   final int chapterIndex;
@@ -107,6 +125,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   double get _fontSize => _settings.fontSize;
   double get _lineHeight => _settings.lineHeight;
+  BookTheme get _theme => _bookThemes[_settings.themeIndex.clamp(0, _bookThemes.length - 1)];
 
   @override
   void initState() {
@@ -126,6 +145,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     globalAudioHandler?.onPauseRequested = _onHeadsetPause;
     globalAudioHandler?.onStopRequested = _onHeadsetStop;
     _loadSettings();
+    // 记录最后阅读的书籍，下次启动直接恢复
+    widget.storage.saveLastBookId(widget.book.id);
   }
 
   static const _volumeChannel =
@@ -457,7 +478,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _ttsChapter = _chapter;
     });
     globalAudioHandler?.notifyPlaying();
-    await _startTtsFrom(_chapter, _para, 0);
+    // 从用户当前阅读位置（句子级）开始朗读，而非段落首句
+    await _startTtsFrom(_chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
   }
 
   /// 朗读模式中暂停：保留全屏，弹出底部控制面板
@@ -876,7 +898,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F3EA),
+      backgroundColor: _theme.bg,
       body: Stack(
         children: [
           // 正文
@@ -906,10 +928,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return ScrollablePositionedList.builder(
       itemScrollController: _itemScrollController,
       itemPositionsListener: _itemPositionsListener,
-      // 全屏（含暂停态）时禁滚，避免与滑动 seek 手势冲突
-      physics: !_showControls
-          ? const NeverScrollableScrollPhysics()
-          : null,
+      // 仅朗读模式（全屏）允许滑动快进；UI模式禁滚，统一用点击三区翻页
+      physics: _inReadingMode
+          ? null
+          : const NeverScrollableScrollPhysics(),
       // 增大缓存区：跳转后能渲染更多 item，加速精确定位
       minCacheExtent: 1500,
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
@@ -926,7 +948,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               style: TextStyle(
                 fontSize: _fontSize + 6,
                 fontWeight: FontWeight.bold,
-                color: const Color(0xFF5D3A1A),
+                color: _theme.title,
                 height: _lineHeight,
               ),
             ),
@@ -950,9 +972,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
               style: TextStyle(
                 fontSize: _fontSize,
                 height: _lineHeight,
-                color: const Color(0xFF3A2E1E),
+                color: _theme.text,
                 backgroundColor:
-                    isCurrent ? const Color(0x33FFC107) : null,
+                    isCurrent ? const Color(0x44FFC107) : null,
                 fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
               ),
             ),
@@ -1180,6 +1202,76 @@ class _ReaderScreenState extends State<ReaderScreen> {
     setState(() {});
   }
 
+  /// 切换书页背景主题
+  Future<void> _openThemePanel() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: _theme.bg,
+      builder: (ctx) => SafeArea(
+        child: StatefulBuilder(
+          builder: (ctx, setSheetState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('书页背景', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 0.75,
+                  ),
+                  itemCount: _bookThemes.length,
+                  itemBuilder: (ctx, i) {
+                    final t = _bookThemes[i];
+                    final selected = _settings.themeIndex == i;
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() => _settings.themeIndex = i);
+                        setSheetState(() {});
+                        widget.storage.saveSettings(_settings.toJson());
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: t.bg,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: selected ? const Color(0xFF8A5A2B) : Colors.transparent,
+                            width: selected ? 2.5 : 0,
+                          ),
+                          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4)],
+                        ),
+                        padding: const EdgeInsets.all(8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(t.name, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.title)),
+                            const SizedBox(height: 6),
+                            Text('阅读文字示例预览', style: TextStyle(fontSize: 10, color: t.text, height: 1.4)),
+                            const Spacer(),
+                            if (selected) const Align(alignment: Alignment.bottomRight, child: Icon(Icons.check_circle, size: 18, color: Color(0xFF8A5A2B))),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 切换朗读音源
   Future<void> _openVoiceSelector() async {
     final selected = await showModalBottomSheet<String>(
@@ -1268,7 +1360,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       left: 0,
       right: 0,
       child: Container(
-        color: const Color(0xCCF7F3EA),
+        color: _theme.bg.withValues(alpha: 0.92),
         padding: EdgeInsets.only(
           top: MediaQuery.of(context).padding.top,
           left: 4,
@@ -1290,6 +1382,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
               icon: const Icon(Icons.play_arrow, color: Color(0xFF5D3A1A)),
               tooltip: '朗读',
               onPressed: _play,
+            ),
+            IconButton(
+              icon: const Icon(Icons.checkroom, color: Color(0xFF5D3A1A)),
+              tooltip: '书页背景',
+              onPressed: _openThemePanel,
             ),
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: Color(0xFF5D3A1A)),
@@ -1336,7 +1433,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       right: 0,
       bottom: 0,
       child: Container(
-        color: const Color(0xCCF7F3EA),
+        color: _theme.bg.withValues(alpha: 0.92),
         padding: EdgeInsets.only(
           left: 12,
           right: 12,

@@ -12,6 +12,7 @@ class AppStorage {
   static const _booksKey = 'duoduo.books.v1';
   static const _progressPrefix = 'duoduo.progress.';
   static const _settingsKey = 'duoduo.settings.v1';
+  static const _lastBookKey = 'duoduo.lastBookId';
 
   SharedPreferences? _prefs;
 
@@ -92,6 +93,17 @@ class AppStorage {
     final sp = await _sp;
     await sp.setString(_settingsKey, jsonEncode(s));
   }
+
+  // ---------- 最后阅读的书籍（启动时自动恢复） ----------
+  Future<String?> loadLastBookId() async {
+    final sp = await _sp;
+    return sp.getString(_lastBookKey);
+  }
+
+  Future<void> saveLastBookId(String bookId) async {
+    final sp = await _sp;
+    await sp.setString(_lastBookKey, bookId);
+  }
 }
 
 /// 阅读偏好（含默认值）
@@ -101,6 +113,7 @@ class ReadingSettings {
   double lineHeight = 1.6;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
   String voice = '';
+  int themeIndex = 0; // 书页背景主题索引
 
   Map<String, dynamic> toJson() => {
         'brightness': brightness,
@@ -108,6 +121,7 @@ class ReadingSettings {
         'lineHeight': lineHeight,
         'speechRate': speechRate,
         'voice': voice,
+        'themeIndex': themeIndex,
       };
 
   static ReadingSettings fromJson(Map<String, dynamic>? json) {
@@ -118,6 +132,7 @@ class ReadingSettings {
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
     s.speechRate = (json['speechRate'] as num?)?.toDouble() ?? s.speechRate;
     s.voice = json['voice'] as String? ?? '';
+    s.themeIndex = (json['themeIndex'] as num?)?.toInt() ?? 0;
     return s;
   }
 }
