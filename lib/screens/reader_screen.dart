@@ -928,10 +928,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return ScrollablePositionedList.builder(
       itemScrollController: _itemScrollController,
       itemPositionsListener: _itemPositionsListener,
-      // 仅朗读模式（全屏）允许滑动快进；UI模式禁滚，统一用点击三区翻页
-      physics: _inReadingMode
-          ? null
-          : const NeverScrollableScrollPhysics(),
+      // 全屏模式（隐藏UI）可滑动；UI模式禁滚，统一用点击三区翻页
+      physics: _showControls
+          ? const NeverScrollableScrollPhysics()
+          : null,
       // 增大缓存区：跳转后能渲染更多 item，加速精确定位
       minCacheExtent: 1500,
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
