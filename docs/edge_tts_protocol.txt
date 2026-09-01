@@ -1,0 +1,2035 @@
+<search query="edge-tts WebSocket protocol Sec-MS-GEC speech.platform.bing.com synthesize readaloud SSML format" search_time="2026年9月1日2时28分星期二"><document reference_id="https://gist.github.com/wilinz/13f4bc343754f01c06a90aa9c12e449a?permalink_comment_id=4616798"><title>微软edge-tts-api（大声朗读协议）</title><host>GitHub Gist</host><snippet>wilinz / ms-edge-tts-api.md
+Last active August 23, 2026 09:13
+微软edge-tts-api（大声朗读协议）
+Raw
+ms-edge-tts-api.md
+edge tts
+获取语音列表：
+https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=6A5AA1D4EAFF4E9FB37E23D68491D6F4
+tts接口
+<beginning of the code>
+wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Sec-MS-GEC=C14242292B2241ECB17DD93BD17E481FADED759D70DCE83CA526064D9E90420C&Sec-MS-GEC-Version=1-114.0.1823.67&ConnectionId=373cb9fe3c926de352de8ad4c800b24c HTTP/1.1
+Host: speech.platform.bing.com
+Connection: Upgrade
+Pragma: no-cache
+Cache-Control: no-cache
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.67
+Upgrade: websocket
+Origin: chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold
+Sec-WebSocket-Version: 13
+Accept-Encoding: gzip, deflate, br
+Accept-Language: en,zh-CN;q=0.9,zh;q=0.8,en-GB;q=0.7,en-US;q=0.6
+Cookie: Imported_MUID=279D5D30479A67B120EC4CF8465A66EC; SRCHD=AF=NOFORM; SRCHUID=V=2&GUID=56CF87A361464E7D97109A4DE5068B80&dmnchg=1; MUID=325A63E135A06AAA171571C234606B8E; _tarLang=default=zh-Hans; _TTSS_OUT=hist=WyJ6aC1IYW5zIl0=; MMCASM=ID=DB36A1CCBCE141C988893F7658931D00; ANON=A=BDF919D5061D7F41CCECB893FFFFFFFF&E=1c5e&W=5; NAP=V=1.9&E=1c04&C=3tftpzkAdHnos47AExrgJwTp6Puwum9ieFNAkA8kcyzaw9FsgBNcHA&W=5; PPLState=1; _UR=QS=0&TQS=0; ABDEF=V=13&ABDV=13&MRNB=1685903928257&MRB=0; USRLOC=HS=1&ELOC=LAT=25.30931282043457|LON=110.4037857055664|N=Lingchuan%20County%2C%20Guangxi%20Zhuang|ELT=2|&CLOC=LAT=25.309329051998866|LON=110.40374008805972|A=733.4464586120832|TS=230701173629|SRC=W; KievRPSSecAuth=FAByBBRaTOJILtFsMkpLVWSG6AN6C/svRwNmAAAEgAAACIcO+OPnBnDOMARvQ4a99TLFSEe5qktVEWTUqgPRylgzmpHo0criSIMfmIxbCWKerYz/xckSZ9fIVmh+xtn2waP/f4XRaTroOgRra3Ez3S17ty6xyXVS8sUMoAM/vOjuQMjtyM6ahjmUBda+sjPxekYt/l83dgpaz4zqH9Tto8RPnlsf/4T63XNA/uf48oeq0U2YXKthu5N/guoBTs8tIiBCWqpfKcu8SRgzLx2kBE8XkrzYDBR8cBdOvJuWeUqEiJg0SbGjXYt6FGFEKeYpshDeksDrvJVPij6ymAs0j7PHJVLjM5Tds3AcpBdmWAwNz2yKfLaT9jlIJjtfY6+8Du1BfOvb0noJB00DyF3L7JTnRXdQlRkQG6i3J85gZp5XKfyucptiStnNhwZKYyt5qTz5bFxnZW0Q1DqJnuVMvT0dyLwBV2RUUkeo4IeB6lZtfxthjY2KFe5ZbWpKzECwt22qktDZdYu+tBXlO2rJwDtwKba+gLWP/vBLUAa4hBrRtbuDypx+AHTT9qlxgKY5go0Wz085oPWpq8VxDo1aRiUqXGrqnbJWKzVx50oUnIEJy3DQbxSZzitD6MJ4mmzVbYAyrlwpFtXYO4X7TKvlWnlPstdGdRxykIERl/S3+jp9DBDRCTkXRoFa3VSOkzeuDj0FfDKlQtrQh6Q/GPyCUKy8KRFK3hwxJR7HsE2ivEjMYwdHsfk6hD+Ocw0q1OZT9L5EPkC3XqK0K1JFWuRyDKXmxvjRfazgD1GOszIOvk85MzOXw6uhKHpbLt3vEMX6MkUaFuHSOscFlgYdrP4NIfe/db+48F96hOgY8qLmRfNyRUQZk2oghT7X/Hp8Jjq6KvU30RAzl5VpxlNIHjXg9iBacD46m9zBMCsEt8mie27r0a8plN6T3i/xKVbefueJoa9RE3dDdDaAB3TsLDnKmklSVDR70gPFS4NCCVM2iApD5+TH7nuQ3TvOn0wHOY3AUa2TE41nYA/jiQWdQkXR5q5/p0pQpRMcRyWiGEtydSy+tW/uYoRJs4x0/JdpYrlFjo0skC8Lbin5Fc9mL8+qMlWAF2pCspX2KwQ7ahzeragrLm0KDH41/wFdjiM3POGwF+K/eIKynR1WNwxVFtguiEgPmKo/1IFpl0C20MyKBRtJDt+pRZftYE4fGHS2bB7fb4hCVc9GCTQuirLpvH1oIvRFqOjoka52hVvjm4lWHrOKPKBEns7ab1YuCR9b8VF/fWYrWAmDbCMeLTmWs6Ip8b6d8gm6pxTi1X2l93Hu/gzkT4Xo0eZouRsO5DlO9ARfjDCNwdNy0bSiG4vIJ6ZwPc9WssXxZMHBNRw/cZmoJlS1sOsO437DFm4vQZ45q4LNgrgpNA692EF59vH49QsQDzZikR0GflucdEqlNPUtccYEAmR/i0DEhj3OELuDQY8a3Yk0uvyTncOZaNIWFAD9zf+45bbF2xm/AWoh+ArXEpBQuQ==; WLID=KUYfPWEbNlPRDrYXPelkjmxJvZFv0wz6tT96dilh4DCgLNrpdRPJSpCbu2rfDBmVcuJKl1X4cpPSqjovbW50ggCgqZIzWp683k+1CUJICHs=; SRCHUSR=DOB=20220619&T=1688146375000&TPC=1685734779000&POEX=W; _HPVN=CS=eyJQbiI6eyJDbiI6MTQsIlN0IjowLCJRcyI6MCwiUHJvZCI6IlAifSwiU2MiOnsiQ24iOjE0LCJTdCI6MCwiUXMiOjAsIlByb2QiOiJIIn0sIlF6Ijp7IkNuIjoxNCwiU3QiOjAsIlFzIjowLCJQcm9kIjoiVCJ9LCJBcCI6dHJ1ZSwiTXV0ZSI6dHJ1ZSwiTGFkIjoiMjAyMy0wNi0zMFQwMDowMDowMFoiLCJJb3RkIjowLCJHd2IiOjAsIkRmdCI6bnVsbCwiTXZzIjowLCJGbHQiOjAsIkltcCI6NDN9; SRCHHPGUSR=SRCHLANG=en&BRW=MW&BRH=MT&CW=1902&CH=922&SW=1536&SH=864&DPR=2.8&UTC=480&DM=0&PV=11&WTS=63823445133&BZA=0&PRVCW=393&PRVCH=851&HV=1688146817&SCW=1902&SCH=922&HBOPEN=2; _RwBf=ilt=5&ihpd=1&ispd=0&rc=30&rb=30&gb=0&rg=0&pc=30&mtu=0&rbb=0.0&g=0&cid=&clo=0&v=4&l=2023-06-30T07:00:00.0000000Z&lft=0001-01-01T00:00:00.0000000&aof=0&o=0&p=bingcopilotwaitlist&c=MY00IA&t=8305&s=2023-02-19T09:46:05.9860389+00:00&ts=2023-06-30T17:39:35.7692651+00:00&rwred=0&wls=2&lka=0&lkt=0&TH=&mta=0&e=1FouwS5GVXBVl-SkUiOwiZzt0OE6NrGp9VOEBUZVm8_C_dS7_q_nvq-yiW1bzUP-KIXibyq2kf5HkqCbVM7EGg&A=BDF919D5061D7F41CCECB893FFFFFFFF&dci=0; SUID=A; WLS=C=aa4e6de0bbbb2fd0&N=lizan; _SS=SID=1A9307EC7FD662F3261514AD7E0F63C8; _U=10tbPuGOdzPNMte05ZF-7PujpfTktYWP5vffV0QlYXYElxiZIenSCz69Wr4_EmJH3DEPDT1ewxutXE28f8BucrmvsUMM_dYx23lrl6ia2XHR-B6dZ9TBlLRw-dFn9KqwXmaY6ozCPvW5bvnayy9h5AQpSwxa50xkfSZhxivIgiaQWz6fx0JAdT4mAQSoaumIW1cJZi3gR5nRXxe4x2uJJ5Q
+Sec-WebSocket-Key: BgvTFvtUpQzEgl0tGl/iNg==
+Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+
+<end of the code>
+发送配置
+<beginning of the code>
+X-Timestamp:Sun Jul 02 2023 03:46:41 GMT+0800 (中国标准时间)
+Content-Type:application/json; charset=utf-8
+Path:speech.config
+
+{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},"outputFormat":"webm-24khz-16bit-mono-opus"}}}}
+<end of the code>
+发送文本ssml:
+<beginning of the code>
+X-RequestId:04b1283ca619378ea55726f80903a6bf
+Content-Type:application/ssml+xml
+X-Timestamp:Sun Jul 02 2023 03:46:41 GMT+0800 (中国标准时间)Z
+Path:ssml
+
+<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='en-US'><voice name='Microsoft Server Speech Text to Speech Voice (en-US, AriaNeural)'><prosody pitch='+0Hz' rate ='+0%' volume='+0%'>         Prepare for a career in tech by joining GitHub Global Campus. Global Campus will help you get the practical industry         knowledge you need by giving you access to industry tools, events, learning resources and a growing student community.       </prosody></voice></speak>
+<end of the code>
+回复
+<beginning of the code>
+1.
+X-RequestId:04b1283ca619378ea55726f80903a6bf
+Content-Type:application/json; charset=utf-8
+Path:turn.start
+
+{
+  "context": {
+    "serviceTag": "a11f02b087bc4f7ea6ee4731eebf85f6"
+  }
+}
+
+2.
+X-RequestId:04b1283ca619378ea55726f80903a6bf
+Content-Type:application/json; charset=utf-8
+Path:response
+
+{"context":{"serviceTag":"a11f02b087bc4f7ea6ee4731eebf85f6"},"audio":{"type":"inline","streamId":"575A2A1723424F01BE42AF68534E15B9"}}
+
+3.
+X-RequestId:04b1283ca619378ea55726f80903a6bf
+Content-Type:application/json; charset=utf-8
+Path:audio.metadata
+
+{
+  "Metadata": [
+    {
+      "Type": "WordBoundary",
+      "Data": {
+        "Offset": 1000000,
+        "Duration": 4625000,
+        "text": {
+          "Text": "Prepare",
+          "Length": 7,
+          "BoundaryType": "WordBoundary"
+        }
+      }
+    }
+  ]
+}
+
+4.
+X-RequestId:04b1283ca619378ea55726f80903a6bf
+Content-Type:application/json; charset=utf-8
+Path:audio.metadata
+
+{
+  "Metadata": [
+    {...
+</snippet><url>https://gist.github.com/wilinz/13f4bc343754f01c06a90aa9c12e449a?permalink_comment_id=4616798</url><publish_time>2026年8月23日9时13分</publish_time><text_length>4241</text_length></document><document reference_id="https://deepwiki.com/andresayac/edge-tts/2-core-edgetts-service"><title>Core EdgeTTS Service</title><host>DeepWiki</host><snippet>The <beginning of the code>EdgeTTS<end of the code> class encapsulates voice discovery, speech synthesis, audio format handling, and metadata retrieval functionality.
+For information about using the service programmatically, see Programmatic API Reference. For CLI-specific usage, see Command Line Interface. For browser-specific implementation details, see Browser Integration.
+Sources: src/services/EdgeTTS.ts 1-614
+System Context
+The <beginning of the code>EdgeTTS<end of the code> class acts as the central orchestrator between client applications (Node.js, Browser, CLI) and Microsoft's Edge TTS API endpoints. It manages the complete lifecycle of TTS operations from voice selection through audio delivery.
+External APIsConfigurationCore Service LayerClient Layer
+Node.js Applications
+Browser Applications
+(EdgeTTS.browser.ts)
+CLI Commands
+(SynthesizeCommand,
+VoiceListCommand)
+EdgeTTS Class
+src/services/EdgeTTS.ts
+Interfaces:
+Voice, SynthesisOptions,
+WordBoundary
+Constants
+src/config/constants.ts
+VOICES_URL
+HTTP GET
+WSS_URL
+WebSocket
+Sources: src/services/EdgeTTS.ts 1-6 src/config/constants.ts
+Class Structure
+The <beginning of the code>EdgeTTS<end of the code> class maintains internal state for audio streaming and metadata collection. It provides both synchronous configuration methods and asynchronous synthesis operations.
+Internal State| Property | Type | Purpose |
+| --- | --- | --- |
+| audio_stream | Uint8Array[] | Accumulates binary audio chunks from WebSocket |
+| audio_format | string | Current audio format identifier (e.g., 'mp3', 'wav') |
+| output_format | string | Full format specification (e.g., 'audio-24khz-48kbitrate-mono-mp3') |
+| word_boundaries | WordBoundary[] | Collected word timing metadata |
+| ws | WebSocket | Active WebSocket connection to synthesis API |
+
+Sources: src/services/EdgeTTS.ts 46-51
+Core Interfaces
+The service defines three primary interfaces for type safety and data structure:
+// Voice metadata structure
+interface Voice {
+Name: string;
+ShortName: string;
+Gender: string;
+Locale: string;
+FriendlyName: string;
+LocalName: string;
+}
+ 
+// Synthesis configuration options
+interface SynthesisOptions {
+pitch?: string | number;      // -100Hz to +100Hz
+rate?: string | number;       // -100% to +200%
+volume?: string | number;     // -100% to +100%
+outputFormat?: string;        // Constants.OUTPUT_FORMAT.*
+}
+ 
+// Word boundary timing metadata
+interface WordBoundary {
+type: "WordBoundary";
+offset: number;               // Milliseconds from start
+duration: number;             // Milliseconds duration
+text: string;                 // Word text
+}
+Sources: src/services/EdgeTTS.ts 7-28
+Method Organization
+The <beginning of the code>EdgeTTS<end of the code> class organizes its methods into distinct functional categories:
+EdgeTTS Class Methods
+Internal Utilities
+generateSecMsGec(token)
+getSSML(text, voice, options)
+processAudioData(data)
+parseMetadata(data)
+buildTTSConfigMessage(format)
+Metadata Retrieval
+getWordBoundaries()
+saveMetadata(path)
+getAudioInfo()
+getDuration()
+Audio Export
+toFile(path, format)
+toBuffer()
+toBase64()
+toRaw()
+Synthesis Operations
+synthesize(text, voice, options)
+synthesizeStream(text, voice, options)
+Voice Discovery
+getVoices()
+getVoicesByLanguage(locale)
+getVoicesByGender(gender)
+normalizeVoices(data)
+Sources: src/services/EdgeTTS.ts 53-613
+Voice Discovery Flow
+The voice discovery process retrieves and normalizes voice metadata from Microsoft's API:
+normalizeVoicesVOICES_URL"https module"generateSecMsGecEdgeTTSClient
+normalizeVoices
+VOICES_URL
+"https module"
+generateSecMsGec
+EdgeTTS
+Client
+getVoices()
+generateSecMsGec(TRUSTED_CLIENT_TOKEN)
+secMsGEC hash
+Build URL with tokens
+https.request(url, headers)
+GET request
+JSON voice array
+Raw voice data
+normalizeVoices(voicesRaw)
+Extract DisplayName, VoiceType, etc.
+Voice[] array
+Voice[] array
+Voice Discovery Implementation Details
+The <beginning of the code>getVoices()<end of the code> method at src/services/EdgeTTS.ts 111-161 performs the following steps:
+Authentication Token Generation - Calls <beginning of the code>generateSecMsGec()<end of the code> with <beginning of the code>Constants.TRUSTED_CLIENT_TOKEN<end of the code> to create time-based security token
+URL Construction - Builds request URL with query parameters: <beginning of the code>TrustedClientToken<end of the code> , <beginning of the code>Sec-MS-GEC<end of the code>, <beginning of the code>Sec-MS-GEC-Version<end of the code>
+HTTP Request - Uses Node.js <beginning of the code>https<end of the code> module to make GET request with base headers from <beginning of the code>Constants.getBaseHeaders()<end of the code>
+Response Parsing - Accumulates response chunks, concatenates, and parses JSON
+Normalization - Passes raw data to <beginning of the code>normalizeVoices()<end of the code> for standardization
+Voice Filtering Methods| Method | Input | Output | Implementation |
+| --- | --- | --- | --- |
+| getVoicesByLanguage(locale) | Language code (e.g., 'en-US') | Voice[] | Filters by voice.Locale.startsWith(locale) |
+| getVoicesByGender(gender) | 'Male' or 'Female' | Voice[] | Filters by exact voice.Gender match |
+
+Sources: src/services/EdgeTTS.ts 111-172
+Synthesis Lifecycle
+The synthesis process follows a distinct lifecycle from request initiation through audio delivery:
+Buffered Synthesis: <beginning of the code>synthesize()<end of the code>
+The <beginning of the code>synthesize()<end of the code> method at src/services/EdgeTTS.ts 222-284 accumulates all audio data before resolving:
+Method Signature:
+async synthesize(
+text: string,
+voice: string = 'en-US-AnaNeural',
+options: SynthesisOptions = {}
+): Promise<void>
+Key Implementation Details:
+Parameter Validation - Validates pitch (Hz), rate (%), and volume (%) parameters via private methods src/services/EdgeTTS.ts 182-221
+SSML Generation - Constructs Speech Synthesis Markup Language via <beginning of the code>getSSML()<end of the code> src/services/EdgeTTS.ts 295-310
+WebSocket Setup - Establishes connection to <beginning of the code>Constants.WSS_URL<end of the code> with authentication headers
+Message Protocol - Sends configuration message followed by SSML message with RFC1123 timestamp
+Inactivity Timeout - Implements 30-second timeout that resets on each message received
+Audio Accumulation - Stores chunks in <beginning of the code>this.audio_stream<end of the code> array via <beginning of the code>processAudioData()<end of the code>
+Sources: src/services/EdgeTTS.ts 222-284 src/services/EdgeTTS.ts 467-491
+Streaming Synthesis: <beginning of the code>synthesizeStream()<end of the code>
+The <beginning of the code>synthesizeStream()<end of the code> method at src/services/EdgeTTS.ts 342-465 returns an async generator that yields audio chunks in real-time:
+Method Signature:
+async *synthesizeStream(
+text: string,
+voice: string = 'en-US-AnaNeural',
+options: SynthesisOptions = {}
+): AsyncGenerator<Uint8Array, void, unknown>
+Streaming Implementation Pattern:
+Queue-Based Architecture - Maintains internal <beginning of the code>queue: Uint8Array[]<end of the code> for chunk buffering
+Producer-Consumer Pattern - WebSocket handlers push chunks; generator loop yields them
+Async Notification - Uses <beginning of the code>notify<end of the code> callback to wake generator when new chunks arrive
+Early Yield - Yields chunks immediately as they arrive, before synthesis completes
+Error Propagation - Collects errors during streaming and throws after generator exhaustion
+Sources: src/services/EdgeTTS.ts 342-465
+SSML Processing
+The <beginning of the code>getSSML()<end of the code> method at src/services/EdgeTTS.ts 295-310 constructs XML conforming to the Speech Synthesis Markup Language specification:
+SSML Structure
+<speak version="1.0"
+xmlns="http://www.w3.org/2001/10/synthesis"
+xmlns:mstts="https://www.w3.org/2001/mstts"
+xml:lang="en-US">
+<voice name="${voice}">
+<prosody pitch="${pitch}" rate="${rate}" volume="${volume}">
+${escapedText}
+</prosody>
+</voice>
+</speak>
+XML Escaping
+The <beginning of the code>escapeXML()<end of the code> method at src/services/EdgeTTS.ts 286-293 handles special character encoding:| Character | Replacement | Purpose |
+| --- | --- | --- |
+| & | &amp; | Ampersand entity |
+|  | &lt; | Less-than entity |
+|  | &gt; | Greater-than entity |
+| " | &quot; | Quote entity |
+| ' | &apos; | Apostrophe entity |
+
+Prosody Parameter Validation
+Each prosody parameter undergoes format validation and normalization:| Parameter | Validator Method | Input Examples | Output Format |
+| --- | --- | --- | --- |
+| Pitch | validatePitch() 182-190 | 20, '+20Hz', -50 | '+20Hz', '-50Hz' |
+| Rate | validateRate() 192-205 | 50, '50%', -10 | '+50%' , '-10%' |
+| Volume | validateVolume() 207-221 | 90, '90%', -20 | '90%', '-20%' |
+
+Sources: src/services/EdgeTTS.ts 182-310
+WebSocket Protocol Implementation
+The synthesis process uses a binary WebSocket protocol with text headers:
+Message Format Structure
+Inbound MessagesOutbound Messages
+Configuration Message
+X-Timestamp + Path:speech.config
++ JSON audio settings
+SSML Message
+X-RequestId + Content-Type
++ X-Timestamp + Path:ssml
++ SSML XML
+Audio Data
+Binary frame with
+Path:audio header
++ audio bytes
+Metadata
+Path:audio.metadata
++ JSON word boundaries
+Turn End
+Path:turn.end
+(signals completion)
+WebSocket Connection
+Binary Frame Parsing
+The <beginning of the code>processAudioData()<end of the code> method at src/services/EdgeTTS.ts 467-491 parses binary WebSocket frames:
+Convert to Buffer - Uses <beginning of the code>ensureBuffer()<end of the code> helper src/services/EdgeTTS.ts 30-44 to normalize <beginning of the code>RawData<end of the code> types
+Search for Needle - Looks for <beginning of the code>Buffer.from('Path:audio\r\n')<end of the code> sequence
+Extract Audio - Uses <beginning of the code>buffer.subarray()<end of the code> to slice audio bytes after header
+Store Chunk - Pushes <beginning of the code>Uint8Array<end of the code> chunk to <beginning of the code>this.audio_stream<end of the code> array
+Detect Metadata - Checks for <beginning of the code>'Path:audio.metadata'<end of the code> string in buffer
+Parse Metadata - Extracts JSON from position after <beginning of the code>'\r\n\r\n'<end of the code> delimiter
+Detect Completion - Closes WebSocket when <beginning of the code>'Path:turn.end'<end of the code> detected
+Sources: src/services/EdgeTTS.ts 30-44 src/services/EdgeTTS.ts 467-491
+Configuration Message Format
+The <beginning of the code>buildTTSConfigMessage()<end of the code> method at src/services/EdgeTTS.ts 335-339 constructs the initial configuration:
+<beginning of the code>
+X-Timestamp:${RFC1123_timestamp}\r\n
+Content-Type:application/json; charset=utf-8\r\n
+Path:speech.config\r\n
+\r\n
+{
+    "context": {
+        "synthesis": {
+            "audio": {
+                "metadataoptions": {
+                    "sentenceBoundaryEnabled": false,
+                    "wordBoundaryEnabled": true
+                },
+                "outputFormat": "audio-24khz-48kbitrate-mono-mp3"
+            }
+        }
+    }
+}
+<end of the code>
+Sources: src/services/EdgeTTS.ts 335-339
+Authentication and Security
+Sec-MS-GEC Token Generation
+The <beginning of the code>generateSecMsGec()<end of the code> method at src/services/EdgeTTS.ts 523-540 implements time-based token authentication:
+Get current time
+(RFC1123 format)
+Parse to Date objectConvert to Unix seconds
+Add Windows epoch offset
+(11644473600)
+Round down to 300s window
+(ticks - ticks % 300)
+Convert to Windows ticks
+(rounded * 10_000_000)
+Concatenate:
+windowsTicks + trustedClientToken
+SHA-256 hashConvert to uppercase hexReturn Sec-MS-GEC token
+Algorithm Steps:
+Time Retrieval - Call <beginning of the code>nowRFC1123()<end of the code> src/services/EdgeTTS.ts 312-328 to get current UTC time
+Unix Conversion - Parse RFC1123 string to Date, convert to Unix seconds
+Windows Epoch - Add offset <beginning of the code>11644473600<end of the code> (difference between Unix epoch 1970 and Windows epoch 1601)
+Time Window - Round down to 300-second (5-minute) boundary: <beginning of the code>ticks - (ticks % 300)<end of the code>
+Windows Ticks - Multiply by <beginning of the code>10_000_000<end of the code> (100-nanosecond intervals)
+Concatenation - Combine <beginning of the code>windowsTicks<end of the code> string with <beginning of the code>trustedClientToken<end of the code>
+Hashing - Use Web Crypto API <beginning of the code>crypto.subtle.digest('SHA-256', data)<end of the code>
+Hex Encoding - Convert hash bytes to uppercase hex string
+Security Characteristics:
+Token valid for 5-minute windows (300 seconds)
+Combines time-based component with trusted client token
+Uses SHA-256 cryptographic hash
+Prevents replay attacks outside time window
+Sources: src/services/EdgeTTS.ts 523-540 src/services/EdgeTTS.ts 312-332
+Audio Export Methods
+The <beginning of the code>EdgeTTS<end of the code> class provides multiple export formats for synthesized audio:
+Export Method Matrix| Method | Return Type | Use Case | Implementation |
+| --- | --- | --- | --- |
+| toBuffer() | Buffer | Node.js processing | Buffer.concat(this.audio_stream) 594-599 |
+| toBase64() | string | Embedding, transmission | toBuffer().toString('base64') 590-592 |
+| toRaw() | string | Alias for base64 | Calls toBase64() 586-588 |
+| toFile(path, format?) | Promise | File system storage | writeFile() with extension detection 575-584 |
+
+File Extension Detection
+The <beginning of the code>getFileExtension()<end of the code> method at src/services/EdgeTTS.ts 552-564 maps output formats to file extensions:
+private getFileExtension(format: string): string {
+if (format.includes('mp3')) return 'mp3';
+if (format.includes('opus') && format.includes('webm')) return 'webm';
+if (format.includes('opus') && format.includes('ogg')) return 'ogg';
+if (format.includes('wav') || format.includes('riff')) return 'wav';
+if (format.includes('pcm') && format.includes('raw')) return 'pcm';
+if (format.includes('alaw')) return 'alaw';
+if (format.includes('mulaw')) return 'mulaw';
+if (format.includes('truesilk')) return 'silk';
+if (format.includes('g722')) return 'g722';
+if (format.includes('amr')) return 'amr';
+return 'audio';
+}
+Sources: src/services/EdgeTTS.ts 552-599
+Metadata and Audio Information
+Word Boundary Collection
+The <beginning of the code>parseMetadata()...
+</snippet><url>https://deepwiki.com/andresayac/edge-tts/2-core-edgetts-service</url><publish_time>2025年12月13日0时0分</publish_time><text_length>2797</text_length></document><document reference_id="https://adg.csdn.net/6970a7cd437a6b40336b1080.html"><title>edge-tts语音合成协议:WebSocket通信与二进制数据解析_管琴嘉Derek-智能体开发者社区</title><host>火山引擎 ADG 社区</host><snippet>edge-tts语音合成协议：WebSocket通信与二进制数据解析
+管琴嘉Derek
+1155人浏览 · 2025-08-29 12:20:33
+管琴嘉Derek · 2025-08-29 12:20:33 发布
+edge-tts语音合成协议：WebSocket通信与二进制数据解析
+【免费下载链接】edge-tts Use Microsoft Edge's online text-to-speech service from Python WITHOUT needing Microsoft Edge or Windows or an API key
+项目地址: https://gitcode.com/GitHub_Trending/ed/edge-tts
+引言：突破微软Edge限制的语音合成新方案
+你是否还在为微软Edge TTS（Text-to-Speech，文本转语音）服务的API限制而烦恼？是否希望在不安装Edge浏览器、不使用Windows系统、无需API密钥的情况下，享受高质量的语音合成服务？edge-tts项目正是为解决这些痛点而生！
+本文将深入解析edge-tts的核心通信协议，重点探讨WebSocket连接建立、二进制数据解析、以及如何通过逆向工程实现与微软TTS服务的无缝对接。读完本文，你将掌握：
+WebSocket连接建立与认证机制
+二进制数据帧的解析与处理
+SSML（Speech Synthesis Markup Language，语音合成标记语言）格式构造
+安全令牌生成算法
+实时音频流处理与边界识别
+WebSocket连接架构解析
+edge-tts采用WebSocket协议与微软TTS服务建立持久化连接，整个通信流程如下：
+mermaid
+连接建立关键参数
+WebSocket连接URL构造包含多个关键参数：
+# 连接URL构造示例
+WSS_URL = f"wss://{BASE_URL}/websocket/v1?Ocp-Apim-Subscription-Key={TRUSTED_CLIENT_TOKEN}"
+connection_url = f"{WSS_URL}&ConnectionId={connect_id()}&Sec-MS-GEC={generate_sec_ms_gec()}&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}"
+其中关键参数说明：
+| 参数名称 | 说明 | 示例值 |
+| --- | --- | --- |
+| ConnectionId | 连接唯一标识符 | UUID无横线格式 |
+| Sec-MS-GEC | 安全令牌 | SHA256哈希值 |
+| Sec-MS-GEC-Version | 客户端版本标识 | 1-140.0.3485.14 |
+
+二进制数据帧解析机制
+数据帧结构分析
+edge-tts接收的二进制数据帧采用特定的头部结构：
+def get_headers_and_data(data: bytes, header_length: int) -> Tuple[Dict[bytes, bytes], bytes]:
+"""解析二进制数据帧的头部和数据部分"""
+headers = {}
+for line in data[:header_length].split(b"\r\n"):
+key, value = line.split(b":", 1)
+headers[key] = value
+return headers, data[header_length + 2:]
+典型的数据帧结构：
++----------------+----------------+----------------+
+| 头部长度(2字节) |   头部信息     |    音频数据    |
+| (Big Endian)   | (可变长度)     |  (可变长度)    |
++----------------+----------------+----------------+
+音频数据帧处理流程
+mermaid
+SSML构造与文本预处理
+SSML模板构造
+edge-tts使用标准的SSML格式与TTS服务通信：
+<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>
+<voice name='Microsoft Server Speech Text to Speech Voice (en-US, EmmaMultilingualNeural)'>
+<prosody pitch='+0Hz' rate='+0%' volume='+0%'> {escaped_text}
+</prosody>
+</voice>
+</speak>
+文本预处理策略
+为确保文本兼容性，edge-tts实施多重预处理：
+def remove_incompatible_characters(string: Union[str, bytes]) -> str:
+"""移除不兼容字符"""
+chars = list(string)
+for idx, char in enumerate(chars):
+code = ord(char)
+# 移除控制字符和不可打印字符
+if (0 <= code <= 8) or (11 <= code <= 12) or (14 <= code <= 31):
+chars[idx] = " "
+return "".join(chars)
+安全令牌生成算法
+时间戳处理机制
+edge-tts采用复杂的时间戳处理来生成安全令牌：
+def generate_sec_ms_gec() -> str:
+"""生成Sec-MS-GEC安全令牌"""
+# 获取当前Unix时间戳（带时钟偏差校正）
+ticks = get_unix_timestamp()
+# 转换为Windows文件时间格式（1601年 epoch）
+ticks += 11644473600  # Windows epoch偏移
+# 向下取整到最近的5分钟
+ticks -= ticks % 300
+# 转换为100纳秒间隔
+ticks *= 1e9 / 100
+# 生成哈希令牌
+str_to_hash = f"{ticks:.0f}{TRUSTED_CLIENT_TOKEN}"
+return hashlib.sha256(str_to_hash.encode("ascii")).hexdigest().upper()
+时钟同步机制
+为防止时钟偏差导致的认证失败，edge-tts实现了智能的时钟同步：
+| 同步场景 | 处理策略 | 效果 |
+| --- | --- | --- |
+| 服务器时间缺失 | 抛出SkewAdjustmentError | 确保数据完整性 |
+| 时间解析失败 | 使用默认时钟偏差 | 维持服务可用性 |
+| 有效时间差异 | 动态调整时钟偏差 | 实现长期稳定 |
+
+实时流处理与边界识别
+音频流处理状态机
+edge-tts维护复杂的状态机来处理实时音频流：
+class CommunicateState(TypedDict):
+"""通信状态数据结构"""
+partial_text: bytes          # 当前处理的文本片段
+offset_compensation: float   # 时间偏移补偿
+last_duration_offset: float  # 最后持续时间偏移
+stream_was_called: bool      # 流调用状态标志
+边界识别算法
+def __parse_metadata(self, data: bytes) -> TTSChunk:
+"""解析元数据并识别单词/句子边界"""
+for meta_obj in json.loads(data)["Metadata"]:
+meta_type = meta_obj["Type"]
+if meta_type in ("WordBoundary", "SentenceBoundary"):
+return {
+"type": meta_type,
+"offset": meta_obj["Data"]["Offset"] + self.state["offset_compensation"],
+"duration": meta_obj["Data"]["Duration"],
+"text": unescape(meta_obj["Data"]["text"]["Text"]),
+}
+性能优化与错误处理
+连接池与超时配置
+edge-tts提供灵活的连接配置选项：
+# 超时配置示例
+session_timeout = aiohttp.ClientTimeout(
+total=None,           # 总超时无限制
+connect=None,         # 连接超时无限制
+sock_connect=10,      # Socket连接超时10秒
+sock_read=60,         # Socket读取超时60秒
+)
+错误处理策略
+| 错误类型 | 处理方式 | 恢复策略 |
+| --- | --- | --- |
+| WebSocket错误 | 抛出WebSocketError | 需要重新建立连接 |
+| 无音频数据 | 抛出NoAudioReceived | 检查参数后重试 |
+| 意外响应 | 抛出UnexpectedResponse | 解析响应头信息 |
+| 未知响应 | 抛出UnknownResponse | 记录日志并跳过 |
+
+实战应用示例
+同步音频生成
+import edge_tts
+def generate_speech_sync(text: str, voice: str, output_file: str):
+"""同步生成语音文件"""
+communicate = edge_tts.Communicate(text, voice)
+communicate.save_sync(output_file)
+# 使用示例
+generate_speech_sync(
+"Hello, this is a test of edge-tts protocol",
+"en-US-EmmaMultilingualNeural",
+"output.mp3"
+)
+异步流式处理
+import asyncio
+import edge_tts
+async def process_audio_stream():
+"""异步处理音频流"""
+communicate = edge_tts.Communicate("Streaming audio test", "en-US-AriaNeural")
+async for chunk in communicate.stream():
+if chunk["type"] == "audio":
+# 处理音频数据
+audio_data = chunk["data"]
+print(f"Received audio chunk: {len(audio_data)} bytes")
+elif chunk["type"] in ("WordBoundary", "SentenceBoundary"):
+# 处理边界信息
+print(f"Boundary at offset {chunk['offset']}: {chunk['text']}")
+总结与展望
+edge-tts通过精细的WebSocket协议实现和二进制数据解析，成功突破了微软Edge TTS服务的传统限制。其核心价值体现在：
+协议逆向工程：完整解析了微软TTS服务的私有协议
+跨平台兼容：不依赖特定浏览器或操作系统
+零配置使用：无需API密钥或复杂配置
+实时流处理：支持高效的音频流式处理
+未来发展方向可能包括：
+支持更多音频格式和编码选项
+增强的错误恢复和重试机制
+扩展的语言和语音模型支持
+云端部署和分布式处理能力
+通过深入理解edge-tts的通信协议和数据处理机制，开发者可以更好地集成语音合成功能到各种应用中，为用户提供更自然、更高效的语音交互体验。
+【免费下载链接】edge-tts Use Microsoft Edge's online text-to-speech service from Python WITHOUT needing Microsoft Edge or Windows or an API key
+项目地址: https://gitcode.com/GitHub_Trending/ed/edge-tts
+</snippet><url>https://adg.csdn.net/6970a7cd437a6b40336b1080.html</url><publish_time>2025年8月29日12时20分</publish_time><text_length>2520</text_length></document><document reference_id="https://github.com/oadank/voice-engine/blob/main/edge-tts.mjs"><title>voice-engine/edge-tts.mjs at main · oadank/voice-engine · GitHub</title><host>GitHub</host><snippet>Code
+117 lines (103 loc) · 4.21 KB
+/**
+* Microsoft Edge TTS - Node.js 原生客户端
+*
+* 对齐 Python edge-tts v7.2.8 的 DRM + Headers
+* 关键: Sec-MS-GEC 令牌必须放在 URL 参数里（不是 headers）
+*/
+import WebSocket from 'ws';
+import { createHash, randomBytes } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+const BASE_URL = 'speech.platform.bing.com/consumer/speech/synthesize/readaloud';
+const CHROMIUM_FULL_VERSION = '143.0.3650.75';
+const CHROMIUM_MAJOR_VERSION = '143';
+const SEC_MS_GEC_VERSION = `1-${CHROMIUM_FULL_VERSION}`;
+const WIN_EPOCH = 11644473600;
+const S_TO_NS = 1e9;
+function generateSecMsGec() {
+let ticks = Date.now() / 1000;
+ticks += WIN_EPOCH;
+ticks -= ticks % 300;
+ticks *= S_TO_NS / 100;
+const strToHash = `${Math.floor(ticks)}${TRUSTED_CLIENT_TOKEN}`;
+return createHash('sha256').update(strToHash, 'ascii').digest('hex').toUpperCase();
+}
+function generateMuid() {
+return randomBytes(16).toString('hex').toUpperCase();
+}
+function uuid() {
+return crypto.randomUUID().replaceAll('-', '');
+}
+function escapeXml(s) {
+return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace( />/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+function getWssUrl() {
+return `wss://${BASE_URL}/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${generateSecMsGec()}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;
+}
+function getWssHeaders() {
+return {
+'Pragma': 'no-cache',
+'Cache-Control': 'no-cache',
+'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_MAJOR_VERSION}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR_VERSION}.0.0.0`,
+'Accept-Encoding': 'gzip, deflate, br, zstd',
+'Accept-Language': 'en-US,en;q=0.9',
+'Cookie': `muid=${generateMuid()};`,
+};
+}
+export function tts(text, voice = 'zh-CN-XiaoxiaoNeural') {
+return new Promise((resolve, reject) => {
+const ws = new WebSocket(getWssUrl(), { headers: getWssHeaders() });
+const audioData = [];
+ws.on('message', (rawData, isBinary) => {
+if (!isBinary) {
+if (rawData.toString('utf8').includes('turn.end')) {
+resolve(Buffer.concat(audioData));
+ws.close();
+}
+return;
+}
+const separator = 'Path:audio\r\n';
+const idx = rawData.indexOf(separator);
+if (idx !== -1) audioData.push(rawData.subarray(idx + separator.length));
+});
+ws.on('error', reject);
+ws.on('unexpected-response', (req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
+ws.on('open', () => {
+const speechConfig = JSON.stringify({
+context: { synthesis: { audio: {
+metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
+outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
+} } },
+});
+const configMsg = `X-Timestamp:${Date()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${speechConfig}`;
+ws.send(configMsg, { compress: true }, (err) => {
+if (err) return reject(err);
+const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>` +
+`<voice name='${voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>${escapeXml(text)}</prosody></voice></speak>`;
+const ssmlMsg = `X-RequestId:${uuid()}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${Date()}Z\r\nPath:ssml\r\n\r\n${ssml}`;
+ws.send(ssmlMsg, { compress: true }, (err2) => { if (err2) reject(err2); });
+});
+});
+setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 60000);
+});
+}
+// CLI 模式
+const text = process.argv[2];
+if (text && !import.meta.url.endsWith('tts-wrapper.mjs')) {
+const voice = process.argv[3] || 'zh-CN-XiaoxiaoNeural';
+const outFile = process.argv[4];
+try {
+const buf = await tts(text, voice);
+if (outFile) {
+writeFileSync(outFile, buf);
+console.error(`[edge-tts] ${buf.length}b -> ${outFile}`);
+} else {
+process.stdout.write(buf);
+console.error(`[edge-tts] ${buf.length}b`);
+}
+} catch (e) {
+console.error(`[edge-tts] 失败: ${e.message}`);
+process.exit(1);
+}
+}</snippet><url>https://github.com/oadank/voice-engine/blob/main/edge-tts.mjs</url><last_update_time>2026年8月26日17时9分</last_update_time><text_length>1443</text_length></document><document reference_id="https://articles.akadata.ltd/edge-tts-in-javascript-who-needs-python-when-js-rocks/"><title>ECMAScript Rocks - EdgeTTS. Who Needs Python?</title><host>AKADATA LIMITED</host><snippet>Featured
+ECMAScript Rocks - EdgeTTS. Who Needs Python?
+AKADATA
+28 Feb 2025 • 17 min readMeow, the cat resisted.
+Introduction
+Edge-TTS is one of those fascinating technologies with vague license and questionable legitimacy—yet it just performs. I Presume you've used the Edge-TTS Python package. In that case, you might already understand it taps into Microsoft's Bing Text-to-Speech API—the same API powering read-aloud functionality in Microsoft Edge.
+But here's the real kicker: Edge-TTS relies on a TRUSTED_CLIENT_TOKEN floating around in the wild, frankly used in numerous repositories and browser extensions. Who disseminated it? Is it lawful to use? No one is sure yet, yet it works, and that's what matters, providing it's legal. Surely someone would tell it? If not, this is also free regarding translation and making it complete, giving it English text and translating it to another language and making it speak, simple as...
+Breaking It Down: How Edge-TTS Works
+At its core, Edge-TTS connects to Microsoft's speech synthesis API using WebSockets, sending SSML (Speech Synthesis Markup Language) requests to generate speech dynamically. Here's what makes it tick:
+WebSockets: Establishes a real-time connection to the Bing API.
+Trusted Client Token: The magic key that allows Edge-TTS to function. No one knows who officially issued it, but it's widely used.
+Sec-MS-GEC Header: A SHA-256 hash that ensures timestamp validity.
+SSML Input: This tells the TTS engine which voice to use, pitch, speed, and pauses.
+Audio Stream Output: The API sends back real-time MP3 audio, which plays directly in the browser.
+Edge-TTS in the Wild
+This isn't just some obscure API locked inside Microsoft Edge. It's available as:
+A Python package (pip install edge-tts).
+A Google Chrome extension that enables text-to-speech on webpages.
+A standalone JavaScript implementation, which we're showing off today.
+But… Is It Legal?
+Now comes the awkward question: is using Edge-TTS outside of Microsoft Edge legal?
+The edge-tts Python package and several browser extensions openly use this API. Although Microsoft has never publicly documented the API for third-party use, it remains accessible.
+No API keys beyond the likely token are needed.
+There are no official rate limits.
+No clear terms of service.
+This raises a big question: Does Microsoft allow this, or have they just not caught on? Until they do, it works, so let's use it and do not let them say we have not told you so.
+Here It Is, Working in JavaScript!
+We've taken Edge-TTS and built a pure JavaScript solution. No Python, no dependencies—just a browser, WebSockets, and JavaScript
+The basis of which is below. adapt and learn while taking care never to change a header, for should you do that the whole code breaks. Headers are <beginning of the code>IMPORTANT!<end of the code>
+<beginning of the code>
+<script>
+  /*
+    (C) 2025 AKADATA LIMITED - 28 Feb 2025 - Andrew Smalley
+    Based on the Python edge-tts module and Azure EdgeTTS service.
+
+    This code demonstrates a JavaScript implementation inspired by the Python edge-tts module.
+    It connects to the Azure EdgeTTS service via WebSocket, sending properly formatted headers and SSML
+    to synthesize speech from text. The headers in the requests are critical for proper routing and
+    processing by the service—do not edit these headers unless you know exactly what you're doing.
+
+    How can this be improved?
+    - Error handling can be further refined for robustness.
+    - The code could be modularized further by separating concerns (e.g., a separate module for header construction).
+    - Additional customization of SSML parameters (e.g., voice effects) can be provided.
+    - Support for additional languages and voices could be integrated.
+  */
+
+  /**
+   * DRM class handles token generation and timestamp calculations required for authentication.
+   * It mirrors functionality from the Python edge-tts module by creating secure tokens
+   * using SHA-256 hashing.
+   */
+  class DRM {
+    static WIN_EPOCH = 11644473600;             // Windows epoch offset in seconds.
+    static S_TO_NS = 1e9;                        // Conversion factor from seconds to nanoseconds.
+    static TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"; // Fixed token for service authentication.
+    static clockSkewSeconds = 0;                 // Allows adjustment for client-server clock skew.
+
+    /**
+     * Adjusts the internal clock skew.
+     * @param {number} skewSeconds - Number of seconds to adjust.
+     */
+    static adjustClockSkew(skewSeconds) {
+      DRM.clockSkewSeconds += skewSeconds;
+    }
+
+    /**
+     * Returns the current Unix timestamp adjusted for any clock skew.
+     * @returns {number} Adjusted Unix timestamp.
+     */
+    static getUnixTimestamp() {
+      return Math.floor(Date.now() / 1000) + DRM.clockSkewSeconds;
+    }
+
+    /**
+     * Generates a secure message digest for authentication.
+     * The digest is calculated using a combination of the timestamp and the trusted client token.
+     * @returns {Promise<string>} A promise that resolves to the uppercase hexadecimal digest.
+     */
+    static async generateSecMsGec() {
+      let ticks = DRM.getUnixTimestamp() + DRM.WIN_EPOCH;
+      // Round down to nearest multiple of 300 seconds.
+      ticks -= ticks % 300;
+      // Scale ticks; note: dividing by 100 adjusts the scale for the API.
+      ticks *= DRM.S_TO_NS / 100;
+      const strToHash = `${Math.floor(ticks)}${DRM.TRUSTED_CLIENT_TOKEN}`;
+      const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(strToHash));
+      return Array.from(new Uint8Array(hashBuffer))
+        .map(b => b.toString(16).padStart(2, "0"))
+        .join("")
+        .toUpperCase();
+    }
+  }
+
+  /**
+   * EdgeTTS class provides the core functionality for interacting with the Azure EdgeTTS service.
+   * It is inspired by the Python edge-tts module, but implemented in JavaScript to run directly in the browser.
+   */
+  class EdgeTTS {
+    // Base URL for the EdgeTTS service.
+    static BASE_URL = "speech.platform.bing.com/consumer/speech/synthesize/readaloud";
+    // URL to fetch the list of available voices. Do not modify the headers used in these requests.
+    static VOICE_LIST_URL = `https://${EdgeTTS.BASE_URL}/voices/list?trustedclienttoken=${DRM.TRUSTED_CLIENT_TOKEN}`;
+    // Default voice to use if no preference is specified.
+    static DEFAULT_VOICE = "en-GB-LibbyNeural";
+
+    constructor() {
+      this.voice = EdgeTTS.DEFAULT_VOICE;
+      this.voiceList = [];
+      this.ws = null;
+      this.audioChunks = [];
+    }
+
+    /**
+     * Fetches available voices from the EdgeTTS service.
+     * The headers specify that the response should be in JSON format.
+     * Note: Do not edit the "Accept" header if you want this to work.
+     * @returns {Promise<Array>} A promise that resolves to an array of voice objects.
+     */
+    async fetchVoices() {
+      try {
+        const response = await fetch(EdgeTTS.VOICE_LIST_URL, {
+          headers: {
+            "Accept": "application/json"
+          }
+        });
+        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+        const voices = await response.json();
+        // Cache voices in localStorage for faster access.
+        localStorage.setItem("edge_tts_voices", JSON.stringify(voices));
+        this.voiceList = voices;
+        return voices;
+      } catch (error) {
+        console.error("Failed to fetch voices:", error);
+        return [];
+      }
+    }
+
+    /**
+     * Determines the best available voice.
+     * It first checks for the preferred default voice and falls back to the best alternative.
+     * @returns {Promise<string>} A promise that resolves to the chosen voice's short name.
+     */
+    async getBestVoice() {
+      let voices = JSON.parse(localStorage.getItem("edge_tts_voices")) || [];
+      if (!voices.length) voices = await this.fetchVoices();
+      const preferredVoice = voices.find(v => v.ShortName === EdgeTTS.DEFAULT_VOICE);
+      if (preferredVoice) return EdgeTTS.DEFAULT_VOICE;
+      const fallbackVoice = voices.find(v => v.Locale.startsWith("en-GB")) || voices[0];
+      return fallbackVoice.ShortName;
+    }
+
+    /**
+     * Establishes a WebSocket connection to the EdgeTTS service.
+     * It generates the required secure digest and connection ID.
+     * @returns {Promise<void>} Resolves when the connection is successfully established.
+     */
+    async connect() {
+      const secMsGec = await DRM.generateSecMsGec();
+      const connectionId = crypto.randomUUID().replace(/-/g, "");
+      const url = `wss://${EdgeTTS.BASE_URL}/edge/v1?TrustedClientToken=${DRM.TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1&ConnectionId=${connectionId}`;
+      return new Promise((resolve, reject) => {
+        this.ws = new WebSocket(url);
+        this.ws.binaryType = "arraybuffer"; // Ensures binary audio data is correctly handled.
+        this.ws.onopen = () => {
+          console.log("WebSocket connected.");
+          resolve();
+        };
+        this.ws.onerror = (error) => {
+          console.error("WebSocket Error:", error);
+          reject(error);
+        };
+        this.ws.onclose = (event) => {
+          console.warn(`WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
+        };
+        this.ws.onmessage = (event) => this.processMessage(event);
+      });
+    }
+
+    /**
+     * Sends the audio configuration to the EdgeTTS service.
+     * The headers in this message (e.g., Content-Type, Path) are critical—do not edit them if you want this to work.
+     */
+    async sendAudioConfig() {
+      const requestId = crypto.randomUUID().replace(/-/g, "");
+      const config = [
+        `X-RequestId:${requestId}`,
+        "Content-Type:application/json; charset=utf-8",
+        "Path:speech.config",
+        "",
+        '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"true","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-96kbitrate-mono-mp3"}}}}'
+      ].join("\r\n");
+      this.ws.send(config);
+    }
+
+    /**
+     * Sends an SSML (Speech Synthesis Markup Language) request to synthesize the given text.
+     * The headers used here (Content-Type, X-Timestamp, Path) must not be altered.
+     * @param {string} text - The text to synthesize.
+     */
+    async sendSSML(text) {
+      const requestId = crypto.randomUUID().replace(/-/g, "");
+      const timestamp = new Date().toUTCString();
+      const ssml = this.generateSSML(text);
+      const message = [
+        `X-RequestId:${requestId}`,
+        "Content-Type:application/ssml+xml",
+        `X-Timestamp:${timestamp}Z`,
+        "Path:ssml",
+        "",
+        ssml
+      ].join("\r\n");
+      console.log("Sending SSML request...");
+      this.ws.send(message);
+    }
+
+    /**
+     * Generates SSML markup based on the provided text.
+     * The SSML defines the voice and prosody settings (pitch, rate, volume).
+     * @param {string} text - The text to be synthesized.
+     * @returns {string} The SSML string.
+     */
+    generateSSML(text) {
+      return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-GB'>
+                <voice name='${this.voice}'>
+                  <prosody pitch='-2Hz' rate='+1%' volume='+0%'>${text}</prosody>
+                </voice>
+              </speak>`;
+    }
+
+    /**
+     * Processes messages received from the WebSocket.
+     * It distinguishes between string messages and binary audio data.
+     * @param {MessageEvent} event - The WebSocket message event.
+     */
+    processMessage(event) {
+      // If the message is a string, check for end-of-transmission.
+      if (typeof event.data === "string") {
+        if (event.data.includes("Path:turn.end")) {
+          this.finishAudioProcessing();
+        }
+      }
+      // If the message is binary data (ArrayBuffer), store it as an audio chunk.
+      else if (event.data instanceof ArrayBuffer) {
+        this.audioChunks.push(event.data);
+      }
+      // If the message is a Blob, determine if it's audio data or text.
+      else if (event.data instanceof Blob) {
+        if (!event.data.type || event.data.type.startsWith("audio") || event.data.type === "application/octet-stream") {
+          event.data.arrayBuffer().then(buffer => {
+            this.audioChunks.push(buffer);
+          }).catch(err => {
+            console.error("Failed to convert Blob to ArrayBuffer:", err);
+          });
+        } else {
+          event.data.text().then(text => {
+            if (text.includes("Path:turn.end")) {
+              console.log("Audio transmission complete.");
+              this.finishAudioProcessing();
+            }
+          }).catch(err => {
+            console.error("Failed to decode Blob text:", err);
+          });
+        }
+      } else {
+        console.warn("Unknown message type:", event.data);
+      }
+    }
+
+    /**
+     * Finalizes audio processing by combining all received audio chunks,
+     * creating a Blob, and playing back the synthesized audio.
+     * If autoplay is blocked, a play button is created.
+     */
+    finishAudioProcessing() {
+      if (!this.audioChunks.length) {
+        console.error("No audio received.");
+        return;
+      }
+      const audioBlob = new Blob(this.audioChunks, { type: "audio/mpeg" });
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      audio.play().catch(err => {
+        const playButton = document.createElement("button");
+        playButton.textContent = "Play TTS Audio";
+        document.body.appendChild(playButton);
+        playButton.onclick = () => {
+          audio.play();
+          playButton.remove();
+        };
+      });
+      // Close the WebSocket connection if it's still open.
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.close();
+      }
+    }
+
+    /**
+     * Initiates the entire speech synthesis process for the provided text.
+     * It selects the best voice, connects to the service, sends configuration and SSML requests,
+     * and ultimately plays the synthesized audio.
+     * @param {string} text - The text to be spoken.
+     */
+    async speak(text) {
+      // A brief pause inserted before the text to help with smooth transitions.
+      const pause = "...     ...     .     .   . . .   ";
+      // Select the best voice based on preferences and available voices.
+      this.voice = await this.getBestVoice();
+      // Connect to the TTS service, send configuration, and then send the SSML request.
+      await this.connect();
+      await this.sendAudioConfig();
+      // The text is modified slightly for pacing (do not change this without testing).
+      await this.sendSSML(pause + text.replace(".", ". .").replace(",", ",,,,,      "));
+    }
+  }
+</script>
+<end of the code>
+The Glue that calls the class and makes it all work
+<beginning of the code>
+<script>
+  // Self-invoking async function to demonstrate how to use the EdgeTTS class.
+  // Modify this section to integrate TTS into your own application.
+  (async () => {
+    // Create an instance of the EdgeTTS class.
+    // This instance will handle fetching voices, establishing the WebSocket connection,
+    // sending SSML requests, and playing back the synthesized audio.
+    const tts = new EdgeTTS();
+
+    // Define the text you want to convert to speech.
+    // You can change this string to any text that you want the TTS system to speak.
+    const text = "The small, curious cat, with its soft, silky...
+</snippet><url>https://articles.akadata.ltd/edge-tts-in-javascript-who-needs-python-when-js-rocks/</url><publish_time>2025年2月28日0时0分</publish_time><text_length>2591</text_length></document><document reference_id="https://deepwiki.com/andresayac/edge-tts/3.1-browser-api"><title>Browser API</title><host>DeepWiki</host><snippet>Last indexed: 13 December 2025 (77a70c)
+Browser API
+Relevant source files
+README.md
+src/browser/EdgeTTS.browser.ts
+Purpose and Scope
+This document describes the browser-specific implementation of the EdgeTTS service, provided by the <beginning of the code>EdgeTTS<end of the code> class in src/browser/EdgeTTS.browser.ts The browser API enables text-to-speech synthesis directly in web browsers using Microsoft Edge's TTS service via native browser APIs such as <beginning of the code>WebSocket<end of the code>, <beginning of the code>fetch<end of the code> , and <beginning of the code>crypto.subtle<end of the code>.
+For information about using the browser API in practice, see Browser Usage Examples. For the Node.js implementation and its additional features, see Core EdgeTTS Service.
+EdgeTTS Class Overview
+The browser version of <beginning of the code>EdgeTTS<end of the code> provides a subset of the Node.js API, adapted to work with browser-native APIs. The class maintains internal state for WebSocket connections and accumulated audio data.
+Class Structure
+Sources: src/browser/EdgeTTS.browser.ts 3-24 src/browser/EdgeTTS.browser.ts 25-28
+Voice Discovery Methods
+The browser API provides three methods for discovering and filtering available voices from Microsoft's TTS service.
+getVoices()
+Fetches the complete list of available voices using the browser's <beginning of the code>fetch<end of the code> API.
+Signature:
+async getVoices(): Promise<Voice[]>
+Implementation Details:
+Uses <beginning of the code>fetch()<end of the code> to make HTTPS requests to the voices endpoint
+Generates authentication token via <beginning of the code>generateSecMsGec()<end of the code>
+Includes <beginning of the code>TRUSTED_CLIENT_TOKEN<end of the code> , <beginning of the code>Sec-MS-GEC<end of the code>, and <beginning of the code>Sec-MS-GEC-Version<end of the code> as query parameters
+Normalizes response by setting <beginning of the code>FriendlyName<end of the code> and removing server-specific fields
+src/browser/EdgeTTS.browser.ts 29-44
+getVoicesByLanguage()
+Filters voices by locale prefix.
+Signature:
+async getVoicesByLanguage(locale: string): Promise<Voice[]>
+Example: <beginning of the code>getVoicesByLanguage('en-US')<end of the code> returns all US English voices.
+src/browser/EdgeTTS.browser.ts 46-49
+getVoicesByGender()
+Filters voices by gender attribute.
+Signature:
+async getVoicesByGender(gender: 'Male' | 'Female'): Promise<Voice[]>
+src/browser/EdgeTTS.browser.ts 51-54
+Sources: src/browser/EdgeTTS.browser.ts 29-54
+Speech Synthesis Methods
+The browser API provides two synthesis approaches: buffered and streaming.
+synthesize()
+Performs speech synthesis and buffers all audio data internally. Returns a <beginning of the code>Promise<void><end of the code> that resolves when synthesis completes.
+Signature:
+async synthesize(
+text: string,
+voice: string = 'en-US-JennyNeural',
+options: SynthesisOptions = {}
+): Promise<void>
+Parameters:| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| text | string | Required | Plain text or SSML content |
+| voice | string | 'en-US-JennyNeural' | Voice name (ShortName) |
+| options.pitch | string \| number | 0 | Pitch adjustment (Hz or percentage) |
+| options.rate | string \| number | 0 | Speech rate adjustment (percentage) |
+| options.volume | string \| number | 0 | Volume level (percentage) |
+| options.inputType | 'auto' \| 'ssml' \| 'text' | 'auto' | Input format detection mode |
+
+Workflow:
+Inactivity Timeout: The method implements a 30-second inactivity timeout using <beginning of the code>window.setTimeout()<end of the code> that resets on each message received. If no messages arrive within 30 seconds, the connection closes with a timeout error.
+src/browser/EdgeTTS.browser.ts 202-270
+synthesizeStream()
+Performs speech synthesis with real-time streaming using an <beginning of the code>AsyncGenerator<end of the code>.
+Signature:
+async *synthesizeStream(
+text: string,
+voice: string = 'en-US-JennyNeural',
+options: SynthesisOptions = {}
+): AsyncGenerator<Uint8Array, void, unknown>
+Usage Pattern:
+for await (const chunk of tts.synthesizeStream(text, voice, options)) {
+// Process chunk immediately as it arrives
+}
+Implementation:
+Uses a queue-based approach to coordinate WebSocket messages with the async generator
+Yields audio chunks as they arrive rather than buffering all data
+Still maintains <beginning of the code>audio_stream<end of the code> array for later retrieval via <beginning of the code>getAudioData()<end of the code>
+Implements the same 30-second inactivity timeout pattern
+src/browser/EdgeTTS.browser.ts 272-384
+Sources: src/browser/EdgeTTS.browser.ts 202-384
+Audio Output Retrieval
+getAudioData()
+Retrieves the accumulated audio data after synthesis completes.
+Signature:
+getAudioData(): Uint8Array
+Behavior:
+Concatenates all chunks from <beginning of the code>audio_stream<end of the code> array into a single <beginning of the code>Uint8Array<end of the code>
+Throws an error if no audio data is available
+Returns binary audio in the format specified in the config message (default: <beginning of the code>audio-24khz-48kbitrate-mono-mp3<end of the code>)
+Example Flow:
+await tts.synthesize(text, voice);
+const audioData = tts.getAudioData();
+// audioData is a Uint8Array containing MP3 data
+src/browser/EdgeTTS.browser.ts 427-439
+Sources: src/browser/EdgeTTS.browser.ts 427-439
+SSML Processing
+The browser implementation includes comprehensive SSML support with automatic detection and validation.
+SSML Detection Flow
+SSML Validation
+The <beginning of the code>detectSSML()<end of the code> method src/browser/EdgeTTS.browser.ts 91-121 validates:
+Presence of <beginning of the code><speak><end of the code> tag
+Presence of <beginning of the code><voice><end of the code> tag
+Correct namespace: <beginning of the code>http://www.w3.org/2001/10/synthesis<end of the code>
+Invalid SSML throws an error immediately rather than sending malformed requests to the server.
+Plain Text Handling
+For plain text input src/browser/EdgeTTS.browser.ts 174-186 :
+XML special characters are escaped via <beginning of the code>escapeXML()<end of the code>
+Content is wrapped in proper SSML structure with <beginning of the code><speak><end of the code>, <beginning of the code><voice><end of the code> , and <beginning of the code><prosody><end of the code> tags
+Prosody parameters (pitch, rate, volume) are applied
+Sources: src/browser/EdgeTTS.browser.ts 64-186
+WebSocket Communication
+Connection Lifecycle
+Message Format
+Config Message src/browser/EdgeTTS.browser.ts 196-200 :
+<beginning of the code>
+X-Timestamp:<RFC1123 timestamp>
+Content-Type:application/json; charset=utf-8
+Path:speech.config
+
+{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":false,"wordBoundaryEnabled":true},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}
+<end of the code>
+SSML Message src/browser/EdgeTTS.browser.ts 233-235 :
+<beginning of the code>
+X-RequestId:<UUID>
+Content-Type:application/ssml+xml
+X-Timestamp:<RFC1123 timestamp>
+Path:ssml
+
+<speak>...</speak>
+<end of the code>
+Binary Audio Processing
+Audio data arrives in binary WebSocket messages. The browser implementation uses <beginning of the code>FileReader<end of the code> to convert <beginning of the code>Blob<end of the code> to <beginning of the code>ArrayBuffer<end of the code>:
+src/browser/EdgeTTS.browser.ts 245-252
+const reader = new FileReader();
+reader.onload = () => {
+const arrayBuffer = reader.result as ArrayBuffer;
+const uint8Array = new Uint8Array(arrayBuffer);
+this.processAudioData(uint8Array);
+};
+reader.readAsArrayBuffer(event.data);
+The <beginning of the code>processAudioData()<end of the code> method src/browser/EdgeTTS.browser.ts 386-394 searches for the <beginning of the code>Path:audio\r\n<end of the code> header and extracts the audio payload that follows.
+Sources: src/browser/EdgeTTS.browser.ts 196-408
+Authentication
+The browser implementation uses the same authentication mechanism as the Node.js version but with browser-native cryptography.
+generateSecMsGec()
+Generates a time-based authentication token using the Web Crypto API:
+Algorithm src/browser/EdgeTTS.browser.ts 410-425 :
+Get current time in RFC1123 format
+Convert to Windows ticks (10,000,000 ticks per second since 1601-01-01)
+Round down to nearest 5-minute window (300-second intervals)
+Concatenate rounded ticks with <beginning of the code>TRUSTED_CLIENT_TOKEN<end of the code>
+SHA-256 hash the concatenated string using <beginning of the code>crypto.subtle.digest()<end of the code>
+Convert hash to uppercase hexadecimal string
+Key Difference from Node.js:
+Uses <beginning of the code>crypto.subtle.digest('SHA-256', data)<end of the code> instead of Node.js <beginning of the code>crypto<end of the code> module
+Returns uppercase hex string directly
+Sources: src/browser/EdgeTTS.browser.ts 410-425
+Browser-Specific Adaptations
+API Differences from Node.js| Feature | Node.js Implementation | Browser Implementation |
+| --- | --- | --- |
+| HTTP Requests | https module | fetch API |
+| WebSocket | ws library | Native WebSocket |
+| Crypto | crypto module | crypto.subtle API |
+| File I/O | fs module | Not available |
+| Timers | setTimeout | window.setTimeout |
+| Binary Data | Buffer | Uint8Array |
+| Blob Handling | Direct | Via FileReader |
+
+Missing Features
+The browser version does not include:
+<beginning of the code>toFile()<end of the code> method (no file system access)
+<beginning of the code>toBuffer()<end of the code> method (uses <beginning of the code>Uint8Array<end of the code> instead of Node.js <beginning of the code>Buffer<end of the code>)
+<beginning of the code>toBase64()<end of the code> method (can be implemented in user code)
+<beginning of the code>saveMetadata()<end of the code> method (no file system access)
+Word boundary metadata extraction (config enables it but data is not processed)
+These methods are available in the Node.js version documented in EdgeTTS Class Reference.
+Audio Output Handling
+In the browser, audio data must be handled as <beginning of the code>Uint8Array<end of the code>:
+const audioData = tts.getAudioData();
+ 
+// Convert to Blob for playback
+const blob = new Blob([audioData], { type: 'audio/mpeg' });
+const url = URL.createObjectURL(blob);
+ 
+// Create audio element
+const audio = new Audio(url);
+audio.play();
+Sources: src/browser/EdgeTTS.browser.ts 1-440
+Utility Methods
+UUID Generation
+src/browser/EdgeTTS.browser.ts 56-62
+Generates RFC4122-compliant UUIDs for request identification using <beginning of the code>Math.random()<end of the code>.
+Parameter Validation
+validatePitch() src/browser/EdgeTTS.browser.ts 64-69 : Formats pitch values as <beginning of the code>+NHz<end of the code> or <beginning of the code>-NHz<end of the code>
+validateRate() src/browser/EdgeTTS.browser.ts 71-79 : Formats rate values as <beginning of the code>+N%<end of the code> or <beginning of the code>-N%<end of the code>
+validateVolume() src/browser/EdgeTTS.browser.ts 81-89 : Formats volume values as <beginning of the code>N%<end of the code>
+These methods accept either numeric values or string values with units, normalizing them to the format required by SSML prosody tags.
+Time Utilities
+nowRFC1123() src/browser/EdgeTTS.browser.ts 188-190 : Returns current time in RFC1123 format using <beginning of the code>Date.toUTCString()<end of the code>
+parseRFC1123() src/browser/EdgeTTS.browser.ts 192-194 : Parses RFC1123 timestamp strings
+Binary Search
+indexOf() src/browser/EdgeTTS.browser.ts 396-408
+Implements byte-pattern search in <beginning of the code>Uint8Array<end of the code> to locate header boundaries in binary WebSocket messages. This is used to find <beginning of the code>Path:audio\r\n<end of the code> markers in the binary stream.
+Sources: src/browser/EdgeTTS.browser.ts 56-194 src/browser/EdgeTTS.browser.ts 396-408
+Error Handling
+The browser implementation includes several error scenarios:
+WebSocket Errors
+Connection Failure: <beginning of the code>onerror<end of the code> event triggers rejection with <beginning of the code>'WebSocket error'<end of the code>
+Inactivity Timeout: 30-second timeout triggers if no messages received
+Server Errors: Propagated through WebSocket error events
+src/browser/EdgeTTS.browser.ts 255-261 src/browser/EdgeTTS.browser.ts 351-359
+Validation Errors
+Invalid SSML: Throws immediately when required tags or namespace missing
+No Audio Data: <beginning of the code>getAudioData()<end of the code> throws if called before synthesis
+src/browser/EdgeTTS.browser.ts 103-114 src/browser/EdgeTTS.browser.ts 428-430
+Timeout Implementation
+Both <beginning of the code>synthesize()<end of the code> and <beginning of the code>synthesizeStream()<end of the code> use an inactivity timeout pattern:
+The timer resets on every message, ensuring the connection only times out during actual periods of server inactivity.
+Sources: src/browser/EdgeTTS.browser.ts 218-227 src/browser/EdgeTTS.browser.ts 300-314
+On this page
+Browser API
+Purpose and Scope
+EdgeTTS Class Overview
+Class Structure
+Voice Discovery Methods
+getVoices()
+getVoicesByLanguage()
+getVoicesByGender()
+Speech Synthesis Methods
+synthesize()
+synthesizeStream()
+Audio Output Retrieval
+getAudioData()
+SSML Processing
+SSML Detection Flow
+SSML Validation
+Plain Text Handling
+WebSocket Communication
+Connection Lifecycle
+Message Format
+Binary Audio Processing
+Authentication
+generateSecMsGec()
+Browser-Specific Adaptations
+API Differences from Node.js
+Missing Features
+Audio Output Handling
+Utility Methods
+UUID Generation
+Parameter Validation
+Time Utilities
+Binary Search
+Error Handling
+WebSocket Errors
+Validation Errors
+Timeout Implementation</snippet><url>https://deepwiki.com/andresayac/edge-tts/3.1-browser-api</url><publish_time>2025年12月13日0时0分</publish_time><text_length>2830</text_length></document><document reference_id="https://github.com/LorisYounger/VPet.Plugin.Demo/issues/30"><title>EdgeTTS修复方案</title><host>GitHub</host><snippet>LorisYounger
+/
+VPet.Plugin.Demo
+Public
+Issues
+EdgeTTS修复方案
+#30
+New issue
+Closed
+EdgeTTS修复方案#30
+AssigneesDescriptionCCCCCCHARA
+opened on Jan 25, 2026
+参考项目：https://github.com/rany2/edge-tts
+AI生成的可行的代码示例：
+<beginning of the code>
+using System;
+using System.Net.WebSockets;
+using System.Text;
+using System.Security.Cryptography;
+using System.Globalization;
+
+namespace EdgeTtsConsole
+{
+    class Program
+    {
+        // ==========================================
+        // 1. 常量配置 (源自 constants.py)
+        // ==========================================
+        const string TrustedClientToken = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+        const string ChromiumVersion = "143.0.3650.75";
+        const string SecMsGecVersion = $"1-{ChromiumVersion}";
+        const string WssUrlBase = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
+
+        static readonly string UserAgent = $"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{ChromiumVersion} Safari/537.36 Edg/{ChromiumVersion}";
+
+        static async Task Main(string[] args)
+        {
+            Console.WriteLine("Edge TTS C# Client");
+            string text = "你好，这是使用 C# 控制台程序生成的语音。它完整复刻了 Python 脚本的鉴权逻辑。";
+            string outputFile = "output_csharp.mp3";
+
+            try
+            {
+                await GenerateSpeechAsync(text, "zh-CN-XiaoxiaoNeural", outputFile);
+                Console.WriteLine($"\n完成! 音频已保存至: {Path.GetFullPath(outputFile)}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"\n发生错误: {ex.Message}");
+                if (ex.Message.Contains("403"))
+                {
+                    Console.WriteLine("提示: 403错误通常是因为系统时间不准确导致Token校验失败，请校准时间。");
+                }
+            }
+        }
+
+        static async Task GenerateSpeechAsync(string text, string voice, string filePath)
+        {
+            // 1. 生成关键参数
+            string connectionId = Guid.NewGuid().ToString("N");
+            string secMsGec = GenerateSecMsGec();
+            string muid = Guid.NewGuid().ToString("N").ToUpper(); // 模拟 secrets.token_hex(16).upper()
+
+            // 构造完整的 WebSocket URL
+            string url = $"{WssUrlBase}?TrustedClientToken={TrustedClientToken}&ConnectionId={connectionId}&Sec-MS-GEC={secMsGec}&Sec-MS-GEC-Version={SecMsGecVersion}";
+
+            using (var ws = new ClientWebSocket())
+            {
+                // 2. 设置请求头 (模拟 constants.py 中的 headers)
+                ws.Options.SetRequestHeader("User-Agent", UserAgent);
+                ws.Options.SetRequestHeader("Pragma", "no-cache");
+                ws.Options.SetRequestHeader("Cache-Control", "no-cache");
+                ws.Options.SetRequestHeader("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
+                ws.Options.SetRequestHeader("Accept-Encoding", "gzip, deflate, br, zstd");
+                ws.Options.SetRequestHeader("Accept-Language", "en-US,en;q=0.9");
+
+                // [关键] 添加 Cookie: muid
+                ws.Options.SetRequestHeader("Cookie", $"muid={muid};");
+
+                Console.WriteLine("正在连接服务器...");
+                await ws.ConnectAsync(new Uri(url), CancellationToken.None);
+                Console.WriteLine("已连接。");
+
+                // 3. 发送配置 (Speech Config)
+                string dateString = GetJsDateString();
+                string configMsg =
+                    $"X-Timestamp:{dateString}\r\n" +
+                    "Content-Type:application/json; charset=utf-8\r\n" +
+                    "Path:speech.config\r\n\r\n" +
+                    "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{" +
+                    "\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"}," +
+                    "\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"" +
+                    "}}}}";
+
+                await SendMessageAsync(ws, configMsg);
+
+                // 4. 发送 SSML
+                string ssml =
+                    $"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>" +
+                    $"<voice name='{voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>" +
+                    $"{text}" +
+                    $"</prosody></voice></speak>";
+
+                string ssmlMsg =
+                    $"X-RequestId:{connectionId}\r\n" +
+                    "Content-Type:application/ssml+xml\r\n" +
+                    $"X-Timestamp:{dateString}Z\r\n" +
+                    "Path:ssml\r\n\r\n" +
+                    $"{ssml}";
+
+                Console.WriteLine("正在发送 SSML...");
+                await SendMessageAsync(ws, ssmlMsg);
+
+                // 5. 接收并处理音频流
+                Console.WriteLine("正在接收音频流...");
+                using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                {
+                    var buffer = new byte[8192]; // 8KB buffer
+
+                    while (ws.State == WebSocketState.Open)
+                    {
+                        // 注意：这里简化处理，假设消息不会超过 Buffer 大小。
+                        // 生产环境应处理 WebSocket 的分片 (EndOfMessage)
+                        var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Done", CancellationToken.None);
+                            break;
+                        }
+                        else if (result.MessageType == WebSocketMessageType.Text)
+                        {
+                            string msg = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                            if (msg.Contains("turn.end"))
+                            {
+                                Console.WriteLine("传输结束 (turn.end)。");
+                                break;
+                            }
+                        }
+                        else if (result.MessageType == WebSocketMessageType.Binary)
+                        {
+                            // 解析二进制协议 [HeaderLength(2bytes) | Headers | Data]
+                            if (result.Count < 2) continue;
+
+                            // 大端序读取头部长度
+                            int headerLen = (buffer[0] << 8) | buffer[1];
+
+                            // 数据部分起始位置 = 2 (Length bytes) + headerLen
+                            int dataOffset = 2 + headerLen;
+
+                            if (result.Count > dataOffset)
+                            {
+                                // 写入纯音频数据
+                                await fs.WriteAsync(buffer, dataOffset, result.Count - dataOffset);
+                                Console.Write("."); // 进度条效果
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        static async Task SendMessageAsync(ClientWebSocket ws, string message)
+        {
+            var bytes = Encoding.UTF8.GetBytes(message);
+            await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+
+        // ==========================================
+        // 鉴权算法实现 (对应 drm.py)
+        // ==========================================
+        static string GenerateSecMsGec()
+        {
+            // Python: WIN_EPOCH = 11644473600
+            const long WinEpochSeconds = 11644473600;
+
+            // 获取当前 Unix 时间戳 (秒)
+            long unixTs = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+            // 转换为 Windows Epoch 基础
+            double ticks = unixTs + WinEpochSeconds;
+
+            // 向下取整到最近的 5 分钟 (300秒)
+            ticks -= ticks % 300;
+
+            // 转换为 100-nanosecond intervals (1e7)
+            ticks *= 10_000_000;
+
+            // 拼接 Token
+            string strToHash = $"{ticks:F0}{TrustedClientToken}";
+
+            // SHA256 哈希
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                byte[] bytes = Encoding.ASCII.GetBytes(strToHash);
+                byte[] hash = sha256.ComputeHash(bytes);
+                return Convert.ToHexString(hash).ToUpper();
+            }
+        }
+
+        // 模拟 JavaScript 的 Date.toString() 格式
+        static string GetJsDateString()
+        {
+            // 格式: Sat Jan 25 2026 14:00:00 GMT+0000 (Coordinated Universal Time)
+            return DateTime.UtcNow.ToString("ddd MMM dd yyyy HH:mm:ss 'GMT+0000 (Coordinated Universal Time)'", CultureInfo.InvariantCulture);
+        }
+    }
+}
+<end of the code>
+Metadata
+AssigneesLorisYounger
+Copilot
+Labels
+No labels
+No labels
+Projects
+No projects
+Milestone
+No milestone
+Relationships
+None yet
+Development
+No branches or pull requests</snippet><url>https://github.com/LorisYounger/VPet.Plugin.Demo/issues/30</url><publish_time>2026年1月25日0时0分</publish_time><text_length>2413</text_length></document><document reference_id="https://www.iopenv.com/V6AQRU8IK/API-parsing-calling-steps-for-Microsoft-Edge-browsers-read-aloud-function"><title>API parsing - calling steps for Microsoft Edge browser's read aloud function</title><host>iOpenV</host><snippet>API parsing - calling steps for Microsoft Edge browser's read aloud function
+Tags : edge c# function parsing api microsoft-edge microsoft read calling
+time : 2024-01-09 13:48:47
+[API parsing] Steps to call the read aloud function in Microsoft Edge browser
+1. Source
+Github: MsEdgeTTS, edge TTS record
+Wo Ai Cracking: Microsoft Voice Assistant Free Edition, supports multiple functions, first released across the network
+2. Preparation work
+Function source: Edge browser
+Packet capture tool: Fiddler
+Simulated request: postman
+3. Main analysis steps
+Step 1: Determine how to call the read out function of Edge browser using JavaScript, as it was not captured on Fiddler
+const voices = speechSynthesis.getVoices() function speakbyvoice(text, voice) {
+	var utter = new SpeechSynthesisUtterance(text)
+	for (let v of voices) {
+		if (v.name.includes(voice)) {
+			utter.voice = v
+			break
+		}
+	}
+	speechSynthesis.speak(utter)
+	return utter
+} speakbyvoice("hello world", "Xiaoxiao")
+Step 2: Attempted to capture the edge TTS record and found a packet HTTP request And Websocket connection . According to the code of MsEdgeTTS, it can be seen that:
+/*
+* postman successful simulation in the middle 
+ *get available voice pack options, equivalent to speechSynthesis.getVoices()
+* http url: https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=6A5AA1D4EAFF4E9FB37E23D68491D6F4
+* method: GET
+*/ {
+	uri: "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list",
+	query: {
+		trustedclienttoken: "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+	}
+	method: "GET" } /*
+* postman successful simulation in the middle 
+ *send wss connect, transmit text and voice data, equivalent to speechSynthesis.speak(utter)
+* wss url: wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=
+* send: send data twice, the first is the required audio format, and the second is ssml markup text (needs to be randomly generated) requestid replace it guid delimiter for"-"okay) 
+* receive: received webm audio bytes contained within the same requestid in the main body of the text, use Path=audiorn positioning the main text index 
+ *existing problems : 1. in the first audio format text sent, only in the webm-24khz-16bit-mono-opus only in the format can the connection be successful, and other formats can be tried and disconnected directly ;
+ *2. second transmission ssml text not supported mstts the resolution of namespaces is Auzure the castrated version of voice services, for example, cannot appear xmlns:mstts="****"、<mstts:express-as />、<p />、<s /> equal language markers 
+*/ {
+	uri: "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list",
+	query: {
+		trustedclienttoken: "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+	},
+	sendmessage: {
+		audioformat: `
+X-Timestamp:Mon Jul 11 2022 17:50:42 GMT+ 0800 (china standard time) 
+Content-Type:application/json; charset=utf-8
+Path:speech.config
+{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},"outputFormat":"webm-24khz-16bit-mono-opus"}}}}`,
+		ssml: `
+X-RequestId:7e956ecf481439a86eb1beec26b4db5a
+Content-Type:application/ssml+xml
+X-Timestamp:Mon Jul 11 2022 17:50:42 GMT+ 0800 (china standard time) Z
+Path:ssml
+<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice  name='Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoxiaoNeural)'><prosody pitch='+0Hz' rate ='+0%' volume='+0%'> hello world</prosody></voice></speak>`
+	} }
+4. Write code
+Websocket library WebSocketSharp. If the latest version installation fails, it can be downgraded for installation. At the time of this article's release, the latest preview version was <beginning of the code>1.0.3-rc11<end of the code>
+using System; using System.Collections.Generic; using System.Linq; using System.Text.RegularExpressions; using WebSocketSharp; // nuget package :WebSocketSharp (author) :sta install version of this article :1.0.3-rc10) namespace ConsoleTest { internal class Program {
+  static string ConvertToAudioFormatWebSocketString(string outputformat)
+  {
+      return "Content-Type:application/json; charset=utf-8rnPath:speech.configrnrn{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"" + outputformat + ""}}}}";
+  }
+  static string ConvertToSsmlText(string lang, string voice, string text)
+  {
+      return $"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='{lang}'><voice name='{voice}'>{text}</voice></speak>";
+  }
+  static string ConvertToSsmlWebSocketString(string requestId, string lang, string voice, string msg)
+  {
+      return $"X-RequestId:{requestId}rnContent-Type:application/ssml+xmlrnPath:ssmlrnrn{ConvertToSsmlText(lang, voice, msg)}";
+  }
+  
+  static void Main(string[] args)
+  {
+      var url = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?trustedclienttoken=6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+      var Language = "en-US";
+      var Voice = "Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoxiaoNeural)";
+      var audioOutputFormat = "webm-24khz-16bit-mono-opus";
+      var binary_delim = "Path:audiorn";
+      var msg = "Hello world";
+      var sendRequestId = Guid.NewGuid().ToString().Replace("-", "");
+      var dataBuffers = new Dictionary<string, List<byte>>();
+      var webSocket = new WebSocket(url);
+      webSocket.SslConfiguration.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
+      webSocket.OnOpen += (sender, e) => Console.WriteLine("[Log] WebSocket Open");
+      webSocket.OnClose += (sender, e) => Console.WriteLine("[Log] WebSocket Close");
+      webSocket.OnError += (sender, e) => Console.WriteLine("[Error] error message: " + e.Message);
+      webSocket.OnMessage += (sender, e) =>
+      {
+          if (e.IsText)
+          {
+              var data = e.Data;
+              var requestId = Regex.Match(data, @"X-RequestId:(?<requestId>.*?)rn").Groups["requestId"].Value;
+              if (data.Contains("Path:turn.start"))
+              {
+                  // start of turn, ignore. start signal, no need to process 
+              }
+              else if (data.Contains("Path:turn.end"))
+              {
+                  // end of turn, close stream. end signal, can be actively turned off socket
+                  // dataBuffers[requestId] = null;
+                  //don't follow along MsEdgeTTS after the audio is sent, you will receive a text message indicating the end of the audio 
+                  webSocket.Close();
+              }
+              else if (data.Contains("Path:response"))
+              {
+                  // context response, ignore. response signal, no processing required 
+              }
+              else
+              {
+                  Console.WriteLine("unknow message: " + data); //unknown error, usually does not occur 
+              }
+          }
+          else if (e.IsBinary)
+          {
+              var data = e.RawData;
+              var requestId = Regex.Match(e.Data, @"X-RequestId:(?<requestId>.*?)rn").Groups["requestId"].Value;
+              if (!dataBuffers.ContainsKey(requestId))
+                  dataBuffers[requestId] = new List<byte>();
+              if (data[0] == 0x00 && data[1] == 0x67 && data[2] == 0x58)
+              {
+                  // Last (empty) audio fragment. empty audio clip, representing the end of audio transmission 
+              }
+              else
+              {
+                  var index = e.Data.IndexOf(binary_delim) + binary_delim.Length;
+                  dataBuffers[requestId].AddRange(data.Skip(index));
+              }
+          }
+      };
+      webSocket.Connect();
+      var audioconfig = ConvertToAudioFormatWebSocketString(audioOutputFormat);
+      webSocket.Send(audioconfig);
+      webSocket.Send(ConvertToSsmlWebSocketString(sendRequestId, Language, Voice, msg));
+      while (webSocket.IsAlive) { }
+      Console.WriteLine("received audio byte length :" + dataBuffers[sendRequestId].Count);
+      Console.ReadKey(true);
+  } } }
+5. Conclusion
+Simulated websocket request successful, defect is that the Postman simulation result shows audio Outputplatform The parameter can only be <beginning of the code>webm-24khz-16bit-mono-opus<end of the code>, which means that it is necessary to use libraries such as ffmpeg to convert the format. I haven't found a useful library yet. Please record it here for now.</snippet><url>https://www.iopenv.com/V6AQRU8IK/API-parsing-calling-steps-for-Microsoft-Edge-browsers-read-aloud-function</url><publish_time>2024年1月9日13时48分</publish_time><text_length>2428</text_length></document><document reference_id="https://deepwiki.com/andresayac/edge-tts/2.2-speech-synthesis"><title>Speech Synthesis</title><host>DeepWiki</host><snippet>Last indexed: 13 December 2025 (77a70c)
+Speech Synthesis
+Details
+Relevant source files
+README.md
+src/services/EdgeTTS.ts
+This page documents the core speech synthesis functionality of the EdgeTTS service, focusing on the <beginning of the code>synthesize()<end of the code> and <beginning of the code>synthesizeStream()<end of the code> methods and their internal implementation. These methods orchestrate the complete process of converting text to speech by establishing WebSocket connections to Microsoft's Edge TTS API, sending SSML-formatted text, and receiving streamed audio data.
+For detailed information about SSML generation and XML formatting, see SSML Processing. For a comparison of buffered versus streaming approaches and their use cases, see Streaming vs Buffered Synthesis. For documentation of synthesis parameters and validation, see Synthesis Parameters.
+Synthesis Lifecycle
+The synthesis process follows a multi-phase lifecycle that involves authentication, WebSocket connection management, message exchange, and audio data accumulation. Both <beginning of the code>synthesize()<end of the code> and <beginning of the code>synthesizeStream()<end of the code> follow this pattern with differences in how they deliver audio data to the caller.
+"Microsoft Edge TTS API""WebSocket Connection""getSSML()""generateSecMsGec()""EdgeTTS Instance"Caller
+"Microsoft Edge TTS API"
+"WebSocket Connection"
+"getSSML()"
+"generateSecMsGec()"
+"EdgeTTS Instance"
+Caller
+loop
+["Audio streaming"]
+loop
+["Metadata streaming"]
+"synthesize(text, voice, options)"
+"Initialize audio_stream = []"
+"Generate Sec-MS-GEC token"
+"Token string"
+"Generate SSML markup"
+"SSML string"
+"Create WebSocket with URL + auth params"
+"Connect"
+"Connected"
+"'open' event"
+"Send buildTTSConfigMessage()"
+"Send SSML request message"
+"Binary frame with Path:audio"
+"'message' event (RawData)"
+"processAudioData(data)"
+"audio_stream.push(chunk)"
+"Text frame with Path:audio.metadata"
+"'message' event"
+"parseMetadata(json)"
+"word_boundaries.push()"
+"Path:turn.end signal"
+"'message' event"
+"close()"
+"'close' event"
+"Promise resolves"
+Sources: src/services/EdgeTTS.ts 222-284 src/services/EdgeTTS.ts 342-465
+Core Synthesis Methods
+The <beginning of the code>EdgeTTS<end of the code> class provides two primary methods for speech synthesis, each optimized for different use cases.
+synthesize() Method
+The <beginning of the code>synthesize()<end of the code> method performs buffered synthesis, accumulating all audio data in memory before resolving. This method is defined at src/services/EdgeTTS.ts 222-284 and returns a <beginning of the code>Promise<void><end of the code> that resolves when synthesis is complete.
+Method Signature:
+async synthesize(
+text: string,
+voice: string = 'en-US-AnaNeural',
+options: SynthesisOptions = {}
+): Promise<void>
+Key characteristics:
+Stores all audio chunks in the <beginning of the code>audio_stream<end of the code> array at src/services/EdgeTTS.ts 228
+Returns after entire synthesis is complete
+Suitable for short to medium-length text where latency is acceptable
+Audio data retrieved via <beginning of the code>toBuffer()<end of the code>, <beginning of the code>toFile()<end of the code>, or <beginning of the code>toBase64()<end of the code> methods
+Internal flow:
+Resets <beginning of the code>audio_stream<end of the code> to empty array at src/services/EdgeTTS.ts 228
+Generates UUID request ID via <beginning of the code>generateUUID()<end of the code> at src/services/EdgeTTS.ts 229
+Generates security token via <beginning of the code>generateSecMsGec()<end of the code> at src/services/EdgeTTS.ts 223-225
+Constructs WebSocket URL with authentication parameters at src/services/EdgeTTS.ts 230
+Generates SSML via <beginning of the code>getSSML()<end of the code> at src/services/EdgeTTS.ts 237
+Establishes WebSocket connection at src/services/EdgeTTS.ts 232-235
+Sends configuration message on connection open at src/services/EdgeTTS.ts 257-258
+Sends SSML message at src/services/EdgeTTS.ts 260-261
+Processes incoming messages via <beginning of the code>processAudioData()<end of the code> at src/services/EdgeTTS.ts 266
+Resolves promise on connection close at src/services/EdgeTTS.ts 277-282
+Sources: src/services/EdgeTTS.ts 222-284
+synthesizeStream() Method
+The <beginning of the code>synthesizeStream()<end of the code> method provides real-time streaming synthesis, yielding audio chunks as they arrive from the API. This method is defined at src/services/EdgeTTS.ts 342-465 and returns an <beginning of the code>AsyncGenerator<Uint8Array, void, unknown><end of the code>.
+Method Signature:
+async *synthesizeStream(
+text: string,
+voice: string = 'en-US-AnaNeural',
+options: SynthesisOptions = {}
+): AsyncGenerator<Uint8Array, void, unknown>
+Key characteristics:
+Yields audio chunks immediately as they arrive
+Minimal memory footprint for long texts
+Lower latency to first audio byte
+Uses internal queue mechanism at src/services/EdgeTTS.ts 361-372
+Still populates <beginning of the code>audio_stream<end of the code> for later access
+Internal queue mechanism:
+const queue: Uint8Array[] = [];
+let done = false;
+let error: Error | null = null;
+let notify: (() => void) | null = null;
+ 
+const push = (chunk: Uint8Array) => {
+queue.push(chunk);
+if (notify) {
+notify();
+notify = null;
+}
+};
+This implementation at src/services/EdgeTTS.ts 361-372 provides a producer-consumer pattern where incoming audio chunks are queued and the generator yields them asynchronously.
+Sources: src/services/EdgeTTS.ts 342-465
+WebSocket Connection Establishment
+Both synthesis methods establish WebSocket connections using a standardized URL format with embedded authentication.
+Connection URL Structure
+Constants.WSS_URL
+WebSocket URL
+TrustedClientToken
+Sec-MS-GEC
+Sec-MS-GEC-Version
+ConnectionId (UUID)
+wss://speech.platform.bing.com/...
+?TrustedClientToken=...&Sec-MS-GEC=...
+The URL is constructed at src/services/EdgeTTS.ts 230 for <beginning of the code>synthesize()<end of the code> and src/services/EdgeTTS.ts 350 for <beginning of the code>synthesizeStream()<end of the code>:
+const url = `${Constants.WSS_URL}?TrustedClientToken=${Constants.TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGEC}&Sec-MS-GEC-Version=${Constants.VERSION_MS_GEC}&ConnectionId=${reqId}`;
+Connection Configuration
+WebSocket connections are created with specific headers and SSL configuration:| Configuration | Value | Location |
+| --- | --- | --- |
+| Headers | Constants.getBaseHeaders() | src/services/EdgeTTS.ts 233 |
+| SSL Validation | rejectUnauthorized: false | src/services/EdgeTTS.ts 234 |
+| Protocol | WSS (WebSocket Secure) | Constants module |
+
+Sources: src/services/EdgeTTS.ts 230-235 src/services/EdgeTTS.ts 350-355 src/config/constants.ts
+Message Protocol
+The synthesis process involves sending two distinct message types over the WebSocket connection and receiving three types of responses.
+Outbound Messages
+WebSocket 'open' event
+buildTTSConfigMessage()
+Send config message
+Path:speech.config
+Build SSML message with headers
+Send SSML message
+Path:ssml
+Specifies output format
+and metadata options
+X-RequestId, Content-Type,
+X-Timestamp, Path
+Configuration Message
+Built by <beginning of the code>buildTTSConfigMessage()<end of the code> at src/services/EdgeTTS.ts 335-339 :
+<beginning of the code>
+X-Timestamp:{RFC1123 timestamp}
+Content-Type:application/json; charset=utf-8
+Path:speech.config
+
+{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":false,"wordBoundaryEnabled":true},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}
+<end of the code>
+The configuration enables word boundaries (<beginning of the code>wordBoundaryEnabled:true<end of the code>) while disabling sentence boundaries at src/services/EdgeTTS.ts 338
+SSML Request Message
+Constructed at src/services/EdgeTTS.ts 260-261 for <beginning of the code>synthesize()<end of the code> and src/services/EdgeTTS.ts 399-400 for <beginning of the code>synthesizeStream()<end of the code>:
+<beginning of the code>
+X-RequestId:{uuid}
+Content-Type:application/ssml+xml
+X-Timestamp:{RFC1123 timestamp}
+Path:ssml
+
+{SSML markup}
+<end of the code>
+Sources: src/services/EdgeTTS.ts 255-261 src/services/EdgeTTS.ts 335-339 src/services/EdgeTTS.ts 393-401
+Inbound Messages
+The WebSocket receives three types of messages, identified by their <beginning of the code>Path<end of the code> header:
+Audio Data Messages
+Binary messages with <beginning of the code>Path:audio\r\n<end of the code> header containing raw audio bytes. Processing logic at src/services/EdgeTTS.ts 467-476 :
+const needle = Buffer.from("Path:audio\r\n");
+const audioStartIndex = buffer.indexOf(new Uint8Array(needle));
+ 
+if (audioStartIndex !== -1) {
+const audioChunk = buffer.subarray(audioStartIndex + needle.length);
+this.audio_stream.push(new Uint8Array(audioChunk));
+}
+The implementation searches for the <beginning of the code>Path:audio\r\n<end of the code> delimiter and extracts everything after it as audio data.
+Metadata Messages
+Text messages with <beginning of the code>Path:audio.metadata<end of the code> containing JSON word boundary information. Parsing at src/services/EdgeTTS.ts 478-486 :
+if (buffer.toString().includes("Path:audio.metadata")) {
+const metadataStart = buffer.indexOf("\r\n\r\n") + 4;
+const metadataJson = buffer.toString().substring(metadataStart);
+const meta = this.parseMetadata(metadataJson);
+if (meta !== null) {
+this.word_boundaries.push(meta);
+}
+}
+Completion Signal
+Text message with <beginning of the code>Path:turn.end<end of the code> indicating synthesis completion at src/services/EdgeTTS.ts 488-490 :
+if (buffer.toString().includes("Path:turn.end")) {
+this.ws?.close();
+}
+Sources: src/services/EdgeTTS.ts 467-491 src/services/EdgeTTS.ts 403-430
+Audio Data Processing
+Audio data arrives as fragmented binary frames that must be parsed and accumulated.
+Data Type Handling
+YesNoYesNoYesNoYesNoYes
+WebSocket 'message' event
+(RawData type)
+ensureBuffer(data)
+Buffer object
+Search for 'Path:audio\r
+'
+Found?
+Extract bytes after delimiter
+Check for metadata/turn.end
+Convert to Uint8Array
+audio_stream.push(chunk)
+Buffer?
+Return as-is
+ArrayBuffer?
+Buffer.from(data)
+Array?
+Buffer.concat()
+String?
+Buffer.from(data, 'utf-8')
+Buffer Normalization
+The <beginning of the code>ensureBuffer()<end of the code> function at src/services/EdgeTTS.ts 30-44 handles multiple possible data types from the WebSocket:
+function ensureBuffer(data: RawData): Buffer {
+if (Buffer.isBuffer(data)) {
+return data;
+}
+if (data instanceof ArrayBuffer) {
+return Buffer.from(data);
+}
+if (Array.isArray(data)) {
+return Buffer.concat(data as unknown as Uint8Array[]);
+}
+if (typeof data === 'string') {
+return Buffer.from(data, 'utf-8');
+}
+throw new Error(`Unsupported RawData type: ${typeof data}`);
+}
+Audio Extraction
+The <beginning of the code>processAudioData()<end of the code> method at src/services/EdgeTTS.ts 467-491 uses binary pattern matching:
+Converts <beginning of the code>RawData<end of the code> to <beginning of the code>Buffer<end of the code> via <beginning of the code>ensureBuffer()<end of the code>
+Searches for <beginning of the code>Path:audio\r\n<end of the code> delimiter using <beginning of the code>Buffer.indexOf()<end of the code>
+Extracts all bytes following the delimiter as audio data
+Converts to <beginning of the code>Uint8Array<end of the code> and appends to <beginning of the code>audio_stream<end of the code>
+For <beginning of the code>synthesizeStream()<end of the code>, the same extraction logic at src/services/EdgeTTS.ts 403-415 additionally pushes chunks to the internal queue for immediate yielding.
+Sources: src/services/EdgeTTS.ts 30-44 src/services/EdgeTTS.ts 467-491 src/services/EdgeTTS.ts 403-430
+Connection Lifecycle and Timeout Management
+Both synthesis methods implement inactivity timeout mechanisms to prevent hanging connections.
+Timeout Implementation
+The timeout mechanism at src/services/EdgeTTS.ts 241-253 works as follows:
+let timedOut = false;
+| Variable | Type | Purpose | Default | Location |
+| --- | --- | --- | --- | --- |
+| audio_format | string | File extension for output | 'mp3' | src/services/EdgeTTS.ts 48 |
+| output_format | string | API output format string | 'audio-24khz-48kbitrate-mono-mp3' | src/services/EdgeTTS.ts 49 |
+| word_boundaries | WordBoundary[] | Word timing metadata | [] | src/services/EdgeTTS.ts 50 |
+
+State Lifecycle
+Method invoked
+Reset audio_stream = []
+Set output_format from options
+Create WebSocket
+Accumulate chunks in audio_stream
+Accumulate word_boundaries
+Synthesis complete
+State persists until next call
+toBuffer()
+toFile()
+getWordBoundaries()
+getAudioInfo()
+State Reset
+The <beginning of the code>audio_stream<end of the code> array is explicitly reset at the start of each synthesis operation:
+<beginning of the code>synthesize()<end of the code>: src/services/EdgeTTS.ts 228
+<beginning of the code>synthesizeStream()<end of the code>: src/services/EdgeTTS.ts 343
+However, <beginning of the code>word_boundaries<end of the code> is not reset, meaning metadata accumulates across multiple synthesis calls. This appears to be a design decision, though it may not be intentional.
+State Access Methods
+After synthesis, state is accessed via these methods:
+<beginning of the code>toBuffer()<end of the code> at src/services/EdgeTTS.ts 594-599 - Concatenates <beginning of the code>audio_stream<end of the code> into single Buffer
+<beginning of the code>toBase64()<end of the code> at src/services/EdgeTTS.ts 590-592 - Converts buffer to base64 string
+<beginning of the code>toFile()<end of the code> at src/services/EdgeTTS.ts 575-584 - Writes buffer to filesystem
+<beginning of the code>getWordBoundaries()<end of the code> at src/services/EdgeTTS.ts 611-613 - Returns <beginning of the code>word_boundaries<end of the code> array
+<beginning of the code>getAudioInfo()<end of the code> at src/services/EdgeTTS.ts 566-573 - Returns size, format, and duration
+Sources: src/services/EdgeTTS.ts 47-51 src/services/EdgeTTS.ts 228 src/services/EdgeTTS.ts 343 src/services/EdgeTTS.ts 566-613
+On this page
+Speech Synthesis
+Synthesis Lifecycle
+Core Synthesis Methods
+synthesize() Method
+synthesizeStream() Method
+WebSocket Connection Establishment
+Connection URL Structure
+Connection Configuration
+Message Protocol
+Outbound Messages
+Configuration Message
+SSML Request Message
+Inbound Messages
+Audio Data Messages
+Metadata Messages
+Completion Signal
+Audio Data Processing
+Buffer Normalization
+Audio Extraction
+Connection Lifecycle and Timeout Management
+Timeout Implementation
+Timeout Reset Points
+Error Handling
+Internal State Management</snippet><url>https://deepwiki.com/andresayac/edge-tts/2.2-speech-synthesis</url><publish_time>2025年12月13日0时0分</publish_time><text_length>2780</text_length></document><document reference_id="https://gist.github.com/playerx/e03765b03f3924a29c61536306a0c517"><title>Edge-TTS low level client implementation (Deno example)</title><host>GitHub Gist</host><snippet>playerx / edge-tts.ts
+Last active August 18, 2025 15:00
+Edge-TTS low level client implementation (Deno example)
+Raw
+edge-tts.ts|  | import WebSocket from "ws"; |
+| --- | --- |
+|  |  |
+|  | export async function textToSpeech( |
+|  | text: string, |
+|  | voice: string, |
+|  | options: { pitch?: string; rate?: string; volume?: string } |
+|  | ): Promise { |
+|  | const audio_stream: any[] = []; |
+|  | const secMsGEC = await generateSecMsGec( |
+|  | Constants.TRUSTED_CLIENT_TOKEN, |
+|  | ) |
+|  | return new Promise((resolve, reject) = { |
+|  | const reqId = crypto.randomUUID(); |
+|  | const url = `${Constants.WSS_URL}?TrustedClientToken=${Constants.TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGEC}&Sec-MS-GEC-Version=1-130.0.2849.68&ConnectionId=${reqId}` |
+|  | const ws = new WebSocket(url); |
+|  | const SSML_text = getSSML(text, voice, options); |
+|  |  |
+|  | ws.on("open", () = { |
+|  | const message = buildTTSConfigMessage(); |
+|  | ws.send(message); |
+|  | const speechMessage = `X-RequestId:${reqId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${new Date().toISOString()}Z\r\nPath:ssml\r\n\r\n${SSML_text}`; |
+|  | ws.send(speechMessage); |
+|  | }); |
+|  | ws.on("message", (data: any) = { |
+|  | if (Buffer.isBuffer(data)) { |
+|  | const needle = Buffer.from("Path:audio\r\n"); |
+|  | const uint8Data = new Uint8Array(data); |
+|  | const start_ind = uint8Data.indexOf(needle[0]); |
+|  | if (start_ind !== -1) { |
+|  | const audioData = data.subarray(start_ind + needle.length); |
+|  | audio_stream.push(audioData); |
+|  | } |
+|  | if (data.includes("Path:turn.end")) { |
+|  | ws.close(); |
+|  | } |
+|  | } else { |
+|  | console.log(3, "not buffer"); |
+|  | } |
+|  | }); |
+|  | ws.on("close", () = { |
+|  | if (!audio_stream.length) { |
+|  | reject("No audio data available to save."); |
+|  | return; |
+|  | } |
+|  | const audioBuffer = Buffer.concat(audio_stream); |
+|  | resolve(audioBuffer); |
+|  | }); |
+|  | ws.on("error", (err: Error) = { |
+|  | reject(err); |
+|  | }); |
+|  | }); |
+|  | } |
+|  | export async function getVoices(): Promise { |
+|  | const response = await fetch( |
+|  | `${Constants.VOICES_URL}?trustedclienttoken=${Constants.TRUSTED_CLIENT_TOKEN}` |
+|  | ); |
+|  | const data = await response.json(); |
+|  | return data.map((voice: any) = { |
+|  | delete voice.VoiceTag; |
+|  | delete voice.SuggestedCodec; |
+|  | delete voice.Status; |
+|  | return voice; |
+|  | }); |
+|  | } |
+|  | const Constants = { |
+|  | TRUSTED_CLIENT_TOKEN: "6A5AA1D4EAFF4E9FB37E23D68491D6F4", |
+|  | WSS_URL: |
+|  | "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1", |
+|  | VOICES_URL: |
+|  | "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list", |
+|  | }; |
+|  | const buildTTSConfigMessage = (): string = { |
+|  | return ( |
+|  | `X-Timestamp:${new Date().toISOString()}Z\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n` + |
+|  | `{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":false,"wordBoundaryEnabled":true},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}` |
+|  | ); |
+|  | }; |
+|  | const getSSML = (text: string, voice: string, options: any = {}): string = { |
+|  | options.pitch = options.pitch?.replace("hz", "Hz"); |
+|  | const pitch = options.pitch \|\| "0Hz"; // this.validatePitch(options.pitch \|\| '0Hz'); |
+|  | const rate = options.rate \|\| "0%"; // this.validateRate(options.rate \|\| '0%'); |
+|  | const volume = options.volume \|\| "0%"; // this.validateVolume(options.volume \|\| '0%'); |
+|  | return `${text}`; |
+|  | }; |
+|  | const generateSecMsGec = async ( |
+|  | trustedClientToken: string, |
+|  | ): Promise = { |
+|  | const ticks = Math.floor(Date.now() / 1000) + 11644473600 |
+|  | const rounded = ticks - (ticks % 300) |
+|  | const windowsTicks = rounded * 10000000 |
+|  | const encoder = new TextEncoder() |
+|  | const data = encoder.encode(`${windowsTicks}${trustedClientToken}`) |
+|  | const hashBuffer = await crypto.subtle.digest('SHA-256', data) |
+|  | return Array.from(new Uint8Array(hashBuffer)) |
+|  | .map(b = b.toString(16).padStart(2, '0')) |
+|  | .join('') |
+|  | .toUpperCase() |
+|  | } |
+
+Raw
+usage.ts|  | const res = await textToSpeech( |
+| --- | --- |
+|  | text, |
+|  | speaker \|\| 'echo', //"ka-GE-EkaNeural", |
+|  | { |
+|  | rate: "0%", // Speech rate (range: -100% to 100%) |
+|  | volume: "0%", // Speech volume (range: -100% to 100%) |
+|  | pitch: "0Hz", // Voice pitch (range: -100Hz to 100Hz) |
+|  | } |
+|  | ); |
+|  | return new Response(res, { |
+|  | headers: { |
+|  | "content-type": "audio/mp3", |
+|  | }, |
+|  | }); |
+
+</snippet><url>https://gist.github.com/playerx/e03765b03f3924a29c61536306a0c517</url><publish_time>2025年8月18日15时0分</publish_time><text_length>2852</text_length></document></search>

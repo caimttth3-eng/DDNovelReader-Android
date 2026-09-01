@@ -1,0 +1,32 @@
+name: duoduo_langdu
+description: "多多朗读 - 安卓本地小说阅读器，支持 Edge TTS 在线朗读、智能分章、句子级高亮跟随。"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  file_picker: ^12.1.2
+  shared_preferences: ^2.5.5
+  path_provider: ^2.1.6
+  archive: ^4.2.0
+  xml: ^7.0.1
+  scroll_to_index: ^3.0.1
+  crypto: ^3.0.7
+  audioplayers: ^6.8.1
+  scrollable_positioned_list: ^0.3.8
+  audio_service: ^0.18.19
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
