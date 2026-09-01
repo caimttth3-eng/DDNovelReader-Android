@@ -52,5 +52,3 @@ android/key.properties
 android/app/*.jks
 android/app/*.keystore
 
-# Release APK (only keep release notes in git)
-releases/android/*.apk
