@@ -1,6 +1,8 @@
-# 多多朗读 安卓版 v1.0.0 发布说明
+# 多多朗读 DDNovelReader 安卓版 v1.0.0 发布说明
 
 **发布日期**：2026-09-02
+**中文名**：多多朗读
+**英文名**：DDNovelReader
 **平台**：Android（minSdk 21, targetSdk 33）
 **包名**：com.duoduo.duoduo_langdu
 **安装包**：多多朗读_v1.0.0_android.apk（52.1 MB）
@@ -45,6 +47,6 @@
 - audio_service MediaSession 耳机联动
 
 ## 与 PC 版区分
-- 本目录 `releases/android/` 为安卓版发布产物
-- PC 版（Python 桌面版）为独立项目，不在本仓库
+- 本目录 `releases/android/` 为 DDNovelReader 安卓版发布产物
+- PC 版（Windows 桌面端，Python 实现）为独立项目，不在本仓库
 - 安卓版包名 `com.duoduo.duoduo_langdu`，应用名「多多朗读」

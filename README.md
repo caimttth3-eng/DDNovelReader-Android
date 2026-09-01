@@ -1,6 +1,10 @@
-# 多多朗读
+# 多多朗读 DDNovelReader
 
 安卓本地小说阅读器，支持 Edge TTS 在线朗读、智能分章、句子级高亮跟随。
+
+- 中文名：多多朗读
+- 英文名：DDNovelReader
+- 包名：com.duoduo.duoduo_langdu
 
 ## 功能
 
