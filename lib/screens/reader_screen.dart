@@ -104,6 +104,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _isPlaying = false;
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
   int _ttsChapter = 0;
+  // TTS 合成加载中（点击播放/恢复后等待首句出声；期间防误触）
+  bool _ttsLoading = false;
+  Timer? _ttsLoadingTimer;
 
   // 系统媒体音量（音量键被 TTS 上下句占用，暂停面板提供滑条调节）
   double _mediaVolume = 1.0;
@@ -500,6 +503,28 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return (it.chapterIndex, it.paragraphIndex, it.sentenceIndex);
   }
 
+  /// 开始 TTS 加载态：显示 loading，15 秒未出声则超时提示并退出加载态
+  void _startTtsLoading() {
+    _ttsLoadingTimer?.cancel();
+    setState(() => _ttsLoading = true);
+    _ttsLoadingTimer = Timer(const Duration(seconds: 15), () {
+      if (!mounted) return;
+      setState(() => _ttsLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('语音加载超时，请检查网络后重试')),
+        );
+      }
+    });
+  }
+
+  /// 结束 TTS 加载态（首句已开始播放或已退出）
+  void _stopTtsLoading() {
+    _ttsLoadingTimer?.cancel();
+    _ttsLoadingTimer = null;
+    if (mounted) setState(() => _ttsLoading = false);
+  }
+
   /// 进入朗读模式：全屏隐藏UI，开始TTS播放
   Future<void> _play() async {
     if (_inReadingMode) return;
@@ -526,8 +551,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     globalAudioHandler?.notifyPlaying();
     _showVolumeTip();
     if (vp != null) _compensateViewport(vp.$1, vp.$2, delta);
-    // 从视口当前句子开始朗读
+    // 从视口当前句子开始朗读（合成首句期间显示 loading）
+    _startTtsLoading();
     await _startTtsFrom(startC, startP, startS);
+    _stopTtsLoading();
   }
 
   /// 显示音量键操作提示：立即显现，2.5s 后透明度 500ms 淡出
@@ -542,6 +569,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// 朗读模式中暂停：保留全屏，弹出底部控制面板
   Future<void> _pauseReading() async {
+    if (_ttsLoading) return; // 加载中忽略暂停，防误触
     if (_tts.state != TtsState.playing) return;
     await _tts.pause();
     globalAudioHandler?.notifyPaused();
@@ -556,11 +584,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// - 暂停中滑动跨章：重新加载目标章，从当前句开始播放
   /// - 同章恢复：TtsReader 直接重播当前句；彻底失败时 onError 已触发退出
   Future<void> _resumeReading() async {
+    if (_ttsLoading) return; // 加载中忽略恢复，防误触
     if (_tts.state != TtsState.paused) return;
+    _startTtsLoading();
     if (_ttsChapter != _chapter) {
       // 暂停期间滑到了其他章节：TtsReader 内部仍是旧章句子，需重新加载
       await _startTtsFrom(
           _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+      _stopTtsLoading();
       globalAudioHandler?.notifyPlaying();
       if (!mounted) return;
       setState(() {
@@ -570,6 +601,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       return;
     }
     final ok = await _tts.resume();
+    _stopTtsLoading();
     if (!ok || !mounted) return; // 失败：onError 已触发 _exitReadingMode
     globalAudioHandler?.notifyPlaying();
     setState(() {
@@ -588,6 +620,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _volumeTipTimer?.cancel();
     _volumeTipTimer = null;
     _volumeTipVisible = false;
+    _ttsLoadingTimer?.cancel();
+    _ttsLoadingTimer = null;
+    _ttsLoading = false;
     await _tts.stop();
     globalAudioHandler?.notifyStopped();
     _exitFullscreen();
@@ -789,11 +824,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // 上一句 / 下一句
   void _prevSentence() {
+    if (_ttsLoading) return; // 加载中忽略，防误触
     if (!_isPlaying) return;
     _tts.prev();
   }
 
   void _nextSentence() {
+    if (_ttsLoading) return; // 加载中忽略，防误触
     if (!_isPlaying) return;
     _tts.next();
   }
@@ -1039,9 +1076,42 @@ class _ReaderScreenState extends State<ReaderScreen> {
           if (_showControls && _searchHits.isNotEmpty) _buildSearchBar(),
           // 音量键操作提示条（开始播放时短暂提示，2.5s 后淡出）
           if (_inReadingMode) _buildVolumeTip(),
+          // TTS 加载中浮层（朗读模式点击恢复播放时显示）
+          if (_inReadingMode && _ttsLoading) _buildTtsLoadingOverlay(),
           // 亮度遮罩
           _buildBrightnessOverlay(),
         ],
+      ),
+    );
+  }
+
+  /// TTS 加载中浮层：屏幕中央转圈 + 提示文字（点击播放/恢复后等待首句）
+  Widget _buildTtsLoadingOverlay() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 26,
+                  height: 26,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2.6, color: Color(0xFFE8C87A)),
+                ),
+                SizedBox(height: 12),
+                Text('正在加载语音…',
+                    style: TextStyle(color: Colors.white, fontSize: 14)),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1607,6 +1677,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         behavior: HitTestBehavior.translucent,
         onTapUp: inReading
             ? (_) {
+                if (_ttsLoading) return; // 加载中忽略点击，防误触
                 if (_isPlaying) {
                   _pauseReading();
                 } else {
@@ -1663,9 +1734,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
             const Spacer(),
             IconButton(
-              icon: const Icon(Icons.play_arrow, color: Colors.white),
+              icon: _ttsLoading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2.2, color: Colors.white))
+                  : Icon(
+                      _inReadingMode
+                          ? Icons.pause
+                          : Icons.play_arrow,
+                      color: Colors.white),
               tooltip: '朗读',
-              onPressed: _play,
+              onPressed: _ttsLoading ? null : _play,
             ),
             IconButton(
               icon: const Icon(Icons.checkroom, color: Colors.white),
