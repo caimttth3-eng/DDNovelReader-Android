@@ -92,6 +92,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Timer? _sleepTimer;
   int _sleepMinutes = 0; // 0=未设置
 
+  // 音量键操作提示条（开始播放时短暂提示）
+  Timer? _volumeTipTimer;
+  bool _volumeTipVisible = false;
+
   // 当前阅读位置（章节/段落）
   int _chapter = 0;
   int _para = 0;
@@ -152,15 +156,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
   static const _volumeChannel =
       MethodChannel('com.ddnovelreader/volume_keys');
 
-  /// 原生音量键回调：上=下一句，下=上一句
+  /// 原生音量键回调：上=上一句，下=下一句
   Future<dynamic> _onVolumeKey(MethodCall call) async {
     if (!_isPlaying || _showControls) return;
     switch (call.method) {
       case 'volumeUp':
-        _nextSentence();
+        _prevSentence();
         break;
       case 'volumeDown':
-        _prevSentence();
+        _nextSentence();
         break;
     }
   }
@@ -478,8 +482,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _ttsChapter = _chapter;
     });
     globalAudioHandler?.notifyPlaying();
+    _showVolumeTip();
     // 从用户当前阅读位置（句子级）开始朗读，而非段落首句
     await _startTtsFrom(_chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+  }
+
+  /// 显示音量键操作提示：立即显现，2.5s 后透明度 500ms 淡出
+  void _showVolumeTip() {
+    _volumeTipTimer?.cancel();
+    setState(() => _volumeTipVisible = true);
+    _volumeTipTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (!mounted) return;
+      setState(() => _volumeTipVisible = false);
+    });
   }
 
   /// 朗读模式中暂停：保留全屏，弹出底部控制面板
@@ -511,6 +526,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _sleepTimer?.cancel();
     _sleepTimer = null;
     _sleepMinutes = 0;
+    _volumeTipTimer?.cancel();
+    _volumeTipTimer = null;
+    _volumeTipVisible = false;
     await _tts.stop();
     globalAudioHandler?.notifyStopped();
     _exitFullscreen();
@@ -917,9 +935,47 @@ class _ReaderScreenState extends State<ReaderScreen> {
           if (_showControls) _buildFloatingChapter(),
           // 查找结果浮动条
           if (_showControls && _searchHits.isNotEmpty) _buildSearchBar(),
+          // 音量键操作提示条（开始播放时短暂提示，2.5s 后淡出）
+          if (_inReadingMode) _buildVolumeTip(),
           // 亮度遮罩
           _buildBrightnessOverlay(),
         ],
+      ),
+    );
+  }
+
+  /// 音量键操作提示条：屏幕中下部半透明圆角胶囊，2.5s 后透明度淡出
+  Widget _buildVolumeTip() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: MediaQuery.of(context).size.height * 0.22,
+      child: IgnorePointer(
+        child: Center(
+          child: AnimatedOpacity(
+            opacity: _volumeTipVisible ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOut,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.65),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.volume_up, color: Colors.white70, size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    '音量键：上=上一句  下=下一句',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
