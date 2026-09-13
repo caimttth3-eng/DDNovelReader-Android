@@ -482,23 +482,52 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return n;
   }
 
+  /// 视口当前显示的第一个句子位置（进度 = 滑到哪读到哪）
+  (int, int, int)? _viewportPosition() {
+    final items = _itemPositionsListener.itemPositions.value.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+    if (items.isEmpty) return null;
+    final first = items.firstWhere(
+      (p) => p.itemLeadingEdge < 1.0 && p.itemTrailingEdge > 0.0,
+      orElse: () => items.first,
+    );
+    final idx = first.index.clamp(0, _items.length - 1);
+    final it = _items[idx];
+    if (it.isTitle) {
+      // 视口停在章节标题：从该章 0 段 0 句开始
+      return (it.chapterIndex, 0, 0);
+    }
+    return (it.chapterIndex, it.paragraphIndex, it.sentenceIndex);
+  }
+
   /// 进入朗读模式：全屏隐藏UI，开始TTS播放
   Future<void> _play() async {
     if (_inReadingMode) return;
     _dragging = false;
+    final vp = _captureViewport();
+    final delta = _chapterBarTop(); // 进入朗读后顶栏偏移归 0
+    // 朗读起点 = 视口当前显示的位置（进度 = 滑到哪读到哪）
+    final pos = _viewportPosition();
+    final startC = pos?.$1 ?? _chapter;
+    final startP = pos?.$2 ?? _para;
+    final startS = pos?.$3 ?? (_ttsSentence >= 0 ? _ttsSentence : 0);
     _enterFullscreen();
     setState(() {
       _inReadingMode = true;
       _showControls = false;
       _isPlaying = true;
       _showReadingPanel = false;
-      _ttsChapter = _chapter;
+      _ttsChapter = startC;
+      _chapter = startC;
+      _para = startP;
+      _ttsSentence = startS;
     });
     _applySystemUi();
     globalAudioHandler?.notifyPlaying();
     _showVolumeTip();
-    // 从用户当前阅读位置（句子级）开始朗读，而非段落首句
-    await _startTtsFrom(_chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+    if (vp != null) _compensateViewport(vp.$1, vp.$2, delta);
+    // 从视口当前句子开始朗读
+    await _startTtsFrom(startC, startP, startS);
   }
 
   /// 显示音量键操作提示：立即显现，2.5s 后透明度 500ms 淡出
@@ -551,6 +580,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// 彻底退出朗读模式：停止TTS，恢复正常阅读页UI
   Future<void> _exitReadingMode() async {
+    final vp = _captureViewport();
+    final delta = -_chapterBarTop(); // 退出朗读后顶栏偏移恢复
     _sleepTimer?.cancel();
     _sleepTimer = null;
     _sleepMinutes = 0;
@@ -569,6 +600,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _ttsSentence = -1;
     });
     _applySystemUi();
+    if (vp != null) _compensateViewport(vp.$1, vp.$2, delta);
     _scheduleSave();
   }
 
@@ -978,24 +1010,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
       backgroundColor: _theme.bg,
       body: Stack(
         children: [
-          // 正文
-          _buildBody(),
-          // 正文顶部固定章节标题行（当前章节和章节名）
-          _buildChapterBar(),
-          // 三区点击层
-          _buildTapZones(),
-          // 底部留白覆盖层：进度条/朗读面板空间(120) + 两行半正文行高，
-          // 用背景色盖住正文底部，朗读听书时正文文字不被底部UI遮挡
-          // （位于正文之上、进度条/朗读面板之下，不遮挡UI）
+          // 正文区（不分层）：整体下移「两行半空白 + 标题行」高度，
+          // 章节标题 Positioned 固定在正文区顶部，正文列表在标题下方独立滚动
+          Padding(
+            padding: EdgeInsets.only(top: _chapterBarTop() + _chapterTopArea()),
+            child: _buildBody(),
+          ),
+          // 固定章节标题：位于顶部两行半空白之后，正文滚动时保持不动
           Positioned(
+            top: _chapterBarTop() + _fontSize * _lineHeight * 2.5,
             left: 0,
             right: 0,
-            bottom: 0,
-            height: _fontSize * _lineHeight * 2.5 + 120,
-            child: IgnorePointer(
-              child: Container(color: _theme.bg),
-            ),
+            child: _buildChapterHeader(),
           ),
+          // 三区点击层
+          _buildTapZones(),
           // 拖动 seek 预览浮层
           if (_dragging) _buildDragPreview(),
           // 朗读模式底部控制面板（暂停时显示）
@@ -1074,31 +1103,64 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return 0;
   }
 
-  /// 正文顶部固定章节标题行：始终显示当前章节和章节名，
+  /// 正文区固定顶部高度：两行半空白 + 标题栏一行
+  double _chapterTopArea() => _fontSize * _lineHeight * 3.5;
+
+  /// 捕获当前视口状态：首可见 item 的 index + 其在视口内的像素偏移（相对视口顶）
+  /// 用于模式切换后补偿滚动位置，保证正文文字屏幕位置不变
+  (int, double)? _captureViewport() {
+    final items = _itemPositionsListener.itemPositions.value.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+    if (items.isEmpty) return null;
+    final first = items.firstWhere(
+      (p) => p.itemLeadingEdge < 1.0 && p.itemTrailingEdge > 0.0,
+      orElse: () => items.first,
+    );
+    final H = MediaQuery.of(context).size.height -
+        _chapterBarTop() -
+        _chapterTopArea();
+    return (first.index, first.itemLeadingEdge * H);
+  }
+
+  /// 模式切换后补偿滚动位置：让首可见 item 的屏幕位置不变
+  /// beforePx = 切换前 item 距视口顶的像素；delta = 顶栏偏移变化量(旧-新)
+  void _compensateViewport(int index, double beforePx, double delta) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final H = MediaQuery.of(context).size.height -
+          _chapterBarTop() -
+          _chapterTopArea();
+      if (H <= 0) return;
+      final newPx = beforePx + delta;
+      final align = (newPx / H).clamp(0.0, 1.0);
+      _itemScrollController.jumpTo(index: index, alignment: align);
+    });
+  }
+
+  /// 章节标题栏：固定在正文区顶部（正文区布局的一部分，非悬浮），
+  /// 位于顶部两行半空白之后，一行高显示章节名，
   /// 滚动/朗读切换章节时实时跟随（_chapter 变化触发重建）
-  Widget _buildChapterBar() {
-    return Positioned(
-      top: _chapterBarTop(),
-      left: 0,
-      right: 0,
-      child: Container(
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        alignment: Alignment.centerLeft,
-        decoration: BoxDecoration(
-          color: _theme.bg.withValues(alpha: 0.95),
-          border: Border(
-            bottom: BorderSide(
-              color: _theme.title.withValues(alpha: 0.18),
-            ),
+  Widget _buildChapterHeader() {
+    return Container(
+      height: _fontSize * _lineHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      alignment: Alignment.centerLeft,
+      decoration: BoxDecoration(
+        color: _theme.bg,
+        border: Border(
+          bottom: BorderSide(
+            color: _theme.title.withValues(alpha: 0.18),
           ),
         ),
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
         child: Text(
           _chapterBarTitle(_chapter),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            fontSize: _fontSize * 0.78,
+            fontSize: _fontSize * 0.85,
             fontWeight: FontWeight.w600,
             color: _theme.title,
           ),
@@ -1117,11 +1179,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           : null,
       // 增大缓存区：跳转后能渲染更多 item，加速精确定位
       minCacheExtent: 1500,
-      // 底部留白：进度条/朗读面板空间(120) + 两行半正文行高，
-      // 朗读听书时正文文字不会被底部UI遮挡
-      // 注意：本列表的 padding 只在首尾生效，中部滚动无留白（已知限制）
-      padding: EdgeInsets.fromLTRB(20, _chapterBarTop() + 44, 20,
-          _fontSize * _lineHeight * 2.5 + 120),
+      // 顶部留白由 Column 的标题栏承担；底部留 120 给进度条/朗读面板
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
       itemCount: _items.length,
       itemBuilder: (ctx, i) {
         final it = _items[i];
