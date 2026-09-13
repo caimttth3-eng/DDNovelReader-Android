@@ -19,6 +19,19 @@ class MainActivity : AudioServiceActivity() {
                     volumeKeysEnabled = call.arguments as Boolean
                     result.success(null)
                 }
+                "getMediaVolume" -> {
+                    val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+                    val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                    val cur = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                    result.success(if (max > 0) cur.toDouble() / max else 1.0)
+                }
+                "setMediaVolume" -> {
+                    val v = (call.arguments as Number).toFloat().coerceIn(0f, 1f)
+                    val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+                    val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                    am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (v * max).toInt(), 0)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }

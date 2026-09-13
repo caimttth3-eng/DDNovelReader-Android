@@ -105,6 +105,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
   int _ttsChapter = 0;
 
+  // 系统媒体音量（音量键被 TTS 上下句占用，暂停面板提供滑条调节）
+  double _mediaVolume = 1.0;
+
   // 跳转逼近计数（防震荡死循环）
   int _approaches = 0;
   bool _suppressScrollTrack = false;
@@ -151,6 +154,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _loadSettings();
     // 记录最后阅读的书籍，下次启动直接恢复
     widget.storage.saveLastBookId(widget.book.id);
+    // 读取系统媒体音量用于暂停面板滑条
+    _loadMediaVolume();
   }
 
   static const _volumeChannel =
@@ -975,8 +980,22 @@ class _ReaderScreenState extends State<ReaderScreen> {
         children: [
           // 正文
           _buildBody(),
+          // 正文顶部固定章节标题行（当前章节和章节名）
+          _buildChapterBar(),
           // 三区点击层
           _buildTapZones(),
+          // 底部留白覆盖层：进度条/朗读面板空间(120) + 两行半正文行高，
+          // 用背景色盖住正文底部，朗读听书时正文文字不被底部UI遮挡
+          // （位于正文之上、进度条/朗读面板之下，不遮挡UI）
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: _fontSize * _lineHeight * 2.5 + 120,
+            child: IgnorePointer(
+              child: Container(color: _theme.bg),
+            ),
+          ),
           // 拖动 seek 预览浮层
           if (_dragging) _buildDragPreview(),
           // 朗读模式底部控制面板（暂停时显示）
@@ -1034,6 +1053,60 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  /// 章节标题行文案：标题已含"第X章/Chapter"则原样，否则加章节序号
+  String _chapterBarTitle(int c) {
+    if (c < 0 || c >= widget.book.chapters.length) return '';
+    final t = widget.book.chapters[c].title.trim();
+    if (t.startsWith('第') ||
+        t.toLowerCase().startsWith('chapter') ||
+        t.startsWith('序') ||
+        t.startsWith('楔')) {
+      return t;
+    }
+    return '第${c + 1}章 $t';
+  }
+
+  /// 章节标题行距屏幕顶的偏移：UI模式在顶栏下方，全屏/朗读在屏幕顶
+  double _chapterBarTop() {
+    if (_showControls) {
+      return MediaQuery.of(context).padding.top + 56;
+    }
+    return 0;
+  }
+
+  /// 正文顶部固定章节标题行：始终显示当前章节和章节名，
+  /// 滚动/朗读切换章节时实时跟随（_chapter 变化触发重建）
+  Widget _buildChapterBar() {
+    return Positioned(
+      top: _chapterBarTop(),
+      left: 0,
+      right: 0,
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        alignment: Alignment.centerLeft,
+        decoration: BoxDecoration(
+          color: _theme.bg.withValues(alpha: 0.95),
+          border: Border(
+            bottom: BorderSide(
+              color: _theme.title.withValues(alpha: 0.18),
+            ),
+          ),
+        ),
+        child: Text(
+          _chapterBarTitle(_chapter),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: _fontSize * 0.78,
+            fontWeight: FontWeight.w600,
+            color: _theme.title,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBody() {
     return ScrollablePositionedList.builder(
       itemScrollController: _itemScrollController,
@@ -1044,7 +1117,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
           : null,
       // 增大缓存区：跳转后能渲染更多 item，加速精确定位
       minCacheExtent: 1500,
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+      // 底部留白：进度条/朗读面板空间(120) + 两行半正文行高，
+      // 朗读听书时正文文字不会被底部UI遮挡
+      // 注意：本列表的 padding 只在首尾生效，中部滚动无留白（已知限制）
+      padding: EdgeInsets.fromLTRB(20, _chapterBarTop() + 44, 20,
+          _fontSize * _lineHeight * 2.5 + 120),
       itemCount: _items.length,
       itemBuilder: (ctx, i) {
         final it = _items[i];
@@ -1162,6 +1239,24 @@ class _ReaderScreenState extends State<ReaderScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // 音量调节行（音量键被 TTS 上下句占用，暂停时用滑条调节）
+              Row(
+                children: [
+                  const Icon(Icons.volume_down, color: Color(0xFFC9A96E), size: 20),
+                  Expanded(
+                    child: Slider(
+                      value: _mediaVolume.clamp(0.0, 1.0),
+                      min: 0.0,
+                      max: 1.0,
+                      activeColor: const Color(0xFFC9A96E),
+                      inactiveColor: const Color(0x44C9A96E),
+                      onChanged: _setMediaVolume,
+                    ),
+                  ),
+                  const Icon(Icons.volume_up, color: Color(0xFFC9A96E), size: 20),
+                ],
+              ),
+              const SizedBox(height: 2),
               // 语速调节行
               Row(
                 children: [
@@ -1179,10 +1274,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
                               color: Color(0xFFC9A96E), fontSize: 12),
                         ),
                         Slider(
-                          value: rate.clamp(0.5, 2.0),
+                          value: rate.clamp(0.5, 3.0),
                           min: 0.5,
-                          max: 2.0,
-                          divisions: 15,
+                          max: 3.0,
+                          divisions: 25,
                           activeColor: const Color(0xFFC9A96E),
                           inactiveColor: const Color(0x44C9A96E),
                           onChanged: (v) => _setRate(v),
@@ -1252,8 +1347,22 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  /// 读取当前系统媒体音量（0.0~1.0）
+  Future<void> _loadMediaVolume() async {
+    try {
+      final v = await _volumeChannel.invokeMethod<double>('getMediaVolume');
+      if (v != null && mounted) setState(() => _mediaVolume = v.clamp(0.0, 1.0));
+    } catch (_) {}
+  }
+
+  /// 设置系统媒体音量（音量键被 TTS 逐句占用，暂停面板用滑条调音量）
+  void _setMediaVolume(double v) {
+    setState(() => _mediaVolume = v.clamp(0.0, 1.0));
+    _volumeChannel.invokeMethod('setMediaVolume', _mediaVolume);
+  }
+
   void _adjustRate(double delta) {
-    _setRate((_settings.speechRate + delta).clamp(0.5, 2.0));
+    _setRate((_settings.speechRate + delta).clamp(0.5, 3.0));
   }
 
   void _setRate(double rate) {

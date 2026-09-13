@@ -54,9 +54,9 @@ class TtsReader {
   /// 设置音色（zh-CN 等）
   void setVoice(String v) => _voice = v;
 
-  /// 设置语速（0.1~2.0，映射到 Edge rate 百分比）
+  /// 设置语速（0.1~3.0，映射到 Edge rate 百分比 +200%）
   Future<void> setSpeechRate(double rate) async {
-    _speechRate = rate.clamp(0.1, 2.0);
+    _speechRate = rate.clamp(0.1, 3.0);
   }
 
   double get speechRate => _speechRate;
