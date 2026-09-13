@@ -1439,7 +1439,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       left: 0,
       right: 0,
       child: Container(
-        color: _theme.bg.withValues(alpha: 0.92),
+        decoration: const BoxDecoration(
+          color: Color(0xF2241F18),
+          border: Border(
+            bottom: BorderSide(color: Color(0x66C9A96E), width: 1.5),
+          ),
+        ),
         padding: EdgeInsets.only(
           top: MediaQuery.of(context).padding.top,
           left: 4,
@@ -1449,7 +1454,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         child: Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.arrow_back, color: Color(0xFF5D3A1A)),
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
               onPressed: () async {
                 if (_inReadingMode) await _exitReadingMode();
                 _scheduleSave();
@@ -1458,17 +1463,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
             const Spacer(),
             IconButton(
-              icon: const Icon(Icons.play_arrow, color: Color(0xFF5D3A1A)),
+              icon: const Icon(Icons.play_arrow, color: Colors.white),
               tooltip: '朗读',
               onPressed: _play,
             ),
             IconButton(
-              icon: const Icon(Icons.checkroom, color: Color(0xFF5D3A1A)),
+              icon: const Icon(Icons.checkroom, color: Colors.white),
               tooltip: '书页背景',
               onPressed: _openThemePanel,
             ),
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: Color(0xFF5D3A1A)),
+              icon: const Icon(Icons.more_vert, color: Colors.white),
               onSelected: (v) {
                 switch (v) {
                   case 'brightness':
@@ -1512,7 +1517,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       right: 0,
       bottom: 0,
       child: Container(
-        color: _theme.bg.withValues(alpha: 0.92),
+        decoration: const BoxDecoration(
+          color: Color(0xF2241F18),
+          border: Border(
+            top: BorderSide(color: Color(0x66C9A96E), width: 1.5),
+          ),
+        ),
         padding: EdgeInsets.only(
           left: 12,
           right: 12,
@@ -1523,32 +1533,32 @@ class _ReaderScreenState extends State<ReaderScreen> {
           children: [
             IconButton(
               icon: const Icon(Icons.skip_previous,
-                  size: 18, color: Color(0xFF8A5A2B)),
+                  size: 18, color: Colors.white),
               visualDensity: VisualDensity.compact,
               onPressed: _isPlaying ? _prevSentence : null,
               tooltip: '上一句',
             ),
             Text(
               '${(_percent * 100).toStringAsFixed(1)}%',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF8A7A60)),
+              style: const TextStyle(fontSize: 12, color: Color(0xFFD9C08A)),
             ),
             const SizedBox(width: 4),
             Expanded(
               child: Slider(
                 value: _percent,
-                activeColor: const Color(0xFF8A5A2B),
-                inactiveColor: const Color(0xFFD5C6AA),
+                activeColor: const Color(0xFFE8C87A),
+                inactiveColor: const Color(0x55FFFFFF),
                 onChanged: (v) => _seekTo(v),
               ),
             ),
             const SizedBox(width: 4),
             Text(
               '第 ${_chapter + 1}/${widget.book.chapters.length} 章',
-              style: const TextStyle(fontSize: 11, color: Color(0xFF8A7A60)),
+              style: const TextStyle(fontSize: 11, color: Color(0xFFD9C08A)),
             ),
             IconButton(
               icon: const Icon(Icons.skip_next,
-                  size: 18, color: Color(0xFF8A5A2B)),
+                  size: 18, color: Colors.white),
               visualDensity: VisualDensity.compact,
               onPressed: _isPlaying ? _nextSentence : null,
               tooltip: '下一句',
