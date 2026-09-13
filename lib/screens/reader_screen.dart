@@ -507,7 +507,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void _startTtsLoading() {
     _ttsLoadingTimer?.cancel();
     setState(() => _ttsLoading = true);
-    _ttsLoadingTimer = Timer(const Duration(seconds: 15), () {
+    _ttsLoadingTimer = Timer(const Duration(seconds: 5), () {
       if (!mounted) return;
       setState(() => _ttsLoading = false);
       if (mounted) {
