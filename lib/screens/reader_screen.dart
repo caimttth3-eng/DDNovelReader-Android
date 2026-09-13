@@ -198,6 +198,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _saveProgress();
     _sleepTimer?.cancel();
     _exitFullscreen();
+    // 恢复系统默认系统栏样式（书架页浅色背景使用深色图标）
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    ));
     _tts.dispose();
     _itemPositionsListener.itemPositions.removeListener(_onScroll);
     _volumeChannel.setMethodCallHandler(null);
@@ -481,6 +489,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _showReadingPanel = false;
       _ttsChapter = _chapter;
     });
+    _applySystemUi();
     globalAudioHandler?.notifyPlaying();
     _showVolumeTip();
     // 从用户当前阅读位置（句子级）开始朗读，而非段落首句
@@ -554,16 +563,38 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _showReadingPanel = false;
       _ttsSentence = -1;
     });
+    _applySystemUi();
     _scheduleSave();
   }
 
+  /// 根据当前 UI 状态应用系统栏样式：
+  /// - 朗读/全屏模式：immersiveSticky 彻底隐藏状态栏与导航条
+  /// - UI 模式：edgeToEdge + 状态栏/导航条与 UI 栏同色(深暖黑)+白色图标，
+  ///   系统栏与顶栏/底栏视觉融为一体，无突兀白条
+  void _applySystemUi() {
+    if (_inReadingMode || !_showControls) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+        statusBarColor: Color(0xFF241F18),
+        statusBarIconBrightness: Brightness.light,
+        systemStatusBarContrastEnforced: false,
+        systemNavigationBarColor: Color(0xFF241F18),
+        systemNavigationBarIconBrightness: Brightness.light,
+        systemNavigationBarContrastEnforced: false,
+        systemNavigationBarDividerColor: Colors.transparent,
+      ));
+    }
+  }
+
   void _enterFullscreen() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _applySystemUi();
     _volumeChannel.invokeMethod('setVolumeKeysEnabled', true);
   }
 
   void _exitFullscreen() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _applySystemUi();
     _volumeChannel.invokeMethod('setVolumeKeysEnabled', false);
   }
 
@@ -1423,6 +1454,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   _pageDown();
                 } else {
                   setState(() => _showControls = !_showControls);
+                  _applySystemUi();
                 }
               },
         onVerticalDragStart: inReading ? _onDragSeekStart : null,

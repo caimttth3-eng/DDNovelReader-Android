@@ -26,8 +26,9 @@ android {
         applicationId = "com.ddnovelreader"
         minSdk = flutter.minSdkVersion
         // audio_service 0.18.19 startForeground 未传 foregroundServiceType,
-        // targetSdk 34+ 抛 MissingForegroundServiceTypeException 致 MediaSession 不活跃.
-        targetSdk = 33
+        // Android 15 全面屏沉浸：targetSdk 35 强制 edge-to-edge，
+        // 导航条透明、内容延伸到底部，消除系统白条
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
