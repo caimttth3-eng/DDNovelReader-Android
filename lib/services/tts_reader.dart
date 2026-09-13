@@ -96,15 +96,20 @@ class TtsReader {
     _setState(TtsState.paused);
   }
 
-  /// 继续
-  Future<void> resume() async {
-    if (_state != TtsState.paused) return;
+  /// 继续播放：直接从当前句重新播放（缓存优先，否则重新合成）。
+  /// 不依赖 MediaPlayer.resume()——它对已 stop / 长时间 pause / 反复
+  /// pause-resume 的 BytesSource 播放器会静默失效（不抛异常但不出声），
+  /// 这是'暂停后无法继续播放'的根因。
+  /// 返回 false 表示彻底失败（onError 已触发，上层应退出朗读界面）。
+  Future<bool> resume() async {
+    if (_state != TtsState.paused) return true;
     _setState(TtsState.playing);
-    try {
-      await _player.resume();
-    } catch (_) {
-      await _playCurrent();
-    }
+    // 重置预取状态并重启（pause 时预取循环已退出）
+    _prefetchCache.clear();
+    _prefetchIndex = _index - 1;
+    _prefetchCompletes = 0;
+    _startPrefetch();
+    return _playCurrent();
   }
 
   /// 停止并回到起始
@@ -149,13 +154,14 @@ class TtsReader {
     await jumpTo((_index - 1).clamp(0, _sentences.length - 1));
   }
 
-  /// 播放当前句（优先用预取缓存，否则现合成）
-  Future<void> _playCurrent() async {
-    if (_disposed) return;
-    if (_state != TtsState.playing) return;
+  /// 播放当前句（优先用预取缓存，否则现合成）。
+  /// 返回 true=已进入播放；false=失败或章节结束（失败时会先触发 onError）。
+  Future<bool> _playCurrent() async {
+    if (_disposed) return false;
+    if (_state != TtsState.playing) return false;
     if (_index < 0 || _index >= _sentences.length) {
       _finishChapter();
-      return;
+      return false;
     }
     onSentenceChanged?.call(_index);
 
@@ -164,42 +170,58 @@ class TtsReader {
     if (audio == null || audio.isEmpty) {
       // 没缓存则现合成
       try {
-        audio = await edgeSynth(_sentences[_index], voice: _voice, rate: _rateStr());
+        audio = await edgeSynth(
+            _sentences[_index], voice: _voice, rate: _rateStr());
       } catch (_) {
         audio = Uint8List(0);
       }
-      if (_disposed || _state != TtsState.playing) return;
+      if (_disposed || _state != TtsState.playing) return false;
       if (audio.isEmpty) {
-        // 合成失败（可能离线）：跳过
-        _prefetchCompletes++;
-        if (_prefetchCompletes >= 3) {
-          // 连续失败，判定网络不可用
-          _setState(TtsState.stopped);
-          onError?.call();
-          return;
-        }
-        _index++;
-        if (_index >= _sentences.length) {
-          _finishChapter();
-        } else {
-          _playCurrent();
-        }
-        return;
+        // 合成失败（可能离线）：计入失败，连续 3 次判定无法播放
+        return _handlePlayFailure();
       }
     }
 
     _prefetchCompletes = 0;
     try {
+      // 先 stop 重置播放器：audioplayers 在 paused 状态直接 play 新
+      // BytesSource 会导致 onPlayerComplete 丢失（句子播完不推进），
+      // 这是'反复暂停/恢复后卡死'的根因。stop 后再 play 保证回调可靠。
+      await _player.stop();
       await _player.play(BytesSource(audio));
+      return true;
     } catch (_) {
-      // 播放失败跳过
-      _index++;
-      if (_index >= _sentences.length) {
-        _finishChapter();
-      } else {
-        _playCurrent();
+      // 播放失败：重新合成一次重试，仍失败计入失败数
+      try {
+        final retry = await edgeSynth(
+            _sentences[_index], voice: _voice, rate: _rateStr());
+        if (_disposed || _state != TtsState.playing) return false;
+        if (retry.isEmpty) throw Exception('empty synth');
+        await _player.stop();
+        await _player.play(BytesSource(retry));
+        return true;
+      } catch (_) {
+        return _handlePlayFailure();
       }
     }
+  }
+
+  /// 单句播放/合成失败处理：连续失败 >=3 判定彻底无法播放，触发 onError；
+  /// 否则跳过该句继续。
+  Future<bool> _handlePlayFailure() async {
+    _prefetchCompletes++;
+    if (_prefetchCompletes >= 3) {
+      // 连续失败，判定无法播放（离线/播放器异常）：通知上层退出
+      _setState(TtsState.stopped);
+      onError?.call();
+      return false;
+    }
+    _index++;
+    if (_index >= _sentences.length) {
+      _finishChapter();
+      return false;
+    }
+    return _playCurrent();
   }
 
   /// 后台预取：从当前句之后开始，提前合成若干句

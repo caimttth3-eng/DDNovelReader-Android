@@ -510,11 +510,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   /// 从暂停恢复播放，隐藏底部面板
+  /// - 暂停中滑动跨章：重新加载目标章，从当前句开始播放
+  /// - 同章恢复：TtsReader 直接重播当前句；彻底失败时 onError 已触发退出
   Future<void> _resumeReading() async {
     if (_tts.state != TtsState.paused) return;
-    await _tts.resume();
+    if (_ttsChapter != _chapter) {
+      // 暂停期间滑到了其他章节：TtsReader 内部仍是旧章句子，需重新加载
+      await _startTtsFrom(
+          _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+      globalAudioHandler?.notifyPlaying();
+      if (!mounted) return;
+      setState(() {
+        _isPlaying = true;
+        _showReadingPanel = false;
+      });
+      return;
+    }
+    final ok = await _tts.resume();
+    if (!ok || !mounted) return; // 失败：onError 已触发 _exitReadingMode
     globalAudioHandler?.notifyPlaying();
-    if (!mounted) return;
     setState(() {
       _isPlaying = true;
       _showReadingPanel = false;
@@ -586,8 +600,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   /// 让语音跟随到 (c, p, 段内句子s)
+  /// 播放中：跨章重新加载整章，同章 jumpTo 当前句
+  /// 暂停/未播放：只更新阅读位置，不触发播放；跨章时保持 _ttsChapter
+  /// 不变，恢复播放时由 _resumeReading 检测到不一致而重新加载
   void _ttsFollowSeek(int c, int p, int s) {
     if (c < 0 || c >= widget.book.chapters.length) return;
+    if (_tts.state == TtsState.paused || !_isPlaying) {
+      if (c == _ttsChapter) {
+        _tts.jumpTo(_chapterSentenceStart(c, p) + s); // 同章：更新待播索引
+      }
+      return;
+    }
     if (c != _ttsChapter) {
       _startTtsFrom(c, p, s);
     } else {
