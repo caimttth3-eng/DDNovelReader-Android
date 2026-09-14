@@ -12,6 +12,14 @@ import '../services/edge_tts.dart';
 import '../services/tts_audio_handler.dart';
 import '../services/tts_reader.dart';
 
+/// 打原生日志（release 下 debugPrint 不输出，走 MethodChannel 到 logcat）
+void _debugLog(String msg) {
+  try {
+    const MethodChannel('com.ddnovelreader/debug_log')
+        .invokeMethod('log', msg);
+  } catch (_) {}
+}
+
 /// 阅读页：全屏沉浸式阅读 + 三区点击翻页 + TTS 朗读高亮 + 进度条 + 章节悬浮球。
 ///
 /// 采用"扁平段落列表"渲染全书：每个段落是一个 item，
@@ -111,6 +119,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // 系统媒体音量（音量键被 TTS 上下句占用，暂停面板提供滑条调节）
   double _mediaVolume = 1.0;
 
+  // 假锁屏（保持 app 前台，蓝牙耳机键可控；长按 2 秒解锁）
+  bool _fakeLock = false;
+  Timer? _lockTimer;
+  bool _lockPressing = false;
+
   // 跳转逼近计数（防震荡死循环）
   int _approaches = 0;
   bool _suppressScrollTrack = false;
@@ -154,6 +167,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     globalAudioHandler?.onPlayRequested = _onHeadsetPlay;
     globalAudioHandler?.onPauseRequested = _onHeadsetPause;
     globalAudioHandler?.onStopRequested = _onHeadsetStop;
+    globalAudioHandler?.onCustomResumeRequested = _onCustomResume;
     _loadSettings();
     // 记录最后阅读的书籍，下次启动直接恢复
     widget.storage.saveLastBookId(widget.book.id);
@@ -179,19 +193,38 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// 耳机播放键：未进入→开始，播放中→暂停，暂停中→恢复
   void _onHeadsetPlay() {
+    print('SCREEN onHeadsetPlay ttsState=${_tts.state} reading=$_inReadingMode loading=$_ttsLoading');
+    _debugLog('SCREEN onHeadsetPlay state=${_tts.state} reading=$_inReadingMode');
     if (!mounted) return;
     if (!_inReadingMode) {
       _play();
     } else if (_tts.state == TtsState.playing) {
       _pauseReading();
-    } else if (_tts.state == TtsState.paused) {
+    } else {
+      // paused / stopped / idle 一律尝试恢复（_resumeReading 内部处理）
       _resumeReading();
     }
   }
 
-  void _onHeadsetPause() {
+  /// 自定义"继续播放"按钮（通知栏），绕开系统 play 路由问题
+  void _onCustomResume() {
+    _debugLog('SCREEN onCustomResume state=${_tts.state}');
     if (!mounted) return;
-    if (_tts.state == TtsState.playing) _pauseReading();
+    if (_tts.state == TtsState.playing) return;
+    _resumeReading();
+  }
+
+  void _onHeadsetPause() {
+    print('SCREEN onHeadsetPause ttsState=${_tts.state}');
+    _debugLog('SCREEN onHeadsetPause state=${_tts.state}');
+    if (!mounted) return;
+    if (_tts.state == TtsState.playing) {
+      _pauseReading();
+    } else {
+      // 状态已非播放但 MediaSession 可能仍显示暂停按钮：
+      // 同步状态，避免用户点"暂停"（实际想继续）时按钮图标错乱无反应
+      globalAudioHandler?.notifyPaused();
+    }
   }
 
   void _onHeadsetStop() {
@@ -222,6 +255,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     globalAudioHandler?.onPlayRequested = null;
     globalAudioHandler?.onPauseRequested = null;
     globalAudioHandler?.onStopRequested = null;
+    globalAudioHandler?.onCustomResumeRequested = null;
     globalAudioHandler?.stop();
     super.dispose();
   }
@@ -584,8 +618,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// - 暂停中滑动跨章：重新加载目标章，从当前句开始播放
   /// - 同章恢复：TtsReader 直接重播当前句；彻底失败时 onError 已触发退出
   Future<void> _resumeReading() async {
+    print('SCREEN resumeReading state=${_tts.state} loading=$_ttsLoading');
+    _debugLog('SCREEN resumeReading state=${_tts.state}');
     if (_ttsLoading) return; // 加载中忽略恢复，防误触
-    if (_tts.state != TtsState.paused) return;
+    if (_tts.state != TtsState.paused) {
+      // 状态丢失（stopped/idle，如章节播完/曾失败）：从当前阅读位置重新加载
+      if (_tts.state == TtsState.stopped || _tts.state == TtsState.idle) {
+        _startTtsLoading();
+        await _startTtsFrom(
+            _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+        _stopTtsLoading();
+        globalAudioHandler?.notifyPlaying();
+        if (!mounted) return;
+        setState(() {
+          _isPlaying = true;
+          _showReadingPanel = false;
+        });
+      }
+      return;
+    }
     _startTtsLoading();
     if (_ttsChapter != _chapter) {
       // 暂停期间滑到了其他章节：TtsReader 内部仍是旧章句子，需重新加载
@@ -602,7 +653,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
     final ok = await _tts.resume();
     _stopTtsLoading();
-    if (!ok || !mounted) return; // 失败：onError 已触发 _exitReadingMode
+    if (!ok || !mounted) {
+      // 失败且未触发退出：同步 MediaSession 为停止，避免假 playing 状态
+      globalAudioHandler?.notifyStopped();
+      return;
+    }
     globalAudioHandler?.notifyPlaying();
     setState(() {
       _isPlaying = true;
@@ -1043,9 +1098,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
       return const Scaffold(
           body: Center(child: CircularProgressIndicator()));
     }
-    return Scaffold(
-      backgroundColor: _theme.bg,
-      body: Stack(
+    return PopScope(
+      canPop: !_fakeLock,
+      child: Scaffold(
+        backgroundColor: _theme.bg,
+        body: Stack(
         children: [
           // 正文区（不分层）：整体下移「两行半空白 + 标题行」高度，
           // 章节标题 Positioned 固定在正文区顶部，正文列表在标题下方独立滚动
@@ -1078,9 +1135,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
           if (_inReadingMode) _buildVolumeTip(),
           // TTS 加载中浮层（朗读模式点击恢复播放时显示）
           if (_inReadingMode && _ttsLoading) _buildTtsLoadingOverlay(),
-          // 亮度遮罩
-          _buildBrightnessOverlay(),
-        ],
+            // 亮度遮罩
+            _buildBrightnessOverlay(),
+            // 假锁屏（最顶层，覆盖一切；长按 2 秒解锁）
+            if (_fakeLock) _buildFakeLock(),
+          ],
+        ),
       ),
     );
   }
@@ -1438,6 +1498,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     onTap: _openVoiceSelector,
                   ),
                   _panelButton(
+                    icon: Icons.lock_outline,
+                    label: '锁屏',
+                    onTap: _enterFakeLock,
+                  ),
+                  _panelButton(
                     icon: Icons.power_settings_new,
                     label: '退出',
                     onTap: _exitReadingMode,
@@ -1499,6 +1564,81 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _tts.setSpeechRate(rate);
     widget.storage.saveSettings(_settings.toJson());
     setState(() {});
+  }
+
+  /// 进入假锁屏：全黑 + 长按解锁；保持 app 前台使蓝牙耳机键可控，
+  /// 屏幕常亮 + 亮度压到最低，防止系统真锁屏/灭屏抢走媒体键。
+  Future<void> _enterFakeLock() async {
+    if (_fakeLock) return;
+    setState(() => _fakeLock = true);
+    _volumeChannel.invokeMethod('setKeepScreenOn', true);
+    _volumeChannel.invokeMethod('setScreenBrightness', 0.03);
+  }
+
+  /// 退出假锁屏：恢复亮度与屏幕常亮
+  Future<void> _exitFakeLock() async {
+    _lockTimer?.cancel();
+    _lockTimer = null;
+    if (mounted) {
+      setState(() {
+        _fakeLock = false;
+        _lockPressing = false;
+      });
+    }
+    _volumeChannel.invokeMethod('setKeepScreenOn', false);
+    _volumeChannel.invokeMethod('resetScreenBrightness');
+  }
+
+  /// 假锁屏界面：全黑，仅中央一个锁图标 + 长按 2 秒解锁（防误触）
+  Widget _buildFakeLock() {
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) {
+          setState(() => _lockPressing = true);
+          _lockTimer?.cancel();
+          _lockTimer = Timer(const Duration(seconds: 2), _exitFakeLock);
+        },
+        onTapUp: (_) {
+          _lockTimer?.cancel();
+          _lockTimer = null;
+          setState(() => _lockPressing = false);
+        },
+        onTapCancel: () {
+          _lockTimer?.cancel();
+          _lockTimer = null;
+          setState(() => _lockPressing = false);
+        },
+        child: Container(
+          color: Colors.black,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.lock,
+                  size: 44,
+                  color: _lockPressing
+                      ? const Color(0xFF555555)
+                      : const Color(0xFF202020),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  _lockPressing ? '继续按住解锁' : '长按 2 秒解锁',
+                  style: TextStyle(
+                    color: _lockPressing
+                        ? const Color(0xFF666666)
+                        : const Color(0xFF282828),
+                    fontSize: 13,
+                    letterSpacing: 2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// 定时播放：到时间自动暂停

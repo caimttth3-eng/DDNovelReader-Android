@@ -12,7 +12,11 @@ Future<void> main() async {
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.ddnovelreader.tts',
         androidNotificationChannelName: '多多朗读',
-        androidNotificationOngoing: true,
+        // 关键：暂停时保持前台服务。
+        // 默认 true 会在暂停时停止前台服务，Android 12+ 后台重启前台服务
+        // 会被系统拦截(ForegroundServiceStartNotAllowedException)，
+        // 导致通知栏"播放/继续"按钮点击无反应（能暂停不能继续的根因）。
+        androidStopForegroundOnPause: false,
       ),
     );
   } catch (e) {

@@ -102,7 +102,19 @@ class TtsReader {
   /// 这是'暂停后无法继续播放'的根因。
   /// 返回 false 表示彻底失败（onError 已触发，上层应退出朗读界面）。
   Future<bool> resume() async {
-    if (_state != TtsState.paused) return true;
+    // 已在播放：无需操作
+    if (_state == TtsState.playing) return true;
+    // 状态不在 paused（如被 stop / 章节结束改走）：
+    // 不能静默假成功，从当前句重新开始，保证媒体控制器"继续"必定恢复
+    if (_state != TtsState.paused) {
+      if (_sentences.isEmpty || _index < 0) return false;
+      _setState(TtsState.playing);
+      _prefetchCache.clear();
+      _prefetchIndex = _index - 1;
+      _prefetchCompletes = 0;
+      _startPrefetch();
+      return _playCurrent();
+    }
     _setState(TtsState.playing);
     // 重置预取状态并重启（pause 时预取循环已退出）
     _prefetchCache.clear();

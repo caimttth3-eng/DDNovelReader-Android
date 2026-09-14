@@ -12,6 +12,12 @@ class MainActivity : AudioServiceActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        val logChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.ddnovelreader/debug_log")
+        logChannel.setMethodCallHandler { call, _ ->
+            if (call.method == "log") {
+                android.util.Log.i("DDReader", call.arguments as? String ?: "")
+            }
+        }
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel?.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -30,6 +36,34 @@ class MainActivity : AudioServiceActivity() {
                     val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
                     val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
                     am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (v * max).toInt(), 0)
+                    result.success(null)
+                }
+                "setKeepScreenOn" -> {
+                    val on = call.arguments as Boolean
+                    runOnUiThread {
+                        if (on) {
+                            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+                    }
+                    result.success(null)
+                }
+                "setScreenBrightness" -> {
+                    val v = (call.arguments as Number).toFloat().coerceIn(0.01f, 1f)
+                    runOnUiThread {
+                        val lp = window.attributes
+                        lp.screenBrightness = v
+                        window.attributes = lp
+                    }
+                    result.success(null)
+                }
+                "resetScreenBrightness" -> {
+                    runOnUiThread {
+                        val lp = window.attributes
+                        lp.screenBrightness = -1f
+                        window.attributes = lp
+                    }
                     result.success(null)
                 }
                 else -> result.notImplemented()

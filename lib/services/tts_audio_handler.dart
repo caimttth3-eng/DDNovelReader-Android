@@ -1,5 +1,14 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
+/// 打原生日志（release 下 debugPrint 不输出，走 MethodChannel 到 logcat）
+void _log(String msg) {
+  try {
+    const MethodChannel('com.ddnovelreader/debug_log')
+        .invokeMethod('log', msg);
+  } catch (_) {}
+}
 
 /// 把 audio_service 的 MediaSession 回调（耳机播放键、系统媒体按钮）
 /// 转发给阅读页的播放/暂停/停止逻辑。
@@ -20,6 +29,9 @@ class TtsAudioHandler extends BaseAudioHandler {
   /// 阅读页注入：请求停止并退出全屏
   VoidCallback? onStopRequested;
 
+  /// 阅读页注入：自定义"继续播放"按钮（绕开系统 play 路由问题）
+  VoidCallback? onCustomResumeRequested;
+
   TtsAudioHandler() {
     mediaItem.add(const MediaItem(
       id: 'duoduo_langdu',
@@ -28,7 +40,13 @@ class TtsAudioHandler extends BaseAudioHandler {
     ));
     playbackState.add(PlaybackState(
       playing: false,
-      controls: const [MediaControl.play, MediaControl.stop],
+      controls: [
+        MediaControl.custom(
+            androidIcon: 'mipmap/ic_launcher',
+            label: '继续播放',
+            name: '继续播放'),
+        MediaControl.stop,
+      ],
       systemActions: const {MediaAction.play, MediaAction.stop},
       processingState: AudioProcessingState.ready,
     ));
@@ -38,20 +56,34 @@ class TtsAudioHandler extends BaseAudioHandler {
 
   @override
   Future<void> play() async {
+    print('AUDIO_H play called');
+    _log('HANDLER play called');
     onPlayRequested?.call();
     _setPlaying(true);
   }
 
   @override
   Future<void> pause() async {
+    print('AUDIO_H pause called');
+    _log('HANDLER pause called');
     onPauseRequested?.call();
     _setPlaying(false);
   }
 
   @override
   Future<void> stop() async {
+    _log('HANDLER stop called');
     onStopRequested?.call();
     _setStopped();
+  }
+
+  @override
+  Future<dynamic> customAction(String name,
+      [Map<String, dynamic>? extras]) async {
+    _log('HANDLER customAction: $name');
+    if (name == '继续播放') {
+      onCustomResumeRequested?.call();
+    }
   }
 
   // ---- 屏幕操作同步状态（不触发回调，避免递归） ----
@@ -67,7 +99,13 @@ class TtsAudioHandler extends BaseAudioHandler {
       playing: playing,
       controls: playing
           ? const [MediaControl.pause, MediaControl.stop]
-          : const [MediaControl.play, MediaControl.stop],
+          : [
+              MediaControl.custom(
+                  androidIcon: 'mipmap/ic_launcher',
+                  label: '继续播放',
+                  name: '继续播放'),
+              MediaControl.stop,
+            ],
       systemActions: playing
           ? const {MediaAction.pause, MediaAction.stop}
           : const {MediaAction.play, MediaAction.stop},
