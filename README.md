@@ -6,6 +6,13 @@
 - 英文名：DDNovelReader
 - 包名：com.ddnovelreader
 
+## 多平台
+
+- **Android**：本仓库 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载 APK
+- **Windows / macOS / Linux**：前往 [桌面版发布页](https://github.com/caimttth3-eng/DDNovelReader) 下载（Windows 绿色免安装 exe / macOS DMG / Linux 单文件）
+
+> 桌面版功能更全：本地离线语音 + Edge 神经语音、整本语音缓存、书签划线笔记、全文搜索、多主题、定时播放。
+
 ## 功能
 
 ### 书架
@@ -88,6 +95,12 @@ flutter build apk --release
 - minSdk 21
 
 ## 版本
+
+### v1.1.2（2026-09-14）
+假锁屏 + 顶栏悬浮版。
+- 新增假锁屏：暂停面板「锁屏」按钮进入全黑假锁屏（保持前台），锁屏自动继续朗读，长按 2 秒解锁防误触
+- 顶栏改为悬浮窗口，不占位不挤正文，UI/朗读切换正文区不跳变
+- 延续 TTS 0 bug：暂停后无法继续播放等场景已修复
 
 ### v1.0.0（2026-09-02）
 首个正式可用版本。
