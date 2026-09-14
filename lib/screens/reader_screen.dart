@@ -1225,9 +1225,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return '第${c + 1}章 $t';
   }
 
-  /// 章节标题行距屏幕顶的偏移：固定为顶栏高度（UI 栏悬浮覆盖，不挤正文），
-  /// 正文区位置在所有模式下保持一致，切换 UI/朗读模式正文不跳变
-  double _chapterBarTop() => MediaQuery.of(context).padding.top + 56;
+  /// 章节标题行距屏幕顶的偏移：恒为 0。
+  /// 正文区（空两行半→章节标题→正文）位置固定紧凑，不随顶栏显隐变化；
+  /// 顶栏是 Positioned 悬浮覆盖层，悬浮在正文区上方，不占位、不影响正文区。
+  double _chapterBarTop() => 0;
 
   /// 正文区固定顶部高度：两行半空白 + 标题栏一行
   double _chapterTopArea() => _fontSize * _lineHeight * 3.5;
