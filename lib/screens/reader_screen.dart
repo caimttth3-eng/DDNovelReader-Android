@@ -1225,13 +1225,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return '第${c + 1}章 $t';
   }
 
-  /// 章节标题行距屏幕顶的偏移：UI模式在顶栏下方，全屏/朗读在屏幕顶
-  double _chapterBarTop() {
-    if (_showControls) {
-      return MediaQuery.of(context).padding.top + 56;
-    }
-    return 0;
-  }
+  /// 章节标题行距屏幕顶的偏移：固定为顶栏高度（UI 栏悬浮覆盖，不挤正文），
+  /// 正文区位置在所有模式下保持一致，切换 UI/朗读模式正文不跳变
+  double _chapterBarTop() => MediaQuery.of(context).padding.top + 56;
 
   /// 正文区固定顶部高度：两行半空白 + 标题栏一行
   double _chapterTopArea() => _fontSize * _lineHeight * 3.5;
@@ -1568,11 +1564,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// 进入假锁屏：全黑 + 长按解锁；保持 app 前台使蓝牙耳机键可控，
   /// 屏幕常亮 + 亮度压到最低，防止系统真锁屏/灭屏抢走媒体键。
+  /// 锁屏即听书：进入时若未在播放，自动恢复朗读。
   Future<void> _enterFakeLock() async {
     if (_fakeLock) return;
     setState(() => _fakeLock = true);
     _volumeChannel.invokeMethod('setKeepScreenOn', true);
     _volumeChannel.invokeMethod('setScreenBrightness', 0.03);
+    if (_tts.state != TtsState.playing) {
+      _resumeReading();
+    }
   }
 
   /// 退出假锁屏：恢复亮度与屏幕常亮
@@ -1619,16 +1619,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   Icons.lock,
                   size: 44,
                   color: _lockPressing
-                      ? const Color(0xFF555555)
-                      : const Color(0xFF202020),
+                      ? const Color(0xFF8A8A8A)
+                      : const Color(0xFF4E4E4E),
                 ),
                 const SizedBox(height: 14),
                 Text(
                   _lockPressing ? '继续按住解锁' : '长按 2 秒解锁',
                   style: TextStyle(
                     color: _lockPressing
-                        ? const Color(0xFF666666)
-                        : const Color(0xFF282828),
+                        ? const Color(0xFF9A9A9A)
+                        : const Color(0xFF5C5C5C),
                     fontSize: 13,
                     letterSpacing: 2,
                   ),
