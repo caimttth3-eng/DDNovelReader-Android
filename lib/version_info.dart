@@ -6,12 +6,14 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.2.0';
-  static const String build = '5';
+  static const String version = '1.2.1';
+  static const String build = '6';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.2.1：新增用户自选字体，支持导入 .ttf/.otf 字体文件，'
+        '立即生效、重启自动加载；不内置字体，包体无增加。',
     'v1.2.0：界面支持 5 种语言（简体/繁体/英语/日语/韩语），'
         '跟随系统语言自动切换；Edge TTS 新增多语言音色'
         '（简/繁/英/日/韩共 20 个），默认语言音色置顶。',
