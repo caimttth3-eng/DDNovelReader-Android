@@ -9,6 +9,7 @@ import '../models/progress.dart';
 import '../services/app_storage.dart';
 import '../services/book_parser.dart';
 import '../widgets/book_card.dart';
+import 'about_screen.dart';
 import 'reader_screen.dart';
 
 /// 书架首页：顶部「多多朗读」+ ⋮ 设置(添加书籍)，4 列木纹书架，无限下滑。
@@ -168,6 +169,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
             icon: const Icon(Icons.more_vert, color: Color(0xFF5D3A1A)),
             onSelected: (v) {
               if (v == 'add') _addBook();
+              if (v == 'about') AboutScreen.show(context);
             },
             itemBuilder: (ctx) => const [
               PopupMenuItem(
@@ -177,6 +179,16 @@ class _ShelfScreenState extends State<ShelfScreen> {
                     Icon(Icons.library_add_outlined),
                     SizedBox(width: 8),
                     Text('添加书籍'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'about',
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline),
+                    SizedBox(width: 8),
+                    Text('关于'),
                   ],
                 ),
               ),
