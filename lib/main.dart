@@ -4,10 +4,13 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'i18n.dart';
 import 'screens/shelf_screen.dart';
+import 'services/font_manager.dart';
 import 'services/tts_audio_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 注册用户自选字体（FontLoader 仅进程内有效，每次启动需重新注册）
+  await FontManager.registerAll();
   AppI18n.current = AppLang.detect(
     WidgetsBinding.instance.platformDispatcher.locales,
   );
