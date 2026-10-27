@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -7,8 +8,10 @@ import 'package:flutter/services.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../i18n.dart';
+import '../models/annotation.dart';
 import '../models/book.dart';
 import '../models/progress.dart';
+import '../services/annotation_store.dart';
 import '../services/app_storage.dart';
 import '../services/edge_tts.dart';
 import '../services/font_manager.dart';
@@ -154,6 +157,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
   int _searchIndex = 0;
   String _searchQuery = '';
 
+  // 书签与划线（标注）
+  List<Bookmark> _bookmarks = [];
+  List<Highlight> _highlights = [];
+  Map<String, List<Highlight>> _hlIndex = {}; // '$c-$p' -> 该段划线
+  static const List<int> _hlColors = [0x3385B5FF, 0x33FFC107, 0x338FE388]; // 蓝/黄/绿
+  static String _hlKey(int c, int p) => '$c-$p';
+
   Timer? _saveDebounce;
 
   double get _fontSize => _settings.fontSize;
@@ -184,6 +194,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     widget.storage.saveLastBookId(widget.book.id);
     // 读取系统媒体音量用于暂停面板滑条
     _loadMediaVolume();
+    // 加载书签与划线
+    _loadAnnotations();
   }
 
   static const _volumeChannel =
@@ -341,6 +353,425 @@ class _ReaderScreenState extends State<ReaderScreen> {
       percent: widget.book.progressRatio(_chapter, _para),
     );
     await widget.onProgressChanged?.call(p);
+  }
+
+  // ---------- 书签与划线 ----------
+
+  Future<void> _loadAnnotations() async {
+    final store = AnnotationStore();
+    final bms = await store.loadBookmarks(widget.book.id);
+    final hls = await store.loadHighlights(widget.book.id);
+    if (!mounted) return;
+    setState(() {
+      _bookmarks = bms;
+      _highlights = hls;
+      _rebuildHlIndex();
+    });
+  }
+
+  void _rebuildHlIndex() {
+    _hlIndex = {};
+    for (final h in _highlights) {
+      _hlIndex.putIfAbsent(_hlKey(h.chapterIndex, h.paragraphIndex), () => [])
+          .add(h);
+    }
+  }
+
+  /// 写回存储（书签+划线），保持内存与磁盘同步
+  Future<void> _persistAnnotations() async {
+    final store = AnnotationStore();
+    await store.saveBookmarks(widget.book.id, _bookmarks);
+    await store.saveHighlights(widget.book.id, _highlights);
+  }
+
+  /// 轻提示（复制/划线/书签成功反馈）
+  void _showToast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(msg),
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ));
+  }
+
+  // 判断 (c,p,s) 是否已有书签
+  bool _hasBookmarkAt(int c, int p, int s) =>
+      _bookmarks.any((b) =>
+          b.chapterIndex == c && b.paragraphIndex == p && b.sentenceIndex == s);
+
+  Future<void> _addBookmarkAt(_Item it) async {
+    if (_hasBookmarkAt(it.chapterIndex, it.paragraphIndex, it.sentenceIndex)) {
+      return;
+    }
+    final para = widget.book.chapters[it.chapterIndex].paragraphs[it.paragraphIndex];
+    String snippet = '';
+    if (it.sentenceIndex < para.sentences.length) {
+      snippet = para.sentences[it.sentenceIndex].display.trim();
+    } else {
+      snippet = para.display.trim();
+    }
+    if (snippet.length > 40) snippet = snippet.substring(0, 40);
+    setState(() {
+      _bookmarks.add(Bookmark(
+        id: 'b${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}',
+        bookId: widget.book.id,
+        chapterIndex: it.chapterIndex,
+        paragraphIndex: it.paragraphIndex,
+        sentenceIndex: it.sentenceIndex,
+        chapterTitle: widget.book.chapters[it.chapterIndex].title,
+        snippet: snippet,
+        createdAt: DateTime.now(),
+      ));
+    });
+    await _persistAnnotations();
+    if (!mounted) return;
+    _showToast(T('bookmarkAdded'));
+  }
+
+  // 判断该句是否已被划线（返回命中的高亮）
+  List<Highlight> _highlightOf(_Item it, Paragraph para) {
+    if (it.sentenceIndex >= para.sentences.length) return const [];
+    final seg = _hlIndex[_hlKey(it.chapterIndex, it.paragraphIndex)];
+    if (seg == null) return const [];
+    final s = para.sentences[it.sentenceIndex];
+    return seg.where((h) => h.hits(it.chapterIndex, it.paragraphIndex,
+            s.displayStart, s.displayEnd))
+        .toList();
+  }
+
+  Future<void> _addHighlightAt(_Item it, Paragraph para, int color) async {
+    if (it.sentenceIndex >= para.sentences.length) return;
+    final s = para.sentences[it.sentenceIndex];
+    if (s.displayStart >= s.displayEnd) return;
+    // 去重：该句已有任何颜色划线则跳过
+    final existing = _hlIndex[_hlKey(it.chapterIndex, it.paragraphIndex)];
+    if (existing != null &&
+        existing.any((h) => h.hits(
+            it.chapterIndex, it.paragraphIndex, s.displayStart, s.displayEnd))) {
+      return;
+    }
+    setState(() {
+      _highlights.add(Highlight(
+        id: 'h${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}',
+        bookId: widget.book.id,
+        chapterIndex: it.chapterIndex,
+        paragraphIndex: it.paragraphIndex,
+        charStart: s.displayStart,
+        charEnd: s.displayEnd,
+        color: color,
+        note: '',
+        createdAt: DateTime.now(),
+      ));
+      _rebuildHlIndex();
+    });
+    await _persistAnnotations();
+    _showToast(T('highlightAdded'));
+  }
+
+  Future<void> _removeHighlightOf(_Item it, Paragraph para) async {
+    if (it.sentenceIndex >= para.sentences.length) return;
+    final s = para.sentences[it.sentenceIndex];
+    setState(() {
+      _highlights.removeWhere((h) =>
+          h.chapterIndex == it.chapterIndex &&
+          h.paragraphIndex == it.paragraphIndex &&
+          h.charEnd > s.displayStart &&
+          h.charStart < s.displayEnd);
+      _rebuildHlIndex();
+    });
+    await _persistAnnotations();
+  }
+
+  Future<void> _setHighlightNote(Highlight h) async {
+    final ctrl = TextEditingController(text: h.note);
+    final note = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(T('note')),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 4,
+          decoration: InputDecoration(hintText: T('noteHint')),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, null),
+              child: Text(T('cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: Text(T('ok'))),
+        ],
+      ),
+    );
+    if (note == null) return;
+    setState(() {
+      final i = _highlights.indexWhere((x) => x.id == h.id);
+      if (i >= 0) _highlights[i] = _highlights[i].copyWith(note: note);
+    });
+    await _persistAnnotations();
+  }
+
+  /// 长按句子：划线/换色/笔记/取消划线/书签/复制
+  Future<void> _onSentenceLongPress(_Item it, Paragraph para) async {
+    final hits = _highlightOf(it, para);
+    final hasHl = hits.isNotEmpty;
+    if (it.isTitle) return;
+    if (!hasHl) {
+      // 选择划线颜色 → 或直接书签/复制
+      final action = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(T('highlight'),
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.bold)),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (final color in _hlColors)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: GestureDetector(
+                        onTap: () => Navigator.pop(ctx, 'color:$color'),
+                        child: Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: Color(color),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0x44000000)),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              ListTile(
+                leading: const Icon(Icons.bookmark_add_outlined),
+                title: Text(T('addBookmark')),
+                onTap: () => Navigator.pop(ctx, 'bookmark'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.copy),
+                title: Text(T('copy')),
+                onTap: () {
+                  Navigator.pop(ctx, 'copy');
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      );
+      if (action == null) return;
+      if (action == 'bookmark') {
+        await _addBookmarkAt(it);
+      } else if (action == 'copy') {
+        await _copySentence(it, para);
+      } else if (action.startsWith('color:')) {
+        await _addHighlightAt(it, para, int.parse(action.split(':')[1]));
+      }
+      return;
+    }
+    // 已划线：换色/笔记/取消划线/复制
+    final hl = hits.first;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(T('highlight'),
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.bold)),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                for (final color in _hlColors)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: GestureDetector(
+                      onTap: () => Navigator.pop(ctx, 'color:$color'),
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: Color(color),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0x44000000)),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_note),
+              title: Text(T('note')),
+              subtitle: hl.note.isEmpty ? null : Text(hl.note),
+              onTap: () {
+                Navigator.pop(ctx, 'note');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.highlight_off),
+              title: Text(T('removeHighlight')),
+              onTap: () => Navigator.pop(ctx, 'remove'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy),
+              title: Text(T('copy')),
+              onTap: () => Navigator.pop(ctx, 'copy'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (action == null) return;
+    if (action == 'note') {
+      await _setHighlightNote(hl);
+    } else if (action == 'remove') {
+      await _removeHighlightOf(it, para);
+    } else if (action == 'copy') {
+      await _copySentence(it, para);
+    } else if (action.startsWith('color:')) {
+      final color = int.parse(action.split(':')[1]);
+      setState(() {
+        final i = _highlights.indexWhere((x) => x.id == hl.id);
+        if (i >= 0) _highlights[i] = _highlights[i].copyWith(color: color);
+      });
+      await _persistAnnotations();
+    }
+  }
+
+  String _sentenceText(_Item it, Paragraph para) {
+    if (it.sentenceIndex < para.sentences.length) {
+      return para.sentences[it.sentenceIndex].display;
+    }
+    return para.display;
+  }
+
+  /// 复制句子并提示（提示文案截断）
+  Future<void> _copySentence(_Item it, Paragraph para) async {
+    var text = _sentenceText(it, para).trim();
+    await Clipboard.setData(ClipboardData(text: text));
+    var preview = text.replaceAll('\n', '');
+    if (preview.length > 15) preview = preview.substring(0, 15);
+    _showToast(T('copied', {'text': preview}));
+  }
+
+  /// 渲染句子文本：按划线区间切 TextSpan；朗读高亮走 style 层
+  Widget _buildSentenceText(
+      _Item it, Paragraph para, String sentenceText, bool isCurrent) {
+    final base = TextStyle(
+      fontSize: _fontSize,
+      height: _lineHeight,
+      color: _theme.text,
+      fontFamily: _fontFamily.isEmpty ? null : _fontFamily,
+      backgroundColor: isCurrent ? const Color(0x44FFC107) : null,
+      fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
+    );
+    final seg = _hlIndex[_hlKey(it.chapterIndex, it.paragraphIndex)];
+    if (seg == null || seg.isEmpty) return Text(sentenceText, style: base);
+    if (it.sentenceIndex >= para.sentences.length) {
+      return Text(sentenceText, style: base);
+    }
+    final s = para.sentences[it.sentenceIndex];
+    final sStart = s.displayStart;
+    final sEnd = s.displayEnd;
+    final spans = <TextSpan>[];
+    var cursor = 0;
+    final len = sentenceText.length;
+    for (final h in seg) {
+      final cs = max(h.charStart, sStart);
+      final ce = min(h.charEnd, sEnd);
+      if (ce <= cs) continue;
+      final relS = cs - sStart;
+      final relE = ce - sStart;
+      if (relS > cursor) {
+        spans.add(TextSpan(
+            text: sentenceText.substring(cursor, min(relS, len))));
+      }
+      if (relE <= len && relS < len) {
+        spans.add(TextSpan(
+          text: sentenceText.substring(relS, relE),
+          style: TextStyle(backgroundColor: Color(h.color)),
+        ));
+      }
+      cursor = max(relE, cursor);
+    }
+    if (cursor < len) {
+      spans.add(TextSpan(text: sentenceText.substring(cursor)));
+    }
+    if (spans.isEmpty) return Text(sentenceText, style: base);
+    return Text.rich(TextSpan(children: spans), style: base);
+  }
+
+  static String _fmtTime(DateTime t) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  }
+
+  Future<void> _openBookmarks() async {
+    final selected = await showModalBottomSheet<_Item>(
+      context: context,
+      builder: (ctx) => _BookmarkSheet(
+        initial: List.of(_bookmarks),
+        onDelete: (b) {
+          setState(() {
+            _bookmarks.removeWhere((x) => x.id == b.id);
+          });
+          _persistAnnotations();
+          _showToast(T('bookmarkDeleted'));
+        },
+      ),
+    );
+    if (selected == null) return;
+    setState(() {
+      _chapter = selected.chapterIndex;
+      _para = selected.paragraphIndex;
+    });
+    _jumpToItem(_itemIndexOf(selected.chapterIndex, selected.paragraphIndex,
+        selected.sentenceIndex));
+    _scheduleSave();
+  }
+
+  Future<void> _openHighlights() async {
+    final selected = await showModalBottomSheet<_Item>(
+      context: context,
+      builder: (ctx) => _HighlightSheet(
+        book: widget.book,
+        initial: List.of(_highlights),
+        onDelete: (h) {
+          setState(() {
+            _highlights.removeWhere((x) => x.id == h.id);
+            _rebuildHlIndex();
+          });
+          _persistAnnotations();
+          _showToast(T('highlightDeleted'));
+        },
+      ),
+    );
+    if (selected == null) return;
+    setState(() {
+      _chapter = selected.chapterIndex;
+      _para = selected.paragraphIndex;
+    });
+    _jumpToItem(_itemIndexOf(selected.chapterIndex, selected.paragraphIndex,
+        selected.sentenceIndex));
+    _scheduleSave();
   }
 
   void _scheduleSave() {
@@ -1352,17 +1783,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
               top: it.isParaStart ? 10 : 2,
               bottom: 2,
             ),
-            child: Text(
-              sentenceText,
-              style: TextStyle(
-                fontSize: _fontSize,
-                height: _lineHeight,
-                color: _theme.text,
-                fontFamily: _fontFamily.isEmpty ? null : _fontFamily,
-                backgroundColor:
-                    isCurrent ? const Color(0x44FFC107) : null,
-                fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
-              ),
+            child: GestureDetector(
+              onLongPress: () => _onSentenceLongPress(it, para),
+              child: _buildSentenceText(it, para, sentenceText, isCurrent),
             ),
           );
         }
@@ -1948,6 +2371,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   case 'search':
                     _openSearch();
                     break;
+                  case 'bookmarks':
+                    _openBookmarks();
+                    break;
+                  case 'highlights':
+                    _openHighlights();
+                    break;
                 }
               },
               itemBuilder: (ctx) => [
@@ -1957,6 +2386,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 PopupMenuItem(value: 'rate', child: Text(T('speed'))),
                 PopupMenuItem(value: 'voice', child: Text(T('voice'))),
                 PopupMenuItem(value: 'search', child: Text(T('searchTitle'))),
+                PopupMenuItem(value: 'bookmarks', child: Text(T('bookmark'))),
+                PopupMenuItem(value: 'highlights', child: Text(T('highlight'))),
               ],
             ),
           ],
@@ -2532,6 +2963,335 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         Text(label, style: const TextStyle(fontSize: 14)),
         const SizedBox(width: 8),
         Expanded(child: slider),
+      ],
+    );
+  }
+}
+
+/// 书签列表底部弹层（删除带动画、即时刷新）
+class _BookmarkSheet extends StatefulWidget {
+  final List<Bookmark> initial;
+  final void Function(Bookmark) onDelete;
+  const _BookmarkSheet({required this.initial, required this.onDelete});
+
+  @override
+  State<_BookmarkSheet> createState() => _BookmarkSheetState();
+}
+
+class _BookmarkSheetState extends State<_BookmarkSheet> {
+  late final List<Bookmark> _items = List.of(widget.initial);
+  final GlobalKey<AnimatedListState> _listKey = GlobalKey<AnimatedListState>();
+  String? _toastMsg;
+  Timer? _toastTimer;
+
+  void _showToast(String msg) {
+    _toastTimer?.cancel();
+    setState(() => _toastMsg = msg);
+    _toastTimer = Timer(const Duration(milliseconds: 1300), () {
+      if (mounted) setState(() => _toastMsg = null);
+    });
+  }
+
+  @override
+  void dispose() {
+    _toastTimer?.cancel();
+    super.dispose();
+  }
+
+  void _delete(Bookmark b) {
+    final idx = _items.indexWhere((x) => x.id == b.id);
+    if (idx < 0) return;
+    widget.onDelete(b); // 持久化 + 父状态同步
+    _items.removeAt(idx);
+    _listKey.currentState?.removeItem(
+      idx,
+      (ctx, anim) => SizeTransition(
+        sizeFactor: anim,
+        child: _buildTile(b),
+      ),
+      duration: const Duration(milliseconds: 600),
+    );
+    Future.delayed(const Duration(milliseconds: 620), () {
+      if (mounted && _items.isEmpty) setState(() {});
+    });
+    _showToast(T('bookmarkDeleted'));
+  }
+
+  Widget _buildTile(Bookmark b) {
+    return ListTile(
+      leading:
+          const Icon(Icons.bookmark, color: Color(0xFF8A5A2B), size: 20),
+      title:
+          Text(b.chapterTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(b.snippet,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12)),
+          Text(_ReaderScreenState._fmtTime(b.createdAt),
+              style: const TextStyle(fontSize: 11)),
+        ],
+      ),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete_outline, size: 20),
+        onPressed: () => _delete(b),
+      ),
+      onTap: () => Navigator.pop(
+          context,
+          _Item.sentence(
+              b.chapterIndex, b.paragraphIndex, b.sentenceIndex)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.6,
+          maxChildSize: 0.9,
+          builder: (ctx, scrollController) => Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(T('bookmark'),
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: Stack(
+                  children: [
+                    AnimatedList(
+                      key: _listKey,
+                      controller: scrollController,
+                      initialItemCount: _items.length,
+                      itemBuilder: (ctx, i, anim) => SizeTransition(
+                        sizeFactor: anim,
+                        child: _buildTile(_items[i]),
+                      ),
+                    ),
+                    if (_items.isEmpty)
+                      Center(
+                        child: Text(T('noBookmark'),
+                            style: const TextStyle(color: Colors.grey)),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 20,
+          child: IgnorePointer(
+            child: Center(
+              child: AnimatedOpacity(
+                opacity: _toastMsg == null ? 0 : 1,
+                duration: const Duration(milliseconds: 220),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: const Color(0xE6323232),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(_toastMsg ?? '',
+                      style: const TextStyle(color: Colors.white)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 划线列表底部弹层（删除带动画、即时刷新）
+class _HighlightSheet extends StatefulWidget {
+  final Book book;
+  final List<Highlight> initial;
+  final void Function(Highlight) onDelete;
+  const _HighlightSheet(
+      {required this.book,
+      required this.initial,
+      required this.onDelete});
+
+  @override
+  State<_HighlightSheet> createState() => _HighlightSheetState();
+}
+
+class _HighlightSheetState extends State<_HighlightSheet> {
+  late final List<Highlight> _items = List.of(widget.initial);
+  final GlobalKey<AnimatedListState> _listKey = GlobalKey<AnimatedListState>();
+  String? _toastMsg;
+  Timer? _toastTimer;
+
+  void _showToast(String msg) {
+    _toastTimer?.cancel();
+    setState(() => _toastMsg = msg);
+    _toastTimer = Timer(const Duration(milliseconds: 1300), () {
+      if (mounted) setState(() => _toastMsg = null);
+    });
+  }
+
+  @override
+  void dispose() {
+    _toastTimer?.cancel();
+    super.dispose();
+  }
+
+  void _delete(Highlight h) {
+    final idx = _items.indexWhere((x) => x.id == h.id);
+    if (idx < 0) return;
+    widget.onDelete(h); // 持久化 + 父状态同步
+    _items.removeAt(idx);
+    _listKey.currentState?.removeItem(
+      idx,
+      (ctx, anim) => SizeTransition(
+        sizeFactor: anim,
+        child: _buildTile(h),
+      ),
+      duration: const Duration(milliseconds: 600),
+    );
+    Future.delayed(const Duration(milliseconds: 620), () {
+      if (mounted && _items.isEmpty) setState(() {});
+    });
+    _showToast(T('highlightDeleted'));
+  }
+
+  Widget _buildTile(Highlight h) {
+    final book = widget.book;
+    final ch = h.chapterIndex.clamp(0, book.chapters.length - 1);
+    final chapterTitle = book.chapters.isEmpty ? '' : book.chapters[ch].title;
+    String snippet = '';
+    if (book.chapters.isNotEmpty &&
+        h.paragraphIndex < book.chapters[ch].paragraphs.length) {
+      final para = book.chapters[ch].paragraphs[h.paragraphIndex];
+      if (h.charStart < para.display.length) {
+        snippet = para.display
+            .substring(h.charStart, min(h.charEnd, para.display.length));
+        if (snippet.length > 40) {
+          snippet = snippet.substring(0, 40);
+        }
+      }
+    }
+    return ListTile(
+      leading: Container(
+        width: 16,
+        height: 16,
+        decoration: BoxDecoration(
+          color: Color(h.color),
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0x44000000)),
+        ),
+      ),
+      title: Text(chapterTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(snippet,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12)),
+          if (h.note.isNotEmpty)
+            Text('${T('note')}: ${h.note}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11)),
+          Text(_ReaderScreenState._fmtTime(h.createdAt),
+              style: const TextStyle(fontSize: 11)),
+        ],
+      ),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete_outline, size: 20),
+        onPressed: () => _delete(h),
+      ),
+      onTap: () {
+        final chIdx = h.chapterIndex;
+        final para = book.chapters[chIdx].paragraphs[h.paragraphIndex];
+        var sIdx = 0;
+        for (var s = 0; s < para.sentences.length; s++) {
+          if (para.sentences[s].displayStart <= h.charStart) {
+            sIdx = s;
+          } else {
+            break;
+          }
+        }
+        Navigator.pop(context, _Item.sentence(chIdx, h.paragraphIndex, sIdx));
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.6,
+          maxChildSize: 0.9,
+          builder: (ctx, scrollController) => Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(T('highlight'),
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: Stack(
+                  children: [
+                    AnimatedList(
+                      key: _listKey,
+                      controller: scrollController,
+                      initialItemCount: _items.length,
+                      itemBuilder: (ctx, i, anim) => SizeTransition(
+                        sizeFactor: anim,
+                        child: _buildTile(_items[i]),
+                      ),
+                    ),
+                    if (_items.isEmpty)
+                      Center(
+                        child: Text(T('noHighlight'),
+                            style: const TextStyle(color: Colors.grey)),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 20,
+          child: IgnorePointer(
+            child: Center(
+              child: AnimatedOpacity(
+                opacity: _toastMsg == null ? 0 : 1,
+                duration: const Duration(milliseconds: 220),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: const Color(0xE6323232),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(_toastMsg ?? '',
+                      style: const TextStyle(color: Colors.white)),
+                ),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }

@@ -6,12 +6,15 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.2.1';
-  static const String build = '6';
+  static const String version = '1.2.2';
+  static const String build = '7';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.2.2：新增书签与划线笔记。长按正文句子即可添加书签、'
+        '划线（蓝/黄/绿三色）或复制；书签/划线列表支持动画删除；'
+        '添加/删除/复制均有操作提示，重启不丢失。',
     'v1.2.1：新增用户自选字体，支持导入 .ttf/.otf 字体文件，'
         '立即生效、重启自动加载；不内置字体，包体无增加。',
     'v1.2.0：界面支持 5 种语言（简体/繁体/英语/日语/韩语），'
