@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../i18n.dart';
 import '../models/book.dart';
 import '../models/progress.dart';
 import '../services/app_storage.dart';
@@ -171,14 +172,14 @@ class _ShelfScreenState extends State<ShelfScreen> {
               if (v == 'add') _addBook();
               if (v == 'about') AboutScreen.show(context);
             },
-            itemBuilder: (ctx) => const [
+            itemBuilder: (ctx) => [
               PopupMenuItem(
                 value: 'add',
                 child: Row(
                   children: [
-                    Icon(Icons.library_add_outlined),
-                    SizedBox(width: 8),
-                    Text('添加书籍'),
+                    const Icon(Icons.library_add_outlined),
+                    const SizedBox(width: 8),
+                    Text(T('addBook')),
                   ],
                 ),
               ),
@@ -186,9 +187,9 @@ class _ShelfScreenState extends State<ShelfScreen> {
                 value: 'about',
                 child: Row(
                   children: [
-                    Icon(Icons.info_outline),
-                    SizedBox(width: 8),
-                    Text('关于'),
+                    const Icon(Icons.info_outline),
+                    const SizedBox(width: 8),
+                    Text(T('about')),
                   ],
                 ),
               ),
@@ -245,7 +246,11 @@ class _ShelfScreenState extends State<ShelfScreen> {
     if (!mounted) return;
     if (!book.parseOk) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('书籍解析失败：${book.parseError ?? '未知错误'}')),
+        SnackBar(
+          content: Text(
+            T('parseFail', {'err': book.parseError ?? 'Unknown'}),
+          ),
+        ),
       );
       return;
     }
@@ -273,16 +278,16 @@ class _ShelfScreenState extends State<ShelfScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除书籍'),
-        content: Text('确定从书架移除《${meta.title}》吗？'),
+        title: Text(T('deleteTitle')),
+        content: Text(T('deleteConfirm', {'title': meta.title})),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
+            child: Text(T('cancel')),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除'),
+            child: Text(T('delete')),
           ),
         ],
       ),

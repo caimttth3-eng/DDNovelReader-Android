@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../i18n.dart';
 import '../models/book.dart';
 
 /// 9:16 木纹书籍卡片：木纹纹理背景 + 居中书名 + 底部腰封进度条。
@@ -259,7 +260,7 @@ class AddBookCard extends StatelessWidget {
                             size: 34, color: Color(0xFF8A5A2B)),
                         const SizedBox(height: 8),
                         Text(
-                          '添加书籍',
+                          T('addBook'),
                           style: TextStyle(
                             color: const Color(0xFF6B4A20),
                             fontSize: 12,

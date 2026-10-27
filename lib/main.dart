@@ -1,11 +1,16 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'i18n.dart';
 import 'screens/shelf_screen.dart';
 import 'services/tts_audio_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppI18n.current = AppLang.detect(
+    WidgetsBinding.instance.platformDispatcher.locales,
+  );
   try {
     globalAudioHandler = await AudioService.init(
       builder: () => TtsAudioHandler(),
@@ -33,6 +38,13 @@ class DuoduoLangduApp extends StatelessWidget {
     return MaterialApp(
       title: '多多朗读',
       debugShowCheckedModeBanner: false,
+      locale: AppI18n.current.locale,
+      supportedLocales: AppLang.values.map((l) => l.locale).toList(),
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF8A5A2B)),

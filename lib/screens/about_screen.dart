@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../i18n.dart';
 import '../version_info.dart';
 
 /// 关于页（弹窗）。参考 PC 版关于窗口：版本信息 + 作者联系方式（可复制/打开）+ 更新记录。
@@ -19,7 +20,7 @@ class AboutScreen extends StatelessWidget {
     await Clipboard.setData(ClipboardData(text: text));
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已复制：$text')),
+      SnackBar(content: Text(T('copied', {'text': text}))),
     );
   }
 
@@ -28,7 +29,7 @@ class AboutScreen extends StatelessWidget {
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('无法打开链接')),
+        SnackBar(content: Text(T('openFail'))),
       );
     }
   }
@@ -104,10 +105,10 @@ class AboutScreen extends StatelessWidget {
                 children: [
                   const Icon(Icons.menu_book, color: Colors.white),
                   const SizedBox(width: 10),
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      '关于多多朗读',
-                      style: TextStyle(
+                      T('aboutTitle'),
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -162,10 +163,9 @@ class AboutScreen extends StatelessWidget {
                                 ),
                               ),
                               const SizedBox(height: 6),
-                              const Text(
-                                '支持 Android 的有声小说阅读器（多多朗读）· '
-                                '当前版本 v1.1.2',
-                                style: TextStyle(
+                              Text(
+                                T('aboutSub', {'ver': VersionInfo.version}),
+                                style: const TextStyle(
                                   fontSize: 13,
                                   color: Colors.black54,
                                 ),
@@ -182,48 +182,48 @@ class AboutScreen extends StatelessWidget {
                     _contactRow(
                       context: context,
                       icon: Icons.email_outlined,
-                      label: '作者邮箱：',
+                      label: T('emailLabel'),
                       value: '230468896@qq.com',
-                      actionText: '点击复制',
+                      actionText: T('copyAction'),
                       onTap: () => _copy(context, '230468896@qq.com'),
                     ),
                     _contactRow(
                       context: context,
                       icon: Icons.video_library_outlined,
-                      label: 'B站空间：',
+                      label: T('biliLabel'),
                       value: 'https://space.bilibili.com/42444',
-                      actionText: '点击打开',
+                      actionText: T('openAction'),
                       onTap: () => _openUrl(context, 'https://space.bilibili.com/42444'),
                     ),
                     _contactRow(
                       context: context,
                       icon: Icons.smart_display_outlined,
-                      label: '抖音号：',
+                      label: T('douyinLabel'),
                       value: '120735162',
-                      actionText: '点击复制',
+                      actionText: T('copyAction'),
                       onTap: () => _copy(context, '120735162'),
                     ),
                     _contactRow(
                       context: context,
                       icon: Icons.link_outlined,
-                      label: '软件发布：',
+                      label: T('releaseLabel'),
                       value: 'github.com/caimttth3-eng/DDNovelReader-Android',
-                      actionText: '点击打开',
+                      actionText: T('openAction'),
                       onTap: () =>
                           _openUrl(context, 'https://github.com/caimttth3-eng/DDNovelReader-Android'),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      '反馈问题可以在B站动态留言，B站我天天看。',
-                      style: TextStyle(fontSize: 12, color: Colors.black54),
+                    Text(
+                      T('feedback'),
+                      style: const TextStyle(fontSize: 12, color: Colors.black54),
                     ),
                     const SizedBox(height: 16),
                     const Divider(height: 1),
                     const SizedBox(height: 10),
                     // 更新记录（每次更新信息）
-                    const Text(
-                      '更新记录',
-                      style: TextStyle(
+                    Text(
+                      T('changelogTitle'),
+                      style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
                         color: Color(0xFF5D3A1A),

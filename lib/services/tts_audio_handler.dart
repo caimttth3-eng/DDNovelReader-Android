@@ -2,6 +2,8 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../i18n.dart';
+
 /// 打原生日志（release 下 debugPrint 不输出，走 MethodChannel 到 logcat）
 void _log(String msg) {
   try {
@@ -37,13 +39,12 @@ class TtsAudioHandler extends BaseAudioHandler {
       id: 'duoduo_langdu',
       title: '多多朗读',
       album: '本地书籍朗读',
-    ));
-    playbackState.add(PlaybackState(
+    ));    playbackState.add(PlaybackState(
       playing: false,
       controls: [
         MediaControl.custom(
             androidIcon: 'mipmap/ic_launcher',
-            label: '继续播放',
+            label: T('continuePlay'),
             name: '继续播放'),
         MediaControl.stop,
       ],
@@ -102,7 +103,7 @@ class TtsAudioHandler extends BaseAudioHandler {
           : [
               MediaControl.custom(
                   androidIcon: 'mipmap/ic_launcher',
-                  label: '继续播放',
+                  label: T('continuePlay'),
                   name: '继续播放'),
               MediaControl.stop,
             ],

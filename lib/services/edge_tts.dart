@@ -14,7 +14,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
+import '../i18n.dart';
 
 const String _trustedClientToken = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const String _secMsGecVersion = '2-143.0.3650.75';
@@ -24,15 +24,65 @@ const String _voiceList =
 /// 时钟偏差（秒），403 时通过服务器 Date 头校准
 double _clockSkew = 0.0;
 
-/// 可用中文音色
-const List<String> edgeVoices = [
-  'zh-CN-XiaoxiaoNeural', // 晓晓（女，温暖）
-  'zh-CN-YunxiNeural', // 云希（男，阳光）
-  'zh-CN-YunyangNeural', // 云扬（男，专业）
-  'zh-CN-XiaoyiNeural', // 晓伊（女，活泼）
-  'zh-CN-liaoning-XiaobeiNeural', // 东北话小北
-  'zh-CN-shaanxi-XiaoniNeural', // 陕西话小妮
+/// 可用音色（分语言）。zhName=中文界面显示名；enName=其他语言界面显示名。
+class EdgeVoice {
+  final String id;
+  final String langCode; // 'zh-CN' / 'zh-TW' / 'en' / 'ja-JP' / 'ko-KR'
+  final String zhName;
+  final String enName;
+  const EdgeVoice(this.id, this.langCode, this.zhName, this.enName);
+}
+
+const List<EdgeVoice> edgeVoices = [
+  // 简体中文
+  EdgeVoice('zh-CN-XiaoxiaoNeural', 'zh-CN', '晓晓（女·温暖）', 'Xiaoxiao (F, Warm)'),
+  EdgeVoice('zh-CN-YunxiNeural', 'zh-CN', '云希（男·阳光）', 'Yunxi (M, Sunny)'),
+  EdgeVoice('zh-CN-YunyangNeural', 'zh-CN', '云扬（男·专业）', 'Yunyang (M, Professional)'),
+  EdgeVoice('zh-CN-XiaoyiNeural', 'zh-CN', '晓伊（女·活泼）', 'Xiaoyi (F, Lively)'),
+  EdgeVoice('zh-CN-YunjianNeural', 'zh-CN', '云健（男·青年）', 'Yunjian (M, Young)'),
+  EdgeVoice('zh-CN-liaoning-XiaobeiNeural', 'zh-CN', '小北（东北话）', 'Xiaobei (Northeast)'),
+  EdgeVoice('zh-CN-shaanxi-XiaoniNeural', 'zh-CN', '小妮（陕西话）', 'Xiaoni (Shaanxi)'),
+  // 繁体中文
+  EdgeVoice('zh-TW-HsiaoChenNeural', 'zh-TW', '曉臻（女·溫暖）', 'HsiaoChen (F, Warm)'),
+  EdgeVoice('zh-TW-HsiaoYuNeural', 'zh-TW', '曉雨（女·甜美）', 'HsiaoYu (F, Sweet)'),
+  EdgeVoice('zh-TW-YunJheNeural', 'zh-TW', '雲哲（男·沉穩）', 'YunJhe (M, Calm)'),
+  // 英语
+  EdgeVoice('en-US-AriaNeural', 'en', 'Aria（女·自信）', 'Aria (F, Confident)'),
+  EdgeVoice('en-US-JennyNeural', 'en', 'Jenny（女·柔和）', 'Jenny (F, Soft)'),
+  EdgeVoice('en-US-GuyNeural', 'en', 'Guy（男·活力）', 'Guy (M, Energetic)'),
+  EdgeVoice('en-US-AnaNeural', 'en', 'Ana（女·孩童）', 'Ana (F, Child)'),
+  EdgeVoice('en-GB-SoniaNeural', 'en', 'Sonia（女·英式）', 'Sonia (F, British)'),
+  EdgeVoice('en-GB-RyanNeural', 'en', 'Ryan（男·英式）', 'Ryan (M, British)'),
+  // 日语
+  EdgeVoice('ja-JP-NanamiNeural', 'ja-JP', '七海（女·自然）', 'Nanami (F, Natural)'),
+  EdgeVoice('ja-JP-KeitaNeural', 'ja-JP', '慶太（男·自然）', 'Keita (M, Natural)'),
+  // 韩语
+  EdgeVoice('ko-KR-SunHiNeural', 'ko-KR', '鮮熙（女·溫暖）', 'SunHi (F, Warm)'),
+  EdgeVoice('ko-KR-InJoonNeural', 'ko-KR', '仁俊（男·溫暖）', 'InJoon (M, Warm)'),
 ];
+
+/// 当前界面语言对应的音色组 langCode（用于音色置顶）。
+String defaultVoiceLangCode() => switch (AppI18n.current) {
+      AppLang.zhHans => 'zh-CN',
+      AppLang.zhHant => 'zh-TW',
+      AppLang.en => 'en',
+      AppLang.ja => 'ja-JP',
+      AppLang.ko => 'ko-KR',
+    };
+
+/// 音色排序：默认语言组置顶，其余按 zh-CN → zh-TW → en → ja-JP → ko-KR。
+List<EdgeVoice> sortedEdgeVoices() {
+  final order = <String>[
+    defaultVoiceLangCode(),
+    ...['zh-CN', 'zh-TW', 'en', 'ja-JP', 'ko-KR']
+        .where((c) => c != defaultVoiceLangCode()),
+  ];
+  final byGroup = <String, List<EdgeVoice>>{};
+  for (final v in edgeVoices) {
+    byGroup.putIfAbsent(v.langCode, () => []).add(v);
+  }
+  return [for (final g in order) ...?byGroup[g]];
+}
 
 /// 当前 UTC Unix 时间戳 + 时钟偏差
 double _nowUnix() =>

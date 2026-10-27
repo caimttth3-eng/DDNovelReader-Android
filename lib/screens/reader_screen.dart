@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import '../i18n.dart';
 import '../models/book.dart';
 import '../models/progress.dart';
 import '../services/app_storage.dart';
@@ -46,19 +47,26 @@ class ReaderScreen extends StatefulWidget {
 /// 书页背景主题
 class BookTheme {
   final String name;
+  final String? labelKey; // i18n key（优先）；null 则用 name 原文
   final Color bg;
   final Color text;
   final Color title;
-  const BookTheme({required this.name, required this.bg, required this.text, required this.title});
+  const BookTheme({
+    required this.name,
+    this.labelKey,
+    required this.bg,
+    required this.text,
+    required this.title,
+  });
 }
 
 const List<BookTheme> _bookThemes = [
-  BookTheme(name: '羊皮纸', bg: Color(0xFFF5EFE0), text: Color(0xFF3A2E1E), title: Color(0xFF5D3A1A)),
-  BookTheme(name: '护眼绿', bg: Color(0xFFC7EDCC), text: Color(0xFF1F3A1F), title: Color(0xFF2D5A2D)),
-  BookTheme(name: '夜间黑', bg: Color(0xFF1A1A1A), text: Color(0xFFBBBBBB), title: Color(0xFFDDDDDD)),
-  BookTheme(name: '纯白', bg: Color(0xFFFFFFFF), text: Color(0xFF333333), title: Color(0xFF555555)),
-  BookTheme(name: '浅灰', bg: Color(0xFFEDEDED), text: Color(0xFF333333), title: Color(0xFF555555)),
-  BookTheme(name: '复古棕', bg: Color(0xFFE8D5B7), text: Color(0xFF4A3728), title: Color(0xFF6B4A2A)),
+  BookTheme(name: '羊皮纸', labelKey: 'themeParchment', bg: Color(0xFFF5EFE0), text: Color(0xFF3A2E1E), title: Color(0xFF5D3A1A)),
+  BookTheme(name: '护眼绿', labelKey: 'themeGreen', bg: Color(0xFFC7EDCC), text: Color(0xFF1F3A1F), title: Color(0xFF2D5A2D)),
+  BookTheme(name: '夜间黑', labelKey: 'themeNight', bg: Color(0xFF1A1A1A), text: Color(0xFFBBBBBB), title: Color(0xFFDDDDDD)),
+  BookTheme(name: '纯白', labelKey: 'themeWhite', bg: Color(0xFFFFFFFF), text: Color(0xFF333333), title: Color(0xFF555555)),
+  BookTheme(name: '浅灰', labelKey: 'themeGray', bg: Color(0xFFEDEDED), text: Color(0xFF333333), title: Color(0xFF555555)),
+  BookTheme(name: '复古棕', labelKey: 'themeBrown', bg: Color(0xFFE8D5B7), text: Color(0xFF4A3728), title: Color(0xFF6B4A2A)),
 ];
 
 class _Item {
@@ -546,7 +554,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       setState(() => _ttsLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('语音加载超时，请检查网络后重试')),
+          SnackBar(content: Text(T('voiceTimeout'))),
         );
       }
     });
@@ -873,7 +881,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (!mounted) return;
     _exitReadingMode();
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('朗读失败：请检查网络连接')),
+      SnackBar(content: Text(T('speakFail'))),
     );
   }
 
@@ -1031,19 +1039,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
       builder: (ctx) {
         final ctrl = TextEditingController(text: _searchQuery);
         return AlertDialog(
-          title: const Text('查找'),
+          title: Text(T('searchTitle')),
           content: TextField(
             controller: ctrl,
             autofocus: true,
-            decoration: const InputDecoration(hintText: '输入要查找的文字'),
+            decoration: InputDecoration(hintText: T('searchHint')),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, null),
-                child: const Text('取消')),
+                child: Text(T('cancel'))),
             TextButton(
                 onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-                child: const Text('查找')),
+                child: Text(T('searchTitle'))),
           ],
         );
       },
@@ -1074,7 +1082,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _gotoSearchHit(0);
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('未找到匹配内容')),
+        SnackBar(content: Text(T('noMatch'))),
       );
     }
   }
@@ -1156,18 +1164,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
               color: Colors.black.withValues(alpha: 0.6),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Column(
+            child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                SizedBox(
+                const SizedBox(
                   width: 26,
                   height: 26,
                   child: CircularProgressIndicator(
                       strokeWidth: 2.6, color: Color(0xFFE8C87A)),
                 ),
-                SizedBox(height: 12),
-                Text('正在加载语音…',
-                    style: TextStyle(color: Colors.white, fontSize: 14)),
+                const SizedBox(height: 12),
+                Text(T('loadingVoice'),
+                    style: const TextStyle(color: Colors.white, fontSize: 14)),
               ],
             ),
           ),
@@ -1194,14 +1202,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 color: Colors.black.withValues(alpha: 0.65),
                 borderRadius: BorderRadius.circular(24),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.volume_up, color: Colors.white70, size: 18),
-                  SizedBox(width: 8),
+                  const Icon(Icons.volume_up, color: Colors.white70, size: 18),
+                  const SizedBox(width: 8),
                   Text(
-                    '音量键：上=上一句  下=下一句',
-                    style: TextStyle(color: Colors.white, fontSize: 13),
+                    T('volHint'),
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
                   ),
                 ],
               ),
@@ -1392,7 +1400,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               ),
               const SizedBox(height: 6),
               Text(
-                '第 $sentenceNo 句 · $pct%',
+                T('sentencePct', {'n': sentenceNo, 'pct': pct}),
                 style:
                     const TextStyle(color: Color(0xFFC9A96E), fontSize: 14),
               ),
@@ -1455,7 +1463,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     child: Column(
                       children: [
                         Text(
-                          '语速 ${rate.toStringAsFixed(1)}x',
+                          T('rateLabel', {'rate': rate.toStringAsFixed(1)}),
                           style: const TextStyle(
                               color: Color(0xFFC9A96E), fontSize: 12),
                         ),
@@ -1485,23 +1493,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 children: [
                   _panelButton(
                     icon: Icons.alarm,
-                    label: _sleepMinutes > 0 ? '${_sleepMinutes}分' : '定时',
+                    label: _sleepMinutes > 0
+                        ? T('minutes', {'m': '$_sleepMinutes'})
+                        : T('timer'),
                     onTap: _openSleepTimer,
                     active: _sleepMinutes > 0,
                   ),
                   _panelButton(
                     icon: Icons.record_voice_over,
-                    label: '音源',
+                    label: T('voice'),
                     onTap: _openVoiceSelector,
                   ),
                   _panelButton(
                     icon: Icons.lock_outline,
-                    label: '锁屏',
+                    label: T('lock'),
                     onTap: _enterFakeLock,
                   ),
                   _panelButton(
                     icon: Icons.power_settings_new,
-                    label: '退出',
+                    label: T('exit'),
                     onTap: _exitReadingMode,
                   ),
                 ],
@@ -1625,7 +1635,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 ),
                 const SizedBox(height: 14),
                 Text(
-                  _lockPressing ? '继续按住解锁' : '长按 2 秒解锁',
+                  _lockPressing ? T('keepHolding') : T('holdToUnlock'),
                   style: TextStyle(
                     color: _lockPressing
                         ? const Color(0xFF9A9A9A)
@@ -1651,11 +1661,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('定时停止',
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(T('timerStop'),
                   style:
-                      TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
             const Divider(height: 1),
             ...options.map((m) => ListTile(
@@ -1665,7 +1675,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                         : Icons.radio_button_off,
                     color: const Color(0xFF8A5A2B),
                   ),
-                  title: Text(m == 0 ? '不开启' : '$m 分钟后停止'),
+                  title: Text(m == 0
+                      ? T('timerOff')
+                      : T('timerAfter', {'m': '$m'})),
                   onTap: () => Navigator.pop(ctx, m),
                 )),
             const SizedBox(height: 8),
@@ -1701,9 +1713,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
           builder: (ctx, setSheetState) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('书页背景', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(T('pageTheme'),
+                    style:
+                        const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
               const Divider(height: 1),
               Padding(
@@ -1741,9 +1755,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(t.name, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.title)),
+                            Text(t.labelKey == null ? t.name : T(t.labelKey!),
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.title)),
                             const SizedBox(height: 6),
-                            Text('阅读文字示例预览', style: TextStyle(fontSize: 10, color: t.text, height: 1.4)),
+                            Text(T('previewText'), style: TextStyle(fontSize: 10, color: t.text, height: 1.4)),
                             const Spacer(),
                             if (selected) const Align(alignment: Alignment.bottomRight, child: Icon(Icons.check_circle, size: 18, color: Color(0xFF8A5A2B))),
                           ],
@@ -1761,40 +1776,52 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  /// 切换朗读音源
+  /// 切换朗读音源：默认语言组置顶，其余语言按组分列
   Future<void> _openVoiceSelector() async {
+    final voices = sortedEdgeVoices();
+    final items = <Widget>[];
+    String? lastLang;
+    for (final v in voices) {
+      if (v.langCode != lastLang) {
+        lastLang = v.langCode;
+        items.add(Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+          child: Text(
+            _groupLabel(v.langCode),
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.black45,
+            ),
+          ),
+        ));
+      }
+      items.add(ListTile(
+        dense: true,
+        leading: Icon(
+          v.id == _settings.voice
+              ? Icons.radio_button_checked
+              : Icons.radio_button_off,
+          color: const Color(0xFF8A5A2B),
+        ),
+        title: Text(_voiceLabel(v.id)),
+        onTap: () => Navigator.pop(context, v.id),
+      ));
+    }
     final selected = await showModalBottomSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('朗读音源',
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(T('voiceTitle'),
                   style:
-                      TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
             const Divider(height: 1),
-            Expanded(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: edgeVoices.length,
-                itemBuilder: (ctx, i) {
-                  final id = edgeVoices[i];
-                  return ListTile(
-                    leading: Icon(
-                      id == _settings.voice
-                          ? Icons.radio_button_checked
-                          : Icons.radio_button_off,
-                      color: const Color(0xFF8A5A2B),
-                    ),
-                    title: Text(_voiceLabel(id)),
-                    onTap: () => Navigator.pop(ctx, id),
-                  );
-                },
-              ),
-            ),
+            Flexible(child: ListView(shrinkWrap: true, children: items)),
           ],
         ),
       ),
@@ -1886,12 +1913,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           ? Icons.pause
                           : Icons.play_arrow,
                       color: Colors.white),
-              tooltip: '朗读',
+              tooltip: T('read'),
               onPressed: _ttsLoading ? null : _play,
             ),
             IconButton(
               icon: const Icon(Icons.checkroom, color: Colors.white),
-              tooltip: '书页背景',
+              tooltip: T('pageTheme'),
               onPressed: _openThemePanel,
             ),
             PopupMenuButton<String>(
@@ -1918,13 +1945,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     break;
                 }
               },
-              itemBuilder: (ctx) => const [
-                PopupMenuItem(value: 'brightness', child: Text('亮度')),
-                PopupMenuItem(value: 'fontsize', child: Text('字体大小')),
-                PopupMenuItem(value: 'lineheight', child: Text('行距')),
-                PopupMenuItem(value: 'rate', child: Text('变速')),
-                PopupMenuItem(value: 'voice', child: Text('音源')),
-                PopupMenuItem(value: 'search', child: Text('查找')),
+              itemBuilder: (ctx) => [
+                PopupMenuItem(value: 'brightness', child: Text(T('brightness'))),
+                PopupMenuItem(value: 'fontsize', child: Text(T('fontSize'))),
+                PopupMenuItem(value: 'lineheight', child: Text(T('lineHeight'))),
+                PopupMenuItem(value: 'rate', child: Text(T('speed'))),
+                PopupMenuItem(value: 'voice', child: Text(T('voice'))),
+                PopupMenuItem(value: 'search', child: Text(T('searchTitle'))),
               ],
             ),
           ],
@@ -1958,7 +1985,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   size: 18, color: Colors.white),
               visualDensity: VisualDensity.compact,
               onPressed: _isPlaying ? _prevSentence : null,
-              tooltip: '上一句',
+              tooltip: T('prev'),
             ),
             Text(
               '${(_percent * 100).toStringAsFixed(1)}%',
@@ -1975,7 +2002,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
             const SizedBox(width: 4),
             Text(
-              '第 ${_chapter + 1}/${widget.book.chapters.length} 章',
+              T('chapterIndicator',
+                  {'c': '${_chapter + 1}', 'total': '${widget.book.chapters.length}'}),
               style: const TextStyle(fontSize: 11, color: Color(0xFFD9C08A)),
             ),
             IconButton(
@@ -1983,7 +2011,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   size: 18, color: Colors.white),
               visualDensity: VisualDensity.compact,
               onPressed: _isPlaying ? _nextSentence : null,
-              tooltip: '下一句',
+              tooltip: T('next'),
             ),
           ],
         ),
@@ -2043,7 +2071,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
             const SizedBox(width: 6),
             Expanded(
               child: Text(
-                '“$_searchQuery” 第 ${_searchIndex + 1}/${_searchHits.length} 处',
+                T('searchHit', {
+                  'q': _searchQuery,
+                  'idx': '${_searchIndex + 1}',
+                  'total': '${_searchHits.length}',
+                }),
                 style: const TextStyle(fontSize: 13),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -2077,17 +2109,28 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   // 设置面板（由右上角菜单触发）
+  /// 音色显示名：中文界面显示中文友好名，其他界面显示英文名
   static String _voiceLabel(String id) {
-    const friendly = {
-      'zh-CN-XiaoxiaoNeural': '晓晓（女·温暖）',
-      'zh-CN-YunxiNeural': '云希（男·阳光）',
-      'zh-CN-YunyangNeural': '云扬（男·专业）',
-      'zh-CN-XiaoyiNeural': '晓伊（女·活泼）',
-      'zh-CN-liaoning-XiaobeiNeural': '小北（东北话）',
-      'zh-CN-shaanxi-XiaoniNeural': '小妮（陕西话）',
-    };
-    return friendly[id] ?? id;
+    for (final v in edgeVoices) {
+      if (v.id == id) {
+        return (AppI18n.current == AppLang.zhHans ||
+                AppI18n.current == AppLang.zhHant)
+            ? v.zhName
+            : v.enName;
+      }
+    }
+    return id;
   }
+
+  /// 音色组标题（语言自称，各界面语言下通用）
+  static String _groupLabel(String langCode) => switch (langCode) {
+        'zh-CN' => AppLang.zhHans.nativeName,
+        'zh-TW' => AppLang.zhHant.nativeName,
+        'en' => AppLang.en.nativeName,
+        'ja-JP' => AppLang.ja.nativeName,
+        'ko-KR' => AppLang.ko.nativeName,
+        _ => langCode,
+      };
 
   void _openSettingsPanel(String kind) {
     showModalBottomSheet<void>(
@@ -2100,8 +2143,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           if (s.voice.isNotEmpty) _tts.setVoice(s.voice);
           widget.storage.saveSettings(s.toJson());
         },
-        onVoiceLoad: () async => edgeVoices
-            .map((v) => {'id': v, 'name': _voiceLabel(v)})
+        onVoiceLoad: () async => sortedEdgeVoices()
+            .map((v) => {'id': v.id, 'name': _voiceLabel(v.id)})
             .toList(),
       ),
     );
@@ -2171,11 +2214,11 @@ class _ChapterSheet extends StatelessWidget {
         });
         return Column(
           children: [
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text('目录',
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(T('toc'),
                   style:
-                      TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
             const Divider(height: 1),
             Expanded(
@@ -2258,7 +2301,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             mainAxisSize: MainAxisSize.min,
             children: [
               // 亮度
-              _row('亮度', Icons.brightness_6, Slider(
+              _row(T('brightness'), Icons.brightness_6, Slider(
                 value: _s.brightness,
                 min: 0.3,
                 max: 1.0,
@@ -2268,7 +2311,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 }),
               )),
               // 字体大小
-              _row('字体大小', Icons.text_fields, Slider(
+              _row(T('fontSize'), Icons.text_fields, Slider(
                 value: _s.fontSize,
                 min: 14,
                 max: 32,
@@ -2279,7 +2322,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 }),
               )),
               // 行距
-              _row('行距', Icons.format_line_spacing, Slider(
+              _row(T('lineHeight'), Icons.format_line_spacing, Slider(
                 value: _s.lineHeight,
                 min: 1.2,
                 max: 2.4,
@@ -2290,7 +2333,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 }),
               )),
               // 变速
-              _row('变速', Icons.speed, Slider(
+              _row(T('speed'), Icons.speed, Slider(
                 value: _s.speechRate,
                 min: 0.5,
                 max: 2.0,
@@ -2306,14 +2349,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 children: [
                   const Icon(Icons.record_voice_over),
                   const SizedBox(width: 12),
-                  const Text('音源'),
+                  Text(T('voice')),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _voicesLoaded && _voices.isNotEmpty
                         ? DropdownButton<String>(
                             value: _s.voice.isEmpty ? null : _s.voice,
                             isExpanded: true,
-                            hint: const Text('默认'),
+                            hint: Text(T('default')),
                             items: _voices.map((v) {
                               final id = v is Map
                                   ? (v['id'] ?? v.toString())
@@ -2329,7 +2372,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                               _update();
                             }),
                           )
-                        : const Text('加载中…'),
+                        : Text(T('loading')),
                   ),
                 ],
               ),
