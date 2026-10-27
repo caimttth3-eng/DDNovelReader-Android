@@ -114,6 +114,7 @@ class ReadingSettings {
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
   String voice = '';
   int themeIndex = 0; // 书页背景主题索引
+  String fontFamily = ''; // 用户自选字体 family 名，空=系统默认
 
   Map<String, dynamic> toJson() => {
         'brightness': brightness,
@@ -122,6 +123,7 @@ class ReadingSettings {
         'speechRate': speechRate,
         'voice': voice,
         'themeIndex': themeIndex,
+        'fontFamily': fontFamily,
       };
 
   static ReadingSettings fromJson(Map<String, dynamic>? json) {
@@ -133,6 +135,7 @@ class ReadingSettings {
     s.speechRate = (json['speechRate'] as num?)?.toDouble() ?? s.speechRate;
     s.voice = json['voice'] as String? ?? '';
     s.themeIndex = (json['themeIndex'] as num?)?.toInt() ?? 0;
+    s.fontFamily = json['fontFamily'] as String? ?? '';
     return s;
   }
 }

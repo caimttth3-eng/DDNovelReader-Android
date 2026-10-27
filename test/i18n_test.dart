@@ -64,7 +64,7 @@ void main() {
     test('每个 key 在 5 语言都有非空值且占位符参数名合法', () {
       const knownParams = {
         'n', 'pct', 'rate', 'm', 'c', 'total', 'idx', 'q', 'ver', 'err',
-        'text', 'title',
+        'text', 'title', 'name',
       };
       for (final lang in AppLang.values) {
         for (final e in AppI18n.tableFor(lang).entries) {

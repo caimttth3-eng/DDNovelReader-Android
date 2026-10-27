@@ -102,6 +102,16 @@ class AppI18n {
       'changelogTitle': '更新记录',
       'copied': '已复制：{text}',
       'openFail': '无法打开链接',
+      'fontReplace': '字体更换',
+      'currentFont': '当前字体：{name}',
+      'importFont': '导入字体',
+      'fontTutorial': '支持 .ttf / .otf 格式字体文件。\n'
+          '用文件管理器或浏览器下载字体文件后，点击下方「导入字体」选择即可；\n'
+          '导入后立即生效，下次启动自动加载。',
+      'importedFonts': '已导入字体',
+      'restoreDefault': '恢复默认',
+      'deleteFont': '删除该字体？',
+      'importFail': '字体导入失败：请确认文件为有效的 .ttf/.otf 字体',
     },
     AppLang.zhHant: {
       'addBook': '新增書籍',
@@ -164,6 +174,16 @@ class AppI18n {
       'changelogTitle': '更新記錄',
       'copied': '已複製：{text}',
       'openFail': '無法開啟連結',
+      'fontReplace': '字體更換',
+      'currentFont': '目前字體：{name}',
+      'importFont': '導入字體',
+      'fontTutorial': '支援 .ttf / .otf 格式字體檔案。\n'
+          '用檔案管理員或瀏覽器下載字體檔案後，點擊下方「導入字體」選取即可；\n'
+          '導入後立即生效，下次啟動自動載入。',
+      'importedFonts': '已導入字體',
+      'restoreDefault': '恢復預設',
+      'deleteFont': '刪除該字體？',
+      'importFail': '字體導入失敗：請確認檔案為有效的 .ttf/.otf 字體',
     },
     AppLang.en: {
       'addBook': 'Add Book',
@@ -226,6 +246,16 @@ class AppI18n {
       'changelogTitle': 'Changelog',
       'copied': 'Copied: {text}',
       'openFail': 'Cannot open link',
+      'fontReplace': 'Font',
+      'currentFont': 'Current font: {name}',
+      'importFont': 'Import font',
+      'fontTutorial': 'Supports .ttf / .otf font files.\n'
+          'Download a font file, then tap "Import font" below to pick it;\n'
+          'it takes effect immediately and loads automatically on next launch.',
+      'importedFonts': 'Imported fonts',
+      'restoreDefault': 'Restore default',
+      'deleteFont': 'Delete this font?',
+      'importFail': 'Font import failed: please make sure the file is a valid .ttf/.otf font',
     },
     AppLang.ja: {
       'addBook': '書籍を追加',
@@ -288,6 +318,17 @@ class AppI18n {
       'changelogTitle': '更新履歴',
       'copied': 'コピーしました：{text}',
       'openFail': 'リンクを開けません',
+      'fontReplace': 'フォント',
+      'currentFont': '現在のフォント：{name}',
+      'importFont': 'フォントをインポート',
+      'fontTutorial': '.ttf / .otf 形式のフォントファイルに対応。\n'
+          'ファイルマネージャーやブラウザーでフォントをダウンロードしたら、'
+          '下の「フォントをインポート」で選択してください。\n'
+          'インポート後すぐに反映され、次回起動時に自動で読み込まれます。',
+      'importedFonts': 'インポート済みフォント',
+      'restoreDefault': 'デフォルトに戻す',
+      'deleteFont': 'このフォントを削除しますか？',
+      'importFail': 'フォントのインポートに失敗しました：.ttf/.otf 形式を確認してください',
     },
     AppLang.ko: {
       'addBook': '책 추가',
@@ -350,6 +391,17 @@ class AppI18n {
       'changelogTitle': '변경 이력',
       'copied': '복사됨: {text}',
       'openFail': '링크를 열 수 없습니다',
+      'fontReplace': '글꼴',
+      'currentFont': '현재 글꼴: {name}',
+      'importFont': '글꼴 가져오기',
+      'fontTutorial': '.ttf / .otf 형식 글꼴 파일을 지원합니다.\n'
+          '파일 관리자나 브라우저에서 글꼴을 다운로드한 뒤 아래 '
+          '「글꼴 가져오기」에서 선택하세요.\n'
+          '가져오면 즉시 적용되며, 다음 실행 시 자동으로 불러옵니다.',
+      'importedFonts': '가져온 글꼴',
+      'restoreDefault': '기본값 복원',
+      'deleteFont': '이 글꼴을 삭제할까요?',
+      'importFail': '글꼴 가져오기 실패: 유효한 .ttf/.otf 글꼴인지 확인하세요',
     },
   };
 

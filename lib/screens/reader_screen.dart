@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import '../models/book.dart';
 import '../models/progress.dart';
 import '../services/app_storage.dart';
 import '../services/edge_tts.dart';
+import '../services/font_manager.dart';
 import '../services/tts_audio_handler.dart';
 import '../services/tts_reader.dart';
 
@@ -156,6 +158,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   double get _fontSize => _settings.fontSize;
   double get _lineHeight => _settings.lineHeight;
+  String get _fontFamily => _settings.fontFamily;
   BookTheme get _theme => _bookThemes[_settings.themeIndex.clamp(0, _bookThemes.length - 1)];
 
   @override
@@ -1331,6 +1334,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 fontWeight: FontWeight.bold,
                 color: _theme.title,
                 height: _lineHeight,
+                fontFamily: _fontFamily.isEmpty ? null : _fontFamily,
               ),
             ),
           );
@@ -1354,6 +1358,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 fontSize: _fontSize,
                 height: _lineHeight,
                 color: _theme.text,
+                fontFamily: _fontFamily.isEmpty ? null : _fontFamily,
                 backgroundColor:
                     isCurrent ? const Color(0x44FFC107) : null,
                 fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
@@ -2287,6 +2292,116 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     }
   }
 
+  /// 字体更换弹层：教程 + 导入 + 已导入列表（可删除）+ 恢复默认。
+  Future<void> _openFontPicker() async {
+    final fonts = await FontManager.listImported();
+    if (!mounted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(T('fontReplace'),
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Text(T('fontTutorial'),
+                      style: const TextStyle(fontSize: 13, height: 1.5)),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.file_download_outlined, size: 18),
+                      label: Text(T('importFont')),
+                      onPressed: () async {
+                        // ignore: deprecated_member_use
+                        final result = await FilePicker.pickFiles(
+                          type: FileType.custom,
+                          allowedExtensions: ['ttf', 'otf'],
+                        );
+                        if (result.isEmpty) return;
+                        final path = result.first.path;
+                        if (path == null) return;
+                        final family = await FontManager.importFont(path);
+                        if (!ctx.mounted) return;
+                        if (family == null) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                            content: Text(T('importFail')),
+                          ));
+                          return;
+                        }
+                        setState(() {
+                          _s.fontFamily = family;
+                          _update();
+                        });
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(T('importedFonts'),
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  if (fonts.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(T('default'),
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.grey)),
+                    )
+                  else
+                    ...fonts.map((f) => ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            FontManager.familyOf(f),
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 20),
+                            tooltip: T('deleteFont'),
+                            onPressed: () async {
+                              await FontManager.removeFont(f);
+                              if (_s.fontFamily == FontManager.familyOf(f)) {
+                                setState(() {
+                                  _s.fontFamily = '';
+                                  _update();
+                                });
+                              }
+                              setSheetState(() {});
+                            },
+                          ),
+                        )),
+                  const SizedBox(height: 4),
+                  Center(
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.restart_alt, size: 18),
+                      label: Text(T('restoreDefault')),
+                      onPressed: () {
+                        setState(() {
+                          _s.fontFamily = '';
+                          _update();
+                        });
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _update() {
     widget.onChanged(_s);
   }
@@ -2321,6 +2436,32 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   _update();
                 }),
               )),
+              // 字体更换
+              InkWell(
+                onTap: _openFontPicker,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.font_download_outlined,
+                          color: Color(0xFF8A5A2B)),
+                      const SizedBox(width: 12),
+                      Text(T('fontReplace'),
+                          style: const TextStyle(fontSize: 14)),
+                      const Spacer(),
+                      Text(
+                        _s.fontFamily.isEmpty
+                            ? T('default')
+                            : FontManager.familyOf(_s.fontFamily),
+                        style: const TextStyle(
+                            fontSize: 13, color: Color(0xFF8A5A2B)),
+                      ),
+                      const Icon(Icons.chevron_right,
+                          size: 18, color: Color(0xFF8A5A2B)),
+                    ],
+                  ),
+                ),
+              ),
               // 行距
               _row(T('lineHeight'), Icons.format_line_spacing, Slider(
                 value: _s.lineHeight,
