@@ -13,9 +13,11 @@ import '../models/book.dart';
 import '../models/progress.dart';
 import '../services/annotation_store.dart';
 import '../services/app_storage.dart';
+import '../services/book_cache_task.dart';
 import '../services/edge_tts.dart';
 import '../services/font_manager.dart';
 import '../services/tts_audio_handler.dart';
+import '../services/tts_cache_store.dart';
 import '../services/tts_reader.dart';
 
 /// 打原生日志（release 下 debugPrint 不输出，走 MethodChannel 到 logcat）
@@ -951,6 +953,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return out;
   }
 
+  /// 当前朗读音色（空=默认），与缓存目录的 voice 段保持一致
+  String get _effectiveVoice =>
+      _settings.voice.isEmpty ? 'zh-CN-XiaoxiaoNeural' : _settings.voice;
+
+  /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
+  TtsCacheStore _currentCacheStore() =>
+      TtsCacheStore(widget.book.id, _effectiveVoice, _settings.speechRate);
+
+  /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
+  void _refreshTtsCache() {
+    _tts.setCache(_currentCacheStore());
+  }
+
   /// 章节内段落 p 之前的句子总数（TtsReader 的起始索引）
   int _chapterSentenceStart(int c, int p) {
     if (c < 0 || c >= widget.book.chapters.length) return 0;
@@ -1253,7 +1268,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
     _jumpToItem(_itemIndexOf(c, p));
     _scheduleSave();
-    await _tts.start(sentences, from: from);
+    _refreshTtsCache();
+    await _tts.start(
+      sentences,
+      offsets: chapterTtsSentenceOffsets(widget.book.chapters[c]),
+      chapterIndex: c,
+      from: from,
+    );
   }
 
   void _onTtsSentenceChanged(int idx) {
@@ -2265,6 +2286,234 @@ class _ReaderScreenState extends State<ReaderScreen> {
     setState(() {});
   }
 
+  /// 全书语音缓存管理：任务控制（开始/暂停/继续/取消）+ 缓存占用 + 清除
+  Future<void> _openBookCache() async {
+    final store = _currentCacheStore();
+    final task = activeBookCaches[widget.book.id] ??
+        (activeBookCaches[widget.book.id] = BookCacheTask(
+              book: widget.book,
+              bookId: widget.book.id,
+              store: store,
+            ));
+    // 重进页面/进程重启后任务实例为空：先从磁盘恢复已有缓存，避免"整本缓存为 0"
+    if (task.status.state == 'idle') {
+      await task.restoreFromDisk();
+    }
+    var sizeBytes = 0;
+    var sizeLoaded = false;
+
+    String fmtSize(int bytes) {
+      if (bytes <= 0) return '0 B';
+      if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+      return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+    }
+
+    String stateText(String state, int done, int total) {
+      switch (state) {
+        case 'building':
+          return T('cacheScanning');
+        case 'caching':
+          return T('cacheProgress', {'done': '$done', 'total': '$total'});
+        case 'paused':
+          return T('cachePaused', {'done': '$done', 'total': '$total'});
+        case 'done':
+          return T('cacheDone', {'done': '$done', 'total': '$total'});
+        case 'cancelled':
+          return T('cacheCancelled');
+        default:
+          return T('cacheIdle');
+      }
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          // 弹层内嵌状态：缓存大小只异步刷新一次（防 rebuild 循环）
+          if (!sizeLoaded) {
+            sizeLoaded = true;
+            store.sizeBytes().then((s) {
+              if (ctx.mounted) setSheetState(() => sizeBytes = s);
+            });
+          }
+          return SafeArea(
+            child: ValueListenableBuilder<BookCacheStatus>(
+              valueListenable: task.statusNotifier,
+              builder: (ctx, st, _) {
+                final active = st.isActive;
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.file_download_outlined,
+                              color: Color(0xFF8A5A2B)),
+                          const SizedBox(width: 10),
+                          Text(T('voiceCacheTitle'),
+                              style: const TextStyle(
+                                  fontSize: 16, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          if (active)
+                            const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Color(0xFF8A5A2B)),
+                            )
+                          else
+                            Icon(
+                              st.isDone
+                                  ? Icons.check_circle_outline
+                                  : Icons.info_outline,
+                              size: 18,
+                              color: st.isDone
+                                  ? const Color(0xFF4C8C4A)
+                                  : Colors.black45,
+                            ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              stateText(st.state, st.done, st.total),
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        T('cacheSize', {'size': fmtSize(sizeBytes)}),
+                        style: const TextStyle(
+                            fontSize: 13, color: Colors.black54),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          if (active) ...[
+                            TextButton(
+                              onPressed: st.state == 'caching'
+                                  ? () => task.pause()
+                                  : null,
+                              child: Text(T('cachePause')),
+                            ),
+                            TextButton(
+                              onPressed: () => task.cancel(),
+                              child: Text(T('cacheCancel')),
+                            ),
+                          ] else if (st.isPaused) ...[
+                            TextButton(
+                              onPressed: () => task.resume(),
+                              child: Text(T('cacheResume')),
+                            ),
+                            TextButton(
+                              onPressed: () => task.cancel(),
+                              child: Text(T('cacheCancel')),
+                            ),
+                          ] else ...[
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                FilledButton(
+                                  onPressed: () =>
+                                      task.start(resume: !st.isDone),
+                                  child: Text(st.isDone
+                                      ? T('cacheRestart')
+                                      : T('cacheStart')),
+                                ),
+                                const SizedBox(width: 8),
+                                OutlinedButton(
+                                  onPressed: () async {
+                                    final ok = await showDialog<bool>(
+                                      context: ctx,
+                                      builder: (dctx) => AlertDialog(
+                                        title: Text(T('cacheClear')),
+                                        content: Text(T('cacheClearConfirm')),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(dctx, false),
+                                            child: Text(T('cancel')),
+                                          ),
+                                          FilledButton(
+                                            onPressed: () =>
+                                                Navigator.pop(dctx, true),
+                                            child: Text(T('ok')),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (ok != true) return;
+                                    task.cancel();
+                                    activeBookCaches.remove(widget.book.id);
+                                    await store.clear();
+                                    if (ctx.mounted) {
+                                      setSheetState(() => sizeBytes = 0);
+                                      ScaffoldMessenger.of(ctx).showSnackBar(
+                                        SnackBar(
+                                            content: Text(T('cacheCleared'))),
+                                      );
+                                    }
+                                  },
+                                  child: Text(T('cacheClear')),
+                                ),
+                              ],
+                            ),
+                            if (!st.isDone)
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: () =>
+                                      _startCacheFromCurrent(task),
+                                  child: Text(T('cacheFromHere')),
+                                ),
+                              ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 从"目前进度"开始缓存：以当前朗读位置（或当前阅读章节）为起点，
+  /// 只缓存该句/该章之后的句子。
+  void _startCacheFromCurrent(BookCacheTask task) {
+    int? fromChapter;
+    int? fromOffset;
+    if (_ttsChapter >= 0 && _ttsChapter < widget.book.chapters.length) {
+      final offs =
+          chapterTtsSentenceOffsets(widget.book.chapters[_ttsChapter]);
+      // _ttsSentence 是段内句子序号，累加段前句子数得到章内全局序号
+      var global = _ttsSentence;
+      for (var pi = 0; pi < _para; pi++) {
+        global += widget.book.chapters[_ttsChapter]
+            .paragraphs[pi]
+            .sentences
+            .length;
+      }
+      if (global >= 0 && global < offs.length) {
+        fromChapter = _ttsChapter;
+        fromOffset = offs[global];
+      }
+    }
+    fromChapter ??= _chapter.clamp(0, widget.book.chapters.length - 1);
+    fromOffset ??= 0;
+    task.start(resume: false, fromChapter: fromChapter, fromOffset: fromOffset);
+  }
+
   Widget _buildTapZones() {
     // 朗读模式：点击切换播放/暂停，上下滑动快速跳进
     final inReading = _inReadingMode;
@@ -2377,6 +2626,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   case 'highlights':
                     _openHighlights();
                     break;
+                  case 'cachebook':
+                    _openBookCache();
+                    break;
                 }
               },
               itemBuilder: (ctx) => [
@@ -2388,6 +2640,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 PopupMenuItem(value: 'search', child: Text(T('searchTitle'))),
                 PopupMenuItem(value: 'bookmarks', child: Text(T('bookmark'))),
                 PopupMenuItem(value: 'highlights', child: Text(T('highlight'))),
+                PopupMenuItem(value: 'cachebook', child: Text(T('cacheBook'))),
               ],
             ),
           ],
@@ -2577,6 +2830,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           setState(() => _settings = s);
           _tts.setSpeechRate(s.speechRate);
           if (s.voice.isNotEmpty) _tts.setVoice(s.voice);
+          // 变速/切音色后缓存坐标（voice/rate 段）变化，重建朗读侧缓存
+          _refreshTtsCache();
           widget.storage.saveSettings(s.toJson());
         },
         onVoiceLoad: () async => sortedEdgeVoices()

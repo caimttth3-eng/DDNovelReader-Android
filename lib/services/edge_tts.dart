@@ -477,6 +477,13 @@ Future<void> _syncClock() async {
   } catch (_) {}
 }
 
+/// Edge TTS rate 百分比字符串：0.5→-75%, 1.0→+0%, 1.5→+50%
+/// 朗读（TtsReader）与全书缓存（BookCacheTask）共用同一转换，保证缓存命中。
+String edgeRateStr(double rate) {
+  final pct = ((rate - 1.0) * 100).round();
+  return pct >= 0 ? '+$pct%' : '$pct%';
+}
+
 /// 合成单句文本为 MP3 字节。
 /// 内部含一次 403 时钟同步重试。
 Future<Uint8List> edgeSynth(String text,

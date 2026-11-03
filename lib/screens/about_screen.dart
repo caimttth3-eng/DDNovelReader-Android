@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n.dart';
+import '../services/updater.dart';
 import '../version_info.dart';
 
 /// 关于页（弹窗）。参考 PC 版关于窗口：版本信息 + 作者联系方式（可复制/打开）+ 更新记录。
@@ -220,6 +221,19 @@ class AboutScreen extends StatelessWidget {
                     const SizedBox(height: 16),
                     const Divider(height: 1),
                     const SizedBox(height: 10),
+                    // 检查更新（手动，参考 PC 版关于窗口按钮）
+                    Center(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.system_update_alt, size: 18),
+                        label: Text(T('checkUpdate')),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF5D3A1A),
+                          side: const BorderSide(color: Color(0xFFB5A58A)),
+                        ),
+                        onPressed: () => Updater.checkManual(context),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     // 更新记录（每次更新信息）
                     Text(
                       T('changelogTitle'),

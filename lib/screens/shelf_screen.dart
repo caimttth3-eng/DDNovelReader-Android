@@ -8,7 +8,10 @@ import '../i18n.dart';
 import '../models/book.dart';
 import '../models/progress.dart';
 import '../services/app_storage.dart';
+import '../services/book_cache_task.dart';
 import '../services/book_parser.dart';
+import '../services/tts_cache_store.dart';
+import '../services/updater.dart';
 import '../widgets/book_card.dart';
 import 'about_screen.dart';
 import 'reader_screen.dart';
@@ -33,6 +36,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
   void initState() {
     super.initState();
     _loadAll();
+    // 启动后台检查更新（失败静默，不影响启动）
+    Updater.checkAuto(context);
   }
 
   Future<void> _loadAll() async {
@@ -171,6 +176,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
             onSelected: (v) {
               if (v == 'add') _addBook();
               if (v == 'about') AboutScreen.show(context);
+              if (v == 'cache') _openCacheManager();
             },
             itemBuilder: (ctx) => [
               PopupMenuItem(
@@ -180,6 +186,16 @@ class _ShelfScreenState extends State<ShelfScreen> {
                     const Icon(Icons.library_add_outlined),
                     const SizedBox(width: 8),
                     Text(T('addBook')),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'cache',
+                child: Row(
+                  children: [
+                    const Icon(Icons.storage_outlined),
+                    const SizedBox(width: 8),
+                    Text(T('cacheManage')),
                   ],
                 ),
               ),
@@ -270,6 +286,227 @@ class _ShelfScreenState extends State<ShelfScreen> {
             }
           },
         ),
+      ),
+    );
+  }
+
+  /// 缓存管理：语音缓存总占用 + 按书籍列出占用（清理单本/清空全部）
+  Future<void> _openCacheManager() async {
+    String fmtSize(int bytes) {
+      if (bytes <= 0) return '0 B';
+      if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+      return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+    }
+
+    String bookTitleOf(String safeId) {
+      for (final b in _books) {
+        if (TtsCacheStore.safeId(b.id) == safeId) return b.title;
+      }
+      return safeId;
+    }
+
+    // 清理一本书：若该书有运行中的缓存任务，先取消并从全局表移除
+    Future<void> clearOne(String safeId) async {
+      String? origId;
+      for (final b in _books) {
+        if (TtsCacheStore.safeId(b.id) == safeId) {
+          origId = b.id;
+          break;
+        }
+      }
+      if (origId != null) {
+        final t = activeBookCaches[origId];
+        if (t != null) {
+          t.cancel();
+          activeBookCaches.remove(origId);
+        }
+      }
+      await TtsCacheStore.clearBook(safeId);
+    }
+
+    var total = -1;
+    var books = <(String, int)>[];
+    var loaded = false;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          // 状态在方法作用域（不随 rebuild 重置），只扫描一次
+          if (!loaded) {
+            loaded = true;
+            () async {
+              total = await TtsCacheStore.totalSize();
+              books = await TtsCacheStore.listBookSizes();
+              if (ctx.mounted) setSheetState(() {});
+            }();
+          }
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.storage_outlined,
+                          color: Color(0xFF8A5A2B)),
+                      const SizedBox(width: 10),
+                      Text(T('cacheManage'),
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.refresh, size: 20),
+                        onPressed: () async {
+                          total = -1;
+                          setSheetState(() {});
+                          total = await TtsCacheStore.totalSize();
+                          books = await TtsCacheStore.listBookSizes();
+                          if (ctx.mounted) setSheetState(() {});
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    total < 0
+                        ? T('cacheScanning')
+                        : T('cacheTotal', {'size': fmtSize(total)}),
+                    style: const TextStyle(fontSize: 13, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 6),
+                  if (total < 0)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (books.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text(T('cacheEmpty'),
+                            style: const TextStyle(
+                                fontSize: 13, color: Colors.black45)),
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 320),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: books.length,
+                          separatorBuilder: (_, __) =>
+                              const Divider(height: 1, color: Color(0xFFE0D6C4)),
+                          itemBuilder: (_, i) {
+                            final (safeId, bytes) = books[i];
+                            return Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    bookTitleOf(safeId),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                ),
+                                Text(fmtSize(bytes),
+                                    style: const TextStyle(
+                                        fontSize: 13, color: Colors.black54)),
+                                TextButton(
+                                  onPressed: () async {
+                                    final ok = await showDialog<bool>(
+                                      context: ctx,
+                                      builder: (dctx) => AlertDialog(
+                                        title: Text(T('cacheClearBook')),
+                                        content: Text(T('cacheClearConfirm')),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(dctx, false),
+                                            child: Text(T('cancel')),
+                                          ),
+                                          FilledButton(
+                                            onPressed: () =>
+                                                Navigator.pop(dctx, true),
+                                            child: Text(T('ok')),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (ok != true) return;
+                                    await clearOne(safeId);
+                                    total = await TtsCacheStore.totalSize();
+                                    books =
+                                        await TtsCacheStore.listBookSizes();
+                                    if (ctx.mounted) {
+                                      setSheetState(() {});
+                                      ScaffoldMessenger.of(ctx).showSnackBar(
+                                        SnackBar(
+                                            content: Text(T('cacheCleared'))),
+                                      );
+                                    }
+                                  },
+                                  child: Text(T('cacheClear'),
+                                      style: const TextStyle(
+                                          fontSize: 12, color: Color(0xFF8A5A2B))),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  if (total > 0)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                        label: Text(T('cacheClearAll')),
+                        onPressed: () async {
+                          final ok = await showDialog<bool>(
+                            context: ctx,
+                            builder: (dctx) => AlertDialog(
+                              title: Text(T('cacheClearAll')),
+                              content: Text(T('cacheClearConfirm')),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(dctx, false),
+                                  child: Text(T('cancel')),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.pop(dctx, true),
+                                  child: Text(T('ok')),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (ok != true) return;
+                          for (final t in activeBookCaches.values.toList()) {
+                            t.cancel();
+                          }
+                          activeBookCaches.clear();
+                          await TtsCacheStore.clearAll();
+                          total = 0;
+                          books = [];
+                          if (ctx.mounted) {
+                            setSheetState(() {});
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              SnackBar(content: Text(T('cacheCleared'))),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
