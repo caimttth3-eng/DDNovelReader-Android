@@ -393,8 +393,8 @@ class TtsReader {
     if (!continueSentence) {
       _clearResume();
       _emitWord(-1, -1);
+      onSentenceChanged?.call(_index);
     }
-    onSentenceChanged?.call(_index);
 
     if (usesSystemVoice) {
       try {

@@ -129,7 +129,9 @@ void main() {
     final reader = TtsReader(player: player, synthesize: synth);
     addTearDown(reader.dispose);
     final words = <(int, int)>[];
+    final sentences = <int>[];
     var finished = false;
+    reader.onSentenceChanged = sentences.add;
     reader.onWordChanged = (start, end) => words.add((start, end));
     reader.onCompleted = () => finished = true;
     await reader.start(['current', 'next']);
@@ -158,10 +160,12 @@ void main() {
     await pausing; expect(await resuming, isTrue);
     expect(player.starts.last, const Duration(milliseconds: 1742));
     expect(reader.currentWordStart, 4);
+    expect(sentences, [0], reason: 'Resuming the same sentence must not scroll the reader back to its beginning.');
     player.tick(1850); await Future<void>.delayed(Duration.zero);
     expect(words.last, (4, 6));
     player.completed.add(null); await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(reader.currentIndex, 1);
+    expect(sentences, [0, 1], reason: 'Only a genuinely new sentence should move the sentence cursor.');
     expect(player.played, [1, 1, 1, 2]);
     expect(player.starts.last, Duration.zero, reason: 'A new sentence must not inherit the pause seek.');
     expect(requested, ['current', 'next'], reason: 'Current audio, words and completed prefetch must survive pause without network.');
@@ -355,7 +359,7 @@ void main() {
       await waitUntil(() => words.contains((1, 1, 3)), 'next sentence must recover from a delayed old position');
       positionMillis = 450;
       await waitUntil(() => words.contains((1, 3, 4)), 'next sentence must advance its own word');
-      expect(sentences, [0, 0, 0, 1]);
+      expect(sentences, [0, 1], reason: 'Reloading and seeking paused audio must not emit another sentence-start notification.');
       expect(sourceBytes, [1, 1, 1, 2]);
       expect(synthesized, diskHit ? isEmpty : orderedEquals(texts));
       await reader.stop();
