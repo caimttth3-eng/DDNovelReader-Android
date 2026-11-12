@@ -8,14 +8,16 @@ class ReaderBrightnessControl extends StatelessWidget {
   final ValueChanged<double> onChanged;
   final VoidCallback onAutomatic;
   final Key? sliderKey;
+  final Color? foregroundColor;
   const ReaderBrightnessControl({super.key, required this.value, required this.automatic,
-    required this.onChanged, required this.onAutomatic, this.sliderKey});
+    required this.onChanged, required this.onAutomatic, this.sliderKey, this.foregroundColor});
 
   @override
   Widget build(BuildContext context) => Row(children: [
     Expanded(child: LayoutBuilder(builder: (context, constraints) => Stack(alignment: Alignment.center,
       children: [
         Slider(key: sliderKey, value: value.clamp(0, 1), min: 0, max: 1,
+          allowedInteraction: SliderInteraction.tapAndSlide,
           padding: const EdgeInsets.symmetric(horizontal: 12), onChanged: onChanged),
         Positioned(left: 12 + (constraints.maxWidth - 24) * split - 2,
           child: IgnorePointer(child: Tooltip(message: T('brightnessSplit'),
@@ -24,7 +26,11 @@ class ReaderBrightnessControl extends StatelessWidget {
       ]))),
     TextButton(key: const ValueKey('brightness-auto'), onPressed: onAutomatic,
       style: TextButton.styleFrom(minimumSize: const Size(44, 44), padding: EdgeInsets.zero),
-      child: Tooltip(message: T('systemBrightness'), child: Text('A',
-        style: TextStyle(fontSize: 20, color: automatic ? Theme.of(context).colorScheme.primary : null)))),
+      child: Tooltip(message: T('systemBrightness'), child: Container(width: 28, height: 28,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(
+          color: foregroundColor ?? Theme.of(context).colorScheme.onSurfaceVariant)),
+        child: Text('A', style: TextStyle(fontSize: 18,
+          color: automatic ? (foregroundColor == null ? Theme.of(context).colorScheme.primary : const Color(0xFF9BC5DD)) : foregroundColor))))),
   ]);
 }

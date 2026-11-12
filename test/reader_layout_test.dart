@@ -141,10 +141,11 @@ void main() {
       if (current.translation.dx > 0) break;
       await tester.pump(const Duration(milliseconds: 16));
     }
+    await tester.pump(const Duration(milliseconds: 48));
     final incoming = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-incoming-transform')));
     final outgoing = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-outgoing-transform')));
     expect(incoming.translation.dx, greaterThan(0));
-    expect(outgoing.translation.dx, lessThanOrEqualTo(0));
+    expect(outgoing.translation.dx, lessThan(0));
     expect(incoming.translation.dy, 0);
     expect(outgoing.translation.dy, 0);
     await capture('horizontal-page-transition');
@@ -172,7 +173,7 @@ void main() {
     await capture('reader-menu');
     final brightness = find.byKey(const ValueKey('quick-brightness'));
     final slider = tester.getRect(brightness);
-    await tester.tapAt(Offset(slider.right - 12, slider.center.dy));
+    await tester.dragFrom(slider.center, Offset(slider.width, 0));
     await tester.pumpAndSettle();
     expect(volumeCalls.where((c) => c.method == 'setScreenBrightness').last.arguments, 1.0);
     await tester.tapAt(Offset(slider.left + 12 + (slider.width - 24) * 0.125, slider.center.dy));

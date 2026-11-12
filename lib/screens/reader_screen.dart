@@ -2789,6 +2789,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(8),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 ReaderBrightnessControl(value: _settings.brightness, automatic: _settings.automaticBrightness,
+                  foregroundColor: Colors.white70,
                   sliderKey: const ValueKey('quick-brightness'), onChanged: _setBrightness, onAutomatic: _resetBrightness),
                 Row(children: [
                   Expanded(child: Slider(value: _settings.fontSize.clamp(14, 32), min: 14, max: 32, divisions: 18,
