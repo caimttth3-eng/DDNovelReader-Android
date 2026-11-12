@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../i18n.dart';
+import '../widgets/reader_gestures.dart';
 import '../models/annotation.dart';
 import '../models/book.dart';
 import '../models/progress.dart';
@@ -68,7 +69,7 @@ class BookTheme {
 }
 
 const List<BookTheme> _bookThemes = [
-  BookTheme(name: '羊皮纸', labelKey: 'themeParchment', bg: Color(0xFFF5EFE0), text: Color(0xFF3A2E1E), title: Color(0xFF5D3A1A)),
+  BookTheme(name: '羊皮纸', labelKey: 'themeParchment', bg: Color(0xFFB5AB92), text: Color(0xFF25231D), title: Color(0xFF454137)),
   BookTheme(name: '护眼绿', labelKey: 'themeGreen', bg: Color(0xFFC7EDCC), text: Color(0xFF1F3A1F), title: Color(0xFF2D5A2D)),
   BookTheme(name: '夜间黑', labelKey: 'themeNight', bg: Color(0xFF1A1A1A), text: Color(0xFFBBBBBB), title: Color(0xFFDDDDDD)),
   BookTheme(name: '纯白', labelKey: 'themeWhite', bg: Color(0xFFFFFFFF), text: Color(0xFF333333), title: Color(0xFF555555)),
@@ -98,6 +99,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   late final TtsReader _tts;
   late final List<_Item> _items;
   final ItemScrollController _itemScrollController = ItemScrollController();
+  final ScrollOffsetController _pageScrollController = ScrollOffsetController();
+  bool _paging = false;
   final ItemPositionsListener _itemPositionsListener =
       ItemPositionsListener.create();
 
@@ -115,9 +118,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Timer? _sleepTimer;
   int _sleepMinutes = 0; // 0=未设置
 
-  // 音量键操作提示条（开始播放时短暂提示）
-  Timer? _volumeTipTimer;
-  bool _volumeTipVisible = false;
+  // 手势操作提示条（开始播放时短暂提示）
+  Timer? _gestureTipTimer;
+  bool _gestureTipVisible = false;
 
   // 当前阅读位置（章节/段落）
   int _chapter = 0;
@@ -131,7 +134,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _ttsLoading = false;
   Timer? _ttsLoadingTimer;
 
-  // 系统媒体音量（音量键被 TTS 上下句占用，暂停面板提供滑条调节）
+  // 系统媒体音量（音量键正常调节，暂停面板也提供滑条）
   double _mediaVolume = 1.0;
 
   // 假锁屏（保持 app 前台，蓝牙耳机键可控；长按 2 秒解锁）
@@ -145,10 +148,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _scrollThrottle = false;
   int? _pendingScrollIndex; // 待跳转 item，渲染出真实高度后校正视口
 
-  // 全屏朗读拖动 seek 状态（字符位置线性定位，与书长无关）
-  bool _dragging = false;
-  int _dragCharPos = 0; // 拖动累计字符位置
-  static const double _charsPerPixel = 2.0; // 每像素对应字数（满屏约 4800 字 ≈ 一章）
   List<int> _itemCharPrefix = [0]; // 每个 item 的 display 字符前缀和（用于 O(log n) 按字定位）
 
   // 章节 display 长度前缀和（用于 O(log n) 定位进度，避免每次全扫全书）
@@ -184,8 +183,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _initLocate();
     _initCharPrefix();
     _itemPositionsListener.itemPositions.addListener(_onScroll);
-    // 音量键逐句控制（原生 MethodChannel）
-    _volumeChannel.setMethodCallHandler(_onVolumeKey);
     // 绑定全局 audio_service 回调（耳机播放键）
     globalAudioHandler?.onPlayRequested = _onHeadsetPlay;
     globalAudioHandler?.onPauseRequested = _onHeadsetPause;
@@ -202,19 +199,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   static const _volumeChannel =
       MethodChannel('com.ddnovelreader/volume_keys');
-
-  /// 原生音量键回调：上=上一句，下=下一句
-  Future<dynamic> _onVolumeKey(MethodCall call) async {
-    if (!_isPlaying || _showControls) return;
-    switch (call.method) {
-      case 'volumeUp':
-        _prevSentence();
-        break;
-      case 'volumeDown':
-        _nextSentence();
-        break;
-    }
-  }
 
   /// 耳机播放键：未进入→开始，播放中→暂停，暂停中→恢复
   void _onHeadsetPlay() {
@@ -272,10 +256,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       systemNavigationBarColor: Colors.transparent,
       systemNavigationBarIconBrightness: Brightness.dark,
     ));
+    _gestureTipTimer?.cancel();
     _tts.dispose();
     _itemPositionsListener.itemPositions.removeListener(_onScroll);
-    _volumeChannel.setMethodCallHandler(null);
-    _volumeChannel.invokeMethod('setVolumeKeysEnabled', false);
     // 解绑耳机回调并停止 MediaSession（handler 实例保留供下次进入复用）
     globalAudioHandler?.onPlayRequested = null;
     globalAudioHandler?.onPauseRequested = null;
@@ -856,19 +839,72 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _approaches = 0;
   }
 
-  void _pageUp() {
-    final current = _itemIndexOf(_chapter, _para);
-    // 向上翻一屏：跳到当前 item 前若干屏
-    final target = (current - 5).clamp(0, _items.length - 1);
-    _jumpToItem(target);
-    _updatePositionFromItem(target);
+  void _pageUp() => _turnPage(-1);
+
+  void _pageDown() => _turnPage(1);
+
+  Future<void> _turnPage(int direction) async {
+    if (_ttsLoading || _paging || _items.isEmpty) return;
+    if (!_inReadingMode) {
+      final target = (_itemIndexOf(_chapter, _para) + direction * 5).clamp(0, _items.length - 1);
+      _jumpToItem(target);
+      _updatePositionFromItem(target);
+      return;
+    }
+    if (!_itemScrollController.isAttached) return;
+    _paging = true;
+    _pendingScrollIndex = null;
+    try {
+      // Move a viewport, including within sentences taller than the screen.
+      final height = MediaQuery.of(context).size.height - _chapterTopArea();
+      await _pageScrollController.animateScroll(
+        offset: direction * max(1.0, height - _fontSize * _lineHeight),
+        duration: const Duration(milliseconds: 180), curve: Curves.easeOut,
+      );
+      if (!mounted) return;
+      final visible = _itemPositionsListener.itemPositions.value
+        .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1)
+        .toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+      if (visible.isEmpty) return;
+      var target = visible.first.index;
+      while (target < _items.length - 1 && _items[target].isTitle) { target++; }
+      _updatePositionFromItem(target);
+      _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
+    } finally {
+      _paging = false;
+    }
   }
 
-  void _pageDown() {
-    final current = _itemIndexOf(_chapter, _para);
-    final target = (current + 5).clamp(0, _items.length - 1);
-    _jumpToItem(target);
-    _updatePositionFromItem(target);
+  // Skip chapter headings and empty sentences, including at chapter boundaries.
+  void _moveSentence(int direction) {
+    if (_ttsLoading || _paging || _items.isEmpty) return;
+    var index = _itemIndexOf(_chapter, _para, max(0, _ttsSentence)) + direction;
+    while (index >= 0 && index < _items.length) {
+      final it = _items[index];
+      if (!it.isTitle) {
+        final sentences = widget.book.chapters[it.chapterIndex]
+            .paragraphs[it.paragraphIndex].sentences;
+        if (it.sentenceIndex < sentences.length &&
+            sentences[it.sentenceIndex].display.trim().isNotEmpty) {
+          _navigateToItem(index);
+          return;
+        }
+      }
+      index += direction;
+    }
+  }
+
+  void _navigateToItem(int index) {
+    // A page may land on a heading; start from its first actual sentence.
+    while (index < _items.length - 1 && _items[index].isTitle) {
+      index++;
+    }
+    _updatePositionFromItem(index);
+    _jumpToItem(index);
+    if (_inReadingMode) {
+      _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
+    }
   }
 
   void _updatePositionFromItem(int index) {
@@ -891,7 +927,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // 拖动 seek 期间由拖动逻辑控制位置。
     // TTS 朗读期间位置由 TTS 句子主导（_onTtsSentenceChanged），
     // 禁止 onScroll 覆盖，否则高亮会错位到视口顶部 item。
-    if (_suppressScrollTrack || _dragging || _isPlaying) return;
+    if (_suppressScrollTrack || _paging || _isPlaying) return;
     if (_scrollThrottle) return;
     _scrollThrottle = true;
     Timer(const Duration(milliseconds: 60), () => _scrollThrottle = false);
@@ -1019,7 +1055,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// 进入朗读模式：全屏隐藏UI，开始TTS播放
   Future<void> _play() async {
     if (_inReadingMode) return;
-    _dragging = false;
     final vp = _captureViewport();
     final delta = _chapterBarTop(); // 进入朗读后顶栏偏移归 0
     // 朗读起点 = 视口当前显示的位置（进度 = 滑到哪读到哪）
@@ -1040,7 +1075,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
     _applySystemUi();
     globalAudioHandler?.notifyPlaying();
-    _showVolumeTip();
+    _showGestureTip();
     if (vp != null) _compensateViewport(vp.$1, vp.$2, delta);
     // 从视口当前句子开始朗读（合成首句期间显示 loading）
     _startTtsLoading();
@@ -1048,13 +1083,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _stopTtsLoading();
   }
 
-  /// 显示音量键操作提示：立即显现，2.5s 后透明度 500ms 淡出
-  void _showVolumeTip() {
-    _volumeTipTimer?.cancel();
-    setState(() => _volumeTipVisible = true);
-    _volumeTipTimer = Timer(const Duration(milliseconds: 2500), () {
+  /// 显示手势操作提示：立即显现，2.5s 后透明度 500ms 淡出
+  void _showGestureTip() {
+    _gestureTipTimer?.cancel();
+    setState(() => _gestureTipVisible = true);
+    _gestureTipTimer = Timer(const Duration(milliseconds: 2500), () {
       if (!mounted) return;
-      setState(() => _volumeTipVisible = false);
+      setState(() => _gestureTipVisible = false);
     });
   }
 
@@ -1129,9 +1164,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _sleepTimer?.cancel();
     _sleepTimer = null;
     _sleepMinutes = 0;
-    _volumeTipTimer?.cancel();
-    _volumeTipTimer = null;
-    _volumeTipVisible = false;
+    _gestureTipTimer?.cancel();
+    _gestureTipTimer = null;
+    _gestureTipVisible = false;
     _ttsLoadingTimer?.cancel();
     _ttsLoadingTimer = null;
     _ttsLoading = false;
@@ -1161,10 +1196,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     } else {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
       SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-        statusBarColor: Color(0xFF241F18),
+        statusBarColor: Color(0xFF333333),
         statusBarIconBrightness: Brightness.light,
         systemStatusBarContrastEnforced: false,
-        systemNavigationBarColor: Color(0xFF241F18),
+        systemNavigationBarColor: Color(0xFF333333),
         systemNavigationBarIconBrightness: Brightness.light,
         systemNavigationBarContrastEnforced: false,
         systemNavigationBarDividerColor: Colors.transparent,
@@ -1174,44 +1209,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   void _enterFullscreen() {
     _applySystemUi();
-    _volumeChannel.invokeMethod('setVolumeKeysEnabled', true);
   }
 
   void _exitFullscreen() {
     _applySystemUi();
-    _volumeChannel.invokeMethod('setVolumeKeysEnabled', false);
-  }
-
-  // ---- 全屏朗读：上下滑动快速跳进，语音跟随 ----
-
-  void _onDragSeekStart(DragStartDetails d) {
-    _dragging = true;
-    _dragCharPos = _currentCharPos; // 基准：当前字符位置
-  }
-
-  void _onDragSeekUpdate(DragUpdateDetails d) {
-    // 字符线性定位：每像素 _charsPerPixel 字，与整书长度无关，体感一致
-    // 方向：上滑 dy<0 → 字符位置减小=快退，下滑 dy>0 → 增大=快进
-    final total = _itemCharPrefix.isEmpty ? 0 : _itemCharPrefix.last;
-    _dragCharPos =
-        (_dragCharPos + (d.delta.dy * _charsPerPixel).round()).clamp(0, total);
-    final (c, p, s, itemIdx) = _locateByChar(_dragCharPos);
-    if (_chapter != c || _para != p || _ttsSentence != s) {
-      setState(() {
-        _chapter = c;
-        _para = p;
-        _ttsSentence = s; // 句子级高亮跟随
-      });
-      if (_itemScrollController.isAttached) {
-        _itemScrollController.jumpTo(index: itemIdx, alignment: 0);
-      }
-    }
-  }
-
-  void _onDragSeekEnd() {
-    _dragging = false;
-    _ttsFollowSeek(_chapter, _para, _ttsSentence); // 语音跟随到句子
-    _scheduleSave();
   }
 
   /// 让语音跟随到 (c, p, 段内句子s)
@@ -1278,7 +1279,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _onTtsSentenceChanged(int idx) {
-    if (!mounted) return;
+    if (!mounted || _paging) return;
     if (idx < 0) return;
     // 把 TtsReader 的句子索引映射回 (chapter, para, sIndex)
     final c = _ttsChapter;
@@ -1306,7 +1307,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _ttsSentence = s;
       });
       // 高亮跟随：每次句子变化都滚动到该句子 item，保持在视口 25% 位置
-      if (!_dragging && _itemScrollController.isAttached) {
+      if (_itemScrollController.isAttached) {
         final idx = _itemIndexOf(c, p, s);
         _itemScrollController.jumpTo(index: idx, alignment: 0.25);
       }
@@ -1341,17 +1342,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   // 上一句 / 下一句
-  void _prevSentence() {
-    if (_ttsLoading) return; // 加载中忽略，防误触
-    if (!_isPlaying) return;
-    _tts.prev();
-  }
+  void _prevSentence() => _moveSentence(-1);
 
-  void _nextSentence() {
-    if (_ttsLoading) return; // 加载中忽略，防误触
-    if (!_isPlaying) return;
-    _tts.next();
-  }
+  void _nextSentence() => _moveSentence(1);
 
   // ---------- 进度条 ----------
 
@@ -1571,19 +1564,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
           // 章节标题 Positioned 固定在正文区顶部，正文列表在标题下方独立滚动
           Padding(
             padding: EdgeInsets.only(top: _chapterBarTop() + _chapterTopArea()),
-            child: _buildBody(),
+            child: _buildTapZones(child: _buildBody()),
           ),
           // 固定章节标题：位于顶部两行半空白之后，正文滚动时保持不动
           Positioned(
-            top: _chapterBarTop() + _fontSize * _lineHeight * 2.5,
+            top: MediaQuery.of(context).viewPadding.top + 12,
             left: 0,
             right: 0,
             child: _buildChapterHeader(),
           ),
           // 三区点击层
-          _buildTapZones(),
+          _buildReadingStatus(),
           // 拖动 seek 预览浮层
-          if (_dragging) _buildDragPreview(),
           // 朗读模式底部控制面板（暂停时显示）
           if (_inReadingMode && _showReadingPanel) _buildReadingPanel(),
           // 顶部控制栏
@@ -1594,8 +1586,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           if (_showControls) _buildFloatingChapter(),
           // 查找结果浮动条
           if (_showControls && _searchHits.isNotEmpty) _buildSearchBar(),
-          // 音量键操作提示条（开始播放时短暂提示，2.5s 后淡出）
-          if (_inReadingMode) _buildVolumeTip(),
+          // 手势操作提示条（开始播放时短暂提示，2.5s 后淡出）
+          if (_inReadingMode) _buildGestureTip(),
           // TTS 加载中浮层（朗读模式点击恢复播放时显示）
           if (_inReadingMode && _ttsLoading) _buildTtsLoadingOverlay(),
             // 亮度遮罩
@@ -1626,7 +1618,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   width: 26,
                   height: 26,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2.6, color: Color(0xFFE8C87A)),
+                      strokeWidth: 2.6, color: Color(0xFF9BC5DD)),
                 ),
                 const SizedBox(height: 12),
                 Text(T('loadingVoice'),
@@ -1639,39 +1631,37 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  /// 音量键操作提示条：屏幕中下部半透明圆角胶囊，2.5s 后透明度淡出
-  Widget _buildVolumeTip() {
+  /// 手势操作提示条：屏幕中下部半透明圆角胶囊，2.5s 后透明度淡出
+  Widget _buildGestureTip() {
     return Positioned(
-      left: 0,
-      right: 0,
-      bottom: MediaQuery.of(context).size.height * 0.22,
-      child: IgnorePointer(
-        child: Center(
-          child: AnimatedOpacity(
-            opacity: _volumeTipVisible ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 500),
-            curve: Curves.easeOut,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.65),
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.volume_up, color: Colors.white70, size: 18),
-                  const SizedBox(width: 8),
-                  Text(
-                    T('volHint'),
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
-                  ),
-                ],
-              ),
-            ),
-          ),
+      left: 24, right: 24,
+      bottom: MediaQuery.of(context).padding.bottom + 100,
+      child: IgnorePointer(child: AnimatedOpacity(
+        opacity: _gestureTipVisible ? 1 : 0,
+        duration: const Duration(milliseconds: 500),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: const Color(0xEE333333), borderRadius: BorderRadius.circular(8)),
+          child: Text(T('volHint'), textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontSize: 13)),
         ),
-      ),
+      )),
+    );
+  }
+
+  Widget _buildReadingStatus() {
+    return Positioned(left: 16, right: 16, bottom: MediaQuery.of(context).padding.bottom + 8,
+      child: IgnorePointer(child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          StreamBuilder<int>(stream: Stream.periodic(const Duration(minutes: 1), (i) => i),
+            builder: (context, snapshot) {
+              final now = DateTime.now();
+              return Text('${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
+                style: TextStyle(fontSize: 12, color: _theme.title));
+            }),
+          Text('${(_percent * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _theme.title)),
+        ],
+      )),
     );
   }
 
@@ -1693,8 +1683,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// 顶栏是 Positioned 悬浮覆盖层，悬浮在正文区上方，不占位、不影响正文区。
   double _chapterBarTop() => 0;
 
-  /// 正文区固定顶部高度：两行半空白 + 标题栏一行
-  double _chapterTopArea() => _fontSize * _lineHeight * 3.5;
+  /// Compact header space remains stable when controls appear.
+  double _chapterTopArea() => MediaQuery.of(context).viewPadding.top + 20 + _fontSize * _lineHeight;
 
   /// 捕获当前视口状态：首可见 item 的 index + 其在视口内的像素偏移（相对视口顶）
   /// 用于模式切换后补偿滚动位置，保证正文文字屏幕位置不变
@@ -1734,7 +1724,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return Container(
       height: _fontSize * _lineHeight,
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      alignment: Alignment.centerLeft,
+      alignment: Alignment.center,
       decoration: BoxDecoration(
         color: _theme.bg,
         border: Border(
@@ -1744,14 +1734,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
         ),
       ),
       child: Align(
-        alignment: Alignment.centerLeft,
+        alignment: Alignment.center,
         child: Text(
           _chapterBarTitle(_chapter),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            fontSize: _fontSize * 0.85,
-            fontWeight: FontWeight.w600,
+            fontSize: 12,
+            fontWeight: FontWeight.normal,
             color: _theme.title,
           ),
         ),
@@ -1762,15 +1752,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Widget _buildBody() {
     return ScrollablePositionedList.builder(
       itemScrollController: _itemScrollController,
+      scrollOffsetController: _pageScrollController,
       itemPositionsListener: _itemPositionsListener,
-      // 全屏模式（隐藏UI）可滑动；UI模式禁滚，统一用点击三区翻页
-      physics: _showControls
+      // Only reading mode replaces free scrolling with sentence/page gestures.
+      physics: (_inReadingMode || _showControls)
           ? const NeverScrollableScrollPhysics()
           : null,
       // 增大缓存区：跳转后能渲染更多 item，加速精确定位
       minCacheExtent: 1500,
       // 顶部留白由 Column 的标题栏承担；底部留 120 给进度条/朗读面板
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
       itemCount: _items.length,
       itemBuilder: (ctx, i) {
         final it = _items[i];
@@ -1818,48 +1809,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  /// 拖动 seek 时的位置预览浮层
-  Widget _buildDragPreview() {
-    final c = _chapter.clamp(0, widget.book.chapters.length - 1);
-    final ch = widget.book.chapters[c];
-    final sentenceNo = _ttsSentence >= 0 ? _ttsSentence + 1 : 1;
-    final pct = (_percent * 100).toStringAsFixed(1);
-    return Positioned(
-      top: MediaQuery.of(context).size.height * 0.15,
-      left: 40,
-      right: 40,
-      child: IgnorePointer(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          decoration: BoxDecoration(
-            color: const Color(0xEE2B1D10),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                ch.title,
-                style: const TextStyle(
-                    color: Color(0xFFE8D5B7),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                T('sentencePct', {'n': sentenceNo, 'pct': pct}),
-                style:
-                    const TextStyle(color: Color(0xFFC9A96E), fontSize: 14),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   // ---------- 朗读模式底部控制面板 ----------
 
   Widget _buildReadingPanel() {
@@ -1876,27 +1825,27 @@ class _ReaderScreenState extends State<ReaderScreen> {
           bottom: MediaQuery.of(context).padding.bottom + 14,
         ),
         decoration: const BoxDecoration(
-          color: Color(0xEE2B1D10),
+          color: Color(0xEE333333),
           borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
         ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 音量调节行（音量键被 TTS 上下句占用，暂停时用滑条调节）
+              // 音量调节行（保留暂停面板的音量滑条）
               Row(
                 children: [
-                  const Icon(Icons.volume_down, color: Color(0xFFC9A96E), size: 20),
+                  const Icon(Icons.volume_down, color: Color(0xFF9BC5DD), size: 20),
                   Expanded(
                     child: Slider(
                       value: _mediaVolume.clamp(0.0, 1.0),
                       min: 0.0,
                       max: 1.0,
-                      activeColor: const Color(0xFFC9A96E),
+                      activeColor: const Color(0xFF9BC5DD),
                       inactiveColor: const Color(0x44C9A96E),
                       onChanged: _setMediaVolume,
                     ),
                   ),
-                  const Icon(Icons.volume_up, color: Color(0xFFC9A96E), size: 20),
+                  const Icon(Icons.volume_up, color: Color(0xFF9BC5DD), size: 20),
                 ],
               ),
               const SizedBox(height: 2),
@@ -1905,7 +1854,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.remove_circle_outline,
-                        color: Color(0xFFC9A96E)),
+                        color: Color(0xFF9BC5DD)),
                     onPressed: () => _adjustRate(-0.1),
                   ),
                   Expanded(
@@ -1914,14 +1863,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                         Text(
                           T('rateLabel', {'rate': rate.toStringAsFixed(1)}),
                           style: const TextStyle(
-                              color: Color(0xFFC9A96E), fontSize: 12),
+                              color: Color(0xFF9BC5DD), fontSize: 12),
                         ),
                         Slider(
                           value: rate.clamp(0.5, 3.0),
                           min: 0.5,
                           max: 3.0,
                           divisions: 25,
-                          activeColor: const Color(0xFFC9A96E),
+                          activeColor: const Color(0xFF9BC5DD),
                           inactiveColor: const Color(0x44C9A96E),
                           onChanged: (v) => _setRate(v),
                         ),
@@ -1930,7 +1879,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   ),
                   IconButton(
                     icon: const Icon(Icons.add_circle_outline,
-                        color: Color(0xFFC9A96E)),
+                        color: Color(0xFF9BC5DD)),
                     onPressed: () => _adjustRate(0.1),
                   ),
                 ],
@@ -1983,13 +1932,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon,
-              color: active ? const Color(0xFFE8C87A) : const Color(0xFFC9A96E),
+              color: active ? const Color(0xFF9BC5DD) : const Color(0xFF9BC5DD),
               size: 26),
           const SizedBox(height: 4),
           Text(label,
               style: TextStyle(
                   color: active
-                      ? const Color(0xFFE8C87A)
+                      ? const Color(0xFF9BC5DD)
                       : const Color(0xFFA89060),
                   fontSize: 11)),
         ],
@@ -2122,7 +2071,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     m == _sleepMinutes
                         ? Icons.radio_button_checked
                         : Icons.radio_button_off,
-                    color: const Color(0xFF8A5A2B),
+                    color: const Color(0xFF6498B5),
                   ),
                   title: Text(m == 0
                       ? T('timerOff')
@@ -2195,7 +2144,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           color: t.bg,
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                            color: selected ? const Color(0xFF8A5A2B) : Colors.transparent,
+                            color: selected ? const Color(0xFF6498B5) : Colors.transparent,
                             width: selected ? 2.5 : 0,
                           ),
                           boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4)],
@@ -2209,7 +2158,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             const SizedBox(height: 6),
                             Text(T('previewText'), style: TextStyle(fontSize: 10, color: t.text, height: 1.4)),
                             const Spacer(),
-                            if (selected) const Align(alignment: Alignment.bottomRight, child: Icon(Icons.check_circle, size: 18, color: Color(0xFF8A5A2B))),
+                            if (selected) const Align(alignment: Alignment.bottomRight, child: Icon(Icons.check_circle, size: 18, color: Color(0xFF6498B5))),
                           ],
                         ),
                       ),
@@ -2251,7 +2200,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           v.id == _settings.voice
               ? Icons.radio_button_checked
               : Icons.radio_button_off,
-          color: const Color(0xFF8A5A2B),
+          color: const Color(0xFF6498B5),
         ),
         title: Text(_voiceLabel(v.id)),
         onTap: () => Navigator.pop(context, v.id),
@@ -2350,7 +2299,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       Row(
                         children: [
                           const Icon(Icons.file_download_outlined,
-                              color: Color(0xFF8A5A2B)),
+                              color: Color(0xFF6498B5)),
                           const SizedBox(width: 10),
                           Text(T('voiceCacheTitle'),
                               style: const TextStyle(
@@ -2365,7 +2314,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                               width: 16,
                               height: 16,
                               child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Color(0xFF8A5A2B)),
+                                  strokeWidth: 2, color: Color(0xFF6498B5)),
                             )
                           else
                             Icon(
@@ -2514,12 +2463,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
     task.start(resume: false, fromChapter: fromChapter, fromOffset: fromOffset);
   }
 
-  Widget _buildTapZones() {
-    // 朗读模式：点击切换播放/暂停，上下滑动快速跳进
+  Widget _buildTapZones({required Widget child}) {
+    // 朗读模式点击播放/暂停，滑动切句或翻页；普通阅读保留原操作。
     final inReading = _inReadingMode;
-    return Positioned.fill(
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
+    return ReaderGestures(
+        enabled: inReading,
+        onPreviousSentence: _prevSentence,
+        onNextSentence: _nextSentence,
+        onPreviousPage: _pageUp,
+        onNextPage: _pageDown,
         onTapUp: inReading
             ? (_) {
                 if (_ttsLoading) return; // 加载中忽略点击，防误触
@@ -2541,11 +2493,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   _applySystemUi();
                 }
               },
-        onVerticalDragStart: inReading ? _onDragSeekStart : null,
-        onVerticalDragUpdate: inReading ? _onDragSeekUpdate : null,
-        onVerticalDragEnd: inReading ? (_) => _onDragSeekEnd() : null,
-        onVerticalDragCancel: inReading ? () => _dragging = false : null,
-      ),
+        child: child,
     );
   }
 
@@ -2556,9 +2504,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       right: 0,
       child: Container(
         decoration: const BoxDecoration(
-          color: Color(0xF2241F18),
+          color: Color(0xF2333333),
           border: Border(
-            bottom: BorderSide(color: Color(0x66C9A96E), width: 1.5),
+            bottom: BorderSide(color: Color(0x33777777), width: 1.5),
           ),
         ),
         padding: EdgeInsets.only(
@@ -2656,9 +2604,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       bottom: 0,
       child: Container(
         decoration: const BoxDecoration(
-          color: Color(0xF2241F18),
+          color: Color(0xF2333333),
           border: Border(
-            top: BorderSide(color: Color(0x66C9A96E), width: 1.5),
+            top: BorderSide(color: Color(0x33777777), width: 1.5),
           ),
         ),
         padding: EdgeInsets.only(
@@ -2678,13 +2626,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
             Text(
               '${(_percent * 100).toStringAsFixed(1)}%',
-              style: const TextStyle(fontSize: 12, color: Color(0xFFD9C08A)),
+              style: const TextStyle(fontSize: 12, color: Color(0xFFD6D6D6)),
             ),
             const SizedBox(width: 4),
             Expanded(
               child: Slider(
                 value: _percent,
-                activeColor: const Color(0xFFE8C87A),
+                activeColor: const Color(0xFF9BC5DD),
                 inactiveColor: const Color(0x55FFFFFF),
                 onChanged: (v) => _seekTo(v),
               ),
@@ -2693,7 +2641,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             Text(
               T('chapterIndicator',
                   {'c': '${_chapter + 1}', 'total': '${widget.book.chapters.length}'}),
-              style: const TextStyle(fontSize: 11, color: Color(0xFFD9C08A)),
+              style: const TextStyle(fontSize: 11, color: Color(0xFFD6D6D6)),
             ),
             IconButton(
               icon: const Icon(Icons.skip_next,
@@ -2714,7 +2662,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       top: MediaQuery.of(context).size.height / 2 - 28,
       child: FloatingActionButton.small(
         heroTag: 'chapterFab',
-        backgroundColor: const Color(0xCC8A5A2B),
+        backgroundColor: const Color(0xDD333333),
         foregroundColor: Colors.white,
         onPressed: _openChapterList,
         child: const Icon(Icons.menu_book, size: 20),
@@ -2723,10 +2671,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _openChapterList() async {
-    final selected = await showModalBottomSheet<int>(
+    final selected = await showGeneralDialog<int>(
       context: context,
-      builder: (ctx) => _ChapterSheet(book: widget.book, current: _chapter),
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black38,
+      transitionDuration: const Duration(milliseconds: 220),
+      transitionBuilder: (ctx, animation, secondary, child) => SlideTransition(
+        position: Tween(begin: const Offset(-1, 0), end: Offset.zero).animate(animation), child: child),
+      pageBuilder: (ctx, animation, secondary) => Align(
+        alignment: Alignment.centerLeft,
+        child: SizedBox(width: MediaQuery.of(ctx).size.width * 0.72,
+          height: double.infinity,
+          child: Theme(data: ThemeData.dark(useMaterial3: true).copyWith(
+            colorScheme: const ColorScheme.dark(primary: Color(0xFF9BC5DD), surface: Color(0xFF2D3032))),
+            child: Material(color: const Color(0xFF2D3032),
+              child: SafeArea(child: _ChapterSheet(book: widget.book, current: _chapter)))),
+        ),
+      ),
     );
+    if (selected == -1) { _openBookmarks(); return; }
     if (selected == null) return;
     setState(() {
       _chapter = selected;
@@ -2882,63 +2846,45 @@ class _SearchHit {
   const _SearchHit(this.chapter, this.para, this.start, this.length);
 }
 
-/// 章节选择底部弹层
-class _ChapterSheet extends StatelessWidget {
+/// Side contents panel, positioned at the current chapter.
+class _ChapterSheet extends StatefulWidget {
   final Book book;
   final int current;
   const _ChapterSheet({required this.book, required this.current});
-
   @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.6,
-      maxChildSize: 0.9,
-      builder: (ctx, scrollController) {
-        // 打开时滚动到当前章节
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (scrollController.hasClients) {
-            final offset = (current * 56.0)
-                .clamp(0.0, scrollController.position.maxScrollExtent);
-            scrollController.jumpTo(offset);
-          }
-        });
-        return Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(T('toc'),
-                  style:
-                      const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: ListView.builder(
-                controller: scrollController,
-                itemCount: book.chapters.length,
-                itemBuilder: (ctx, i) => ListTile(
-                  leading: Icon(
-                    i == current
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_off,
-                    color: const Color(0xFF8A5A2B),
-                    size: 20,
-                  ),
-                  title: Text(
-                    book.chapters[i].title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  selected: i == current,
-                  onTap: () => Navigator.pop(ctx, i),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
+  State<_ChapterSheet> createState() => _ChapterSheetState();
+}
+
+class _ChapterSheetState extends State<_ChapterSheet> {
+  late final ScrollController _controller;
+  @override
+  void initState() {
+    super.initState();
+    _controller = ScrollController(initialScrollOffset: max(0, widget.current - 3) * 56.0);
   }
+  @override
+  void dispose() { _controller.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) => Column(children: [
+    Row(children: [
+      Expanded(child: Padding(padding: const EdgeInsets.all(16), child: Text(T('toc'), textAlign: TextAlign.center))),
+      Expanded(child: TextButton(onPressed: () => Navigator.pop(context, -1), child: Text(T('bookmark')))),
+    ]),
+    const Divider(height: 1),
+    Expanded(child: ListView.builder(
+      controller: _controller,
+      itemExtent: 56,
+      itemCount: widget.book.chapters.length,
+      itemBuilder: (context, i) => ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+        title: Text(widget.book.chapters[i].title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        selected: i == widget.current,
+        selectedTileColor: const Color(0x226498B5),
+        selectedColor: const Color(0xFF9BC5DD),
+        onTap: () => Navigator.pop(context, i),
+      ),
+    )),
+  ]);
 }
 
 /// 设置底部弹层
@@ -3130,7 +3076,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   child: Row(
                     children: [
                       const Icon(Icons.font_download_outlined,
-                          color: Color(0xFF8A5A2B)),
+                          color: Color(0xFF6498B5)),
                       const SizedBox(width: 12),
                       Text(T('fontReplace'),
                           style: const TextStyle(fontSize: 14)),
@@ -3140,10 +3086,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                             ? T('default')
                             : FontManager.familyOf(_s.fontFamily),
                         style: const TextStyle(
-                            fontSize: 13, color: Color(0xFF8A5A2B)),
+                            fontSize: 13, color: Color(0xFF6498B5)),
                       ),
                       const Icon(Icons.chevron_right,
-                          size: 18, color: Color(0xFF8A5A2B)),
+                          size: 18, color: Color(0xFF6498B5)),
                     ],
                   ),
                 ),
@@ -3213,7 +3159,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   Widget _row(String label, IconData icon, Widget slider) {
     return Row(
       children: [
-        Icon(icon, color: const Color(0xFF8A5A2B)),
+        Icon(icon, color: const Color(0xFF6498B5)),
         const SizedBox(width: 12),
         Text(label, style: const TextStyle(fontSize: 14)),
         const SizedBox(width: 8),
@@ -3275,7 +3221,7 @@ class _BookmarkSheetState extends State<_BookmarkSheet> {
   Widget _buildTile(Bookmark b) {
     return ListTile(
       leading:
-          const Icon(Icons.bookmark, color: Color(0xFF8A5A2B), size: 20),
+          const Icon(Icons.bookmark, color: Color(0xFF6498B5), size: 20),
       title:
           Text(b.chapterTitle, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Column(

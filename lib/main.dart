@@ -50,8 +50,8 @@ class DuoduoLangduApp extends StatelessWidget {
       ],
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF8A5A2B)),
-        scaffoldBackgroundColor: const Color(0xFFF5F0E8),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6498B5)),
+        scaffoldBackgroundColor: const Color(0xFFF2F2F2),
       ),
       home: const ShelfScreen(),
     );

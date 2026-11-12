@@ -12,7 +12,6 @@ import '../services/book_cache_task.dart';
 import '../services/book_parser.dart';
 import '../services/tts_cache_store.dart';
 import '../services/updater.dart';
-import '../widgets/book_card.dart';
 import 'about_screen.dart';
 import 'reader_screen.dart';
 
@@ -137,12 +136,12 @@ class _ShelfScreenState extends State<ShelfScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F0E8),
+      backgroundColor: const Color(0xFFF2F2F2),
       body: SafeArea(
         child: Column(
           children: [
             _buildTopBar(context),
-            const Divider(height: 1, thickness: 1, color: Color(0xFFB5A58A)),
+            const Divider(height: 1, thickness: 1, color: Color(0xFFD8D8D8)),
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
@@ -165,14 +164,14 @@ class _ShelfScreenState extends State<ShelfScreen> {
               '多多朗读',
               style: TextStyle(
                 fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF5D3A1A),
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF333333),
               ),
             ),
           ),
           const Spacer(),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: Color(0xFF5D3A1A)),
+            icon: const Icon(Icons.more_vert, color: Color(0xFF333333)),
             onSelected: (v) {
               if (v == 'add') _addBook();
               if (v == 'about') AboutScreen.show(context);
@@ -217,30 +216,23 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   Widget _buildGrid() {
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 110, // 控制每行 4 格左右
-        mainAxisSpacing: 14,
-        crossAxisSpacing: 12,
-        childAspectRatio: 9 / 16,
-      ),
-      itemCount: _books.length + 1, // 首位固定"添加书籍"空白书
-      itemBuilder: (ctx, i) {
-        if (i == 0) {
-          return AddBookCard(onTap: _addBook);
-        }
-        final meta = _books[i - 1];
-        final p = _progress[meta.id];
-        final progress = p?.percent ?? 0.0;
-        final fmt = BookFormat.values.firstWhere(
-          (f) => f.name == meta.format,
-          orElse: () => BookFormat.txt,
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: _books.length + 1,
+      separatorBuilder: (_, index) => const Divider(height: 1, indent: 72),
+      itemBuilder: (context, i) {
+        if (i == 0) return ListTile(
+          leading: const Icon(Icons.note_add_outlined, color: Color(0xFF6498B5)),
+          title: Text(T('addBook')), onTap: _addBook,
         );
-        return BookCard(
-          title: meta.title,
-          format: fmt,
-          progress: progress,
+        final meta = _books[i - 1];
+        return ListTile(
+          minVerticalPadding: 16,
+          leading: const Icon(Icons.description_outlined, size: 36, color: Color(0xFF888888)),
+          title: Text(meta.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+          subtitle: Text(meta.format.toUpperCase(), style: const TextStyle(color: Color(0xFF888888), fontSize: 12)),
+          trailing: Text('${((_progress[meta.id]?.percent ?? 0) * 100).toStringAsFixed(1)}%',
+            style: const TextStyle(color: Color(0xFF777777))),
           onTap: () => _openBook(meta),
           onLongPress: () => _confirmDelete(meta),
         );
