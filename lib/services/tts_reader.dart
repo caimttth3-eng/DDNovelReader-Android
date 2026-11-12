@@ -242,7 +242,9 @@ class TtsReader {
     final generation = _contentGeneration;
     final key = '$generation/$idx';
     return _audioRequests.putIfAbsent(key, () => _fetchAudio(idx, generation)
-      .whenComplete(() => _audioRequests.remove(key)));
+      // Map.remove returns the same Future stored below. Returning it from
+      // whenComplete would make this request wait for its own completion.
+      .whenComplete(() { _audioRequests.remove(key); }));
   }
 
   Future<Uint8List> _fetchAudio(int idx, int generation) async {
