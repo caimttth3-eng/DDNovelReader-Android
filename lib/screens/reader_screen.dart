@@ -1098,6 +1098,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (_ttsLoading) return; // 加载中忽略暂停，防误触
     if (_tts.state != TtsState.playing) return;
     await _tts.pause();
+    await _loadMediaVolume();
     globalAudioHandler?.notifyPaused();
     if (!mounted) return;
     setState(() {
