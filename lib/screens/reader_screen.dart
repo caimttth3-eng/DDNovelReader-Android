@@ -857,7 +857,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _pendingScrollIndex = null;
     try {
       // Move a viewport, including within sentences taller than the screen.
-      final height = MediaQuery.of(context).size.height - _chapterTopArea();
+      final height = MediaQuery.of(context).size.height - _chapterTopArea() - MediaQuery.of(context).padding.bottom - 32;
       await _pageScrollController.animateScroll(
         offset: direction * max(1.0, height - _fontSize * _lineHeight),
         duration: const Duration(milliseconds: 180), curve: Curves.easeOut,
@@ -1570,12 +1570,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
           // 正文区（不分层）：整体下移「两行半空白 + 标题行」高度，
           // 章节标题 Positioned 固定在正文区顶部，正文列表在标题下方独立滚动
           Padding(
-            padding: EdgeInsets.only(top: _chapterBarTop() + _chapterTopArea()),
+            padding: EdgeInsets.only(
+              top: _chapterBarTop() + _chapterTopArea(),
+              bottom: MediaQuery.of(context).padding.bottom + 32,
+            ),
             child: _buildTapZones(child: _buildBody()),
           ),
           // 固定章节标题：位于顶部两行半空白之后，正文滚动时保持不动
           Positioned(
-            top: MediaQuery.of(context).viewPadding.top + 12,
+            top: max(24.0, MediaQuery.of(context).viewPadding.top) + 12,
             left: 0,
             right: 0,
             child: _buildChapterHeader(),
@@ -1691,7 +1694,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   double _chapterBarTop() => 0;
 
   /// Compact header space remains stable when controls appear.
-  double _chapterTopArea() => MediaQuery.of(context).viewPadding.top + 20 + _fontSize * _lineHeight;
+  double _chapterTopArea() => max(24.0, MediaQuery.of(context).viewPadding.top) + 20 + _fontSize * _lineHeight;
 
   /// 捕获当前视口状态：首可见 item 的 index + 其在视口内的像素偏移（相对视口顶）
   /// 用于模式切换后补偿滚动位置，保证正文文字屏幕位置不变
@@ -1705,7 +1708,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
     final H = MediaQuery.of(context).size.height -
         _chapterBarTop() -
-        _chapterTopArea();
+        _chapterTopArea() - MediaQuery.of(context).padding.bottom - 32;
     return (first.index, first.itemLeadingEdge * H);
   }
 
@@ -1716,7 +1719,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (!mounted) return;
       final H = MediaQuery.of(context).size.height -
           _chapterBarTop() -
-          _chapterTopArea();
+          _chapterTopArea() - MediaQuery.of(context).padding.bottom - 32;
       if (H <= 0) return;
       final newPx = beforePx + delta;
       final align = (newPx / H).clamp(0.0, 1.0);
@@ -3504,3 +3507,4 @@ class _HighlightSheetState extends State<_HighlightSheet> {
     );
   }
 }
+
