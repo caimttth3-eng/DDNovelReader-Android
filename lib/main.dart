@@ -5,10 +5,14 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'i18n.dart';
 import 'screens/shelf_screen.dart';
 import 'services/font_manager.dart';
+import 'services/app_appearance.dart';
+import 'services/app_storage.dart';
 import 'services/tts_audio_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppAppearance.nightMode.value =
+      ReadingSettings.fromJson(await AppStorage().loadSettings()).themeIndex == 2;
   // 注册用户自选字体（FontLoader 仅进程内有效，每次启动需重新注册）
   await FontManager.registerAll();
   AppI18n.current = AppLang.detect(
@@ -38,7 +42,9 @@ class DuoduoLangduApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return ValueListenableBuilder<bool>(
+      valueListenable: AppAppearance.nightMode,
+      builder: (context, night, child) => MaterialApp(
       title: '多多朗读',
       debugShowCheckedModeBanner: false,
       locale: AppI18n.current.locale,
@@ -48,12 +54,8 @@ class DuoduoLangduApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6498B5)),
-        scaffoldBackgroundColor: const Color(0xFFF2F2F2),
-      ),
+      theme: AppAppearance.theme(night),
       home: const ShelfScreen(),
-    );
+    ));
   }
 }

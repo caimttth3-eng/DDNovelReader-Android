@@ -136,12 +136,11 @@ class _ShelfScreenState extends State<ShelfScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF2F2F2),
       body: SafeArea(
         child: Column(
           children: [
             _buildTopBar(context),
-            const Divider(height: 1, thickness: 1, color: Color(0xFFD8D8D8)),
+            const Divider(height: 1, thickness: 1),
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
@@ -165,13 +164,12 @@ class _ShelfScreenState extends State<ShelfScreen> {
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w500,
-                color: Color(0xFF333333),
               ),
             ),
           ),
           const Spacer(),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: Color(0xFF333333)),
+            icon: const Icon(Icons.more_horiz),
             onSelected: (v) {
               if (v == 'add') _addBook();
               if (v == 'about') AboutScreen.show(context);
@@ -367,7 +365,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                     total < 0
                         ? T('cacheScanning')
                         : T('cacheTotal', {'size': fmtSize(total)}),
-                    style: const TextStyle(fontSize: 13, color: Colors.black54),
+                    style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 6),
                   if (total < 0)
@@ -380,8 +378,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 24),
                       child: Center(
                         child: Text(T('cacheEmpty'),
-                            style: const TextStyle(
-                                fontSize: 13, color: Colors.black45)),
+                            style: TextStyle(
+                                fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                       ),
                     )
                   else
@@ -406,8 +404,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
                                   ),
                                 ),
                                 Text(fmtSize(bytes),
-                                    style: const TextStyle(
-                                        fontSize: 13, color: Colors.black54)),
+                                    style: TextStyle(
+                                        fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                                 TextButton(
                                   onPressed: () async {
                                     final ok = await showDialog<bool>(

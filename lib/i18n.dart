@@ -42,6 +42,15 @@ class AppI18n {
 
   static const Map<AppLang, Map<String, String>> _tables = {
     AppLang.zhHans: {
+      'back': '返回',
+      'nightMode': '夜间模式',
+      'dayMode': '日间模式',
+      'readerMenu': '阅读菜单',
+      'rotateScreen': '横竖屏切换',
+      'readerSettings': '阅读设置',
+      'previousChapter': '上一章',
+      'nextChapter': '下一章',
+
       'addBook': '添加书籍',
       'about': '关于',
       'parseFail': '书籍解析失败：{err}',
@@ -162,6 +171,15 @@ class AppI18n {
       'checkUpdateFail': '无法连接 GitHub，请检查网络后重试',
     },
     AppLang.zhHant: {
+      'back': '返回',
+      'nightMode': '夜間模式',
+      'dayMode': '日間模式',
+      'readerMenu': '閱讀選單',
+      'rotateScreen': '橫豎屏切換',
+      'readerSettings': '閱讀設定',
+      'previousChapter': '上一章',
+      'nextChapter': '下一章',
+
       'addBook': '新增書籍',
       'about': '關於',
       'parseFail': '書籍解析失敗：{err}',
@@ -282,6 +300,15 @@ class AppI18n {
       'checkUpdateFail': '無法連接 GitHub，請檢查網路後重試',
     },
     AppLang.en: {
+      'back': 'Back',
+      'nightMode': 'Night mode',
+      'dayMode': 'Day mode',
+      'readerMenu': 'Reader menu',
+      'rotateScreen': 'Rotate screen',
+      'readerSettings': 'Reading settings',
+      'previousChapter': 'Previous chapter',
+      'nextChapter': 'Next chapter',
+
       'addBook': 'Add Book',
       'about': 'About',
       'parseFail': 'Failed to parse book: {err}',
@@ -402,6 +429,15 @@ class AppI18n {
       'checkUpdateFail': "Can't reach GitHub. Check your network and try again",
     },
     AppLang.ja: {
+      'back': '戻る',
+      'nightMode': '夜間モード',
+      'dayMode': '昼間モード',
+      'readerMenu': '読書メニュー',
+      'rotateScreen': '画面回転',
+      'readerSettings': '読書設定',
+      'previousChapter': '前の章',
+      'nextChapter': '次の章',
+
       'addBook': '書籍を追加',
       'about': 'このアプリについて',
       'parseFail': '書籍の解析に失敗：{err}',
@@ -523,6 +559,15 @@ class AppI18n {
       'checkUpdateFail': 'GitHub に接続できません。ネットワークを確認してください',
     },
     AppLang.ko: {
+      'back': '뒤로',
+      'nightMode': '야간 모드',
+      'dayMode': '주간 모드',
+      'readerMenu': '읽기 메뉴',
+      'rotateScreen': '화면 회전',
+      'readerSettings': '읽기 설정',
+      'previousChapter': '이전 장',
+      'nextChapter': '다음 장',
+
       'addBook': '책 추가',
       'about': '정보',
       'parseFail': '책을 불러오지 못했습니다: {err}',

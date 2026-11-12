@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../i18n.dart';
+import '../services/app_appearance.dart';
+import '../widgets/reader_icon.dart';
 import '../widgets/reader_gestures.dart';
 import '../models/annotation.dart';
 import '../models/book.dart';
@@ -109,6 +111,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // 控制 UI 显隐
   bool _showControls = true;
+  bool _showQuickMenu = false;
+  final Map<Orientation, EdgeInsets> _stableInsets = {};
+  EdgeInsets get _readerInsets => _stableInsets.putIfAbsent(
+    MediaQuery.orientationOf(context), () => MediaQuery.viewPaddingOf(context));
+  bool get _isNight => _settings.themeIndex == 2;
+  Color get _menuColor => _isNight ? const Color(0xFF181818) : const Color(0xF2333333);
 
   // 朗读模式（全屏播放/暂停，顶栏隐藏，暂停时底部弹控制面板）
   bool _inReadingMode = false;
@@ -248,14 +256,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // 退出前确保最后一次进度写入（防抖可能未触发）
     _saveProgress();
     _sleepTimer?.cancel();
-    _exitFullscreen();
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    _volumeChannel.invokeMethod('resetScreenBrightness');
     // 恢复系统默认系统栏样式（书架页浅色背景使用深色图标）
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.dark,
+      statusBarIconBrightness: _isNight ? Brightness.light : Brightness.dark,
       systemNavigationBarColor: Colors.transparent,
-      systemNavigationBarIconBrightness: Brightness.dark,
+      systemNavigationBarIconBrightness: _isNight ? Brightness.light : Brightness.dark,
     ));
     _gestureTipTimer?.cancel();
     _tts.dispose();
@@ -314,6 +323,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Future<void> _loadSettings() async {
     final raw = await widget.storage.loadSettings();
     _settings = ReadingSettings.fromJson(raw);
+    AppAppearance.nightMode.value = _isNight;
+    _applyReaderBrightness();
+    _applySystemUi();
     await _tts.setSpeechRate(_settings.speechRate);
     if (_settings.voice.isNotEmpty) _tts.setVoice(_settings.voice);
     setState(() => _settingsLoaded = true);
@@ -846,18 +858,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _turnPage(int direction) async {
     if (_ttsLoading || _paging || _items.isEmpty) return;
-    if (!_inReadingMode) {
-      final target = (_itemIndexOf(_chapter, _para) + direction * 5).clamp(0, _items.length - 1);
-      _jumpToItem(target);
-      _updatePositionFromItem(target);
-      return;
-    }
     if (!_itemScrollController.isAttached) return;
     _paging = true;
     _pendingScrollIndex = null;
     try {
       // Move a viewport, including within sentences taller than the screen.
-      final height = MediaQuery.of(context).size.height - _chapterTopArea() - MediaQuery.of(context).padding.bottom - 32;
+      final height = MediaQuery.of(context).size.height - _chapterTopArea() - _readerInsets.bottom - 32;
       await _pageScrollController.animateScroll(
         offset: direction * max(1.0, height - _fontSize * _lineHeight),
         duration: const Duration(milliseconds: 180), curve: Curves.easeOut,
@@ -871,7 +877,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       var target = visible.first.index;
       while (target < _items.length - 1 && _items[target].isTitle) { target++; }
       _updatePositionFromItem(target);
-      _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
+      if (_inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
     } finally {
       _paging = false;
     }
@@ -1198,20 +1204,48 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// - UI 模式：edgeToEdge + 状态栏/导航条与 UI 栏同色(深暖黑)+白色图标，
   ///   系统栏与顶栏/底栏视觉融为一体，无突兀白条
   void _applySystemUi() {
-    if (_inReadingMode || !_showControls) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    } else {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-        statusBarColor: Color(0xFF333333),
-        statusBarIconBrightness: Brightness.light,
-        systemStatusBarContrastEnforced: false,
-        systemNavigationBarColor: Color(0xFF333333),
-        systemNavigationBarIconBrightness: Brightness.light,
-        systemNavigationBarContrastEnforced: false,
-        systemNavigationBarDividerColor: Colors.transparent,
-      ));
-    }
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemStatusBarContrastEnforced: false,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness: Brightness.light,
+      systemNavigationBarContrastEnforced: false,
+    ));
+  }
+
+  void _applyReaderBrightness() {
+    _volumeChannel.invokeMethod('setScreenBrightness', _settings.brightness.clamp(0.01, 1.0));
+  }
+
+  void _setTheme(int index) {
+    setState(() {
+      _settings.themeIndex = index;
+      if (index != 2) _settings.dayThemeIndex = index;
+    });
+    AppAppearance.nightMode.value = _isNight;
+    widget.storage.saveSettings(_settings.toJson());
+  }
+
+  void _toggleNight() => _setTheme(_isNight
+      ? (_settings.dayThemeIndex == 2 ? 0 : _settings.dayThemeIndex.clamp(0, _bookThemes.length - 1)) : 2);
+
+  void _toggleOrientation() {
+    final landscape = MediaQuery.orientationOf(context) == Orientation.landscape;
+    SystemChrome.setPreferredOrientations(landscape
+        ? [DeviceOrientation.portraitUp]
+        : [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+  }
+
+  void _changeChapter(int direction) {
+    if (_ttsLoading) return;
+    final chapter = _chapter + direction;
+    if (chapter < 0 || chapter >= widget.book.chapters.length) return;
+    setState(() { _chapter = chapter; _para = 0; _ttsSentence = 0; });
+    _jumpToItem(_itemIndexOf(chapter, 0));
+    if (_inReadingMode) _ttsFollowSeek(chapter, 0, 0);
+    _scheduleSave();
   }
 
   void _enterFullscreen() {
@@ -1572,13 +1606,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
           Padding(
             padding: EdgeInsets.only(
               top: _chapterBarTop() + _chapterTopArea(),
-              bottom: MediaQuery.of(context).padding.bottom + 32,
+              bottom: _readerInsets.bottom + 32,
             ),
             child: _buildTapZones(child: _buildBody()),
           ),
           // 固定章节标题：位于顶部两行半空白之后，正文滚动时保持不动
           Positioned(
-            top: max(24.0, MediaQuery.of(context).viewPadding.top) + 12,
+            top: max(24.0, _readerInsets.top) + 12,
             left: 0,
             right: 0,
             child: _buildChapterHeader(),
@@ -1601,7 +1635,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           // TTS 加载中浮层（朗读模式点击恢复播放时显示）
           if (_inReadingMode && _ttsLoading) _buildTtsLoadingOverlay(),
             // 亮度遮罩
-            _buildBrightnessOverlay(),
+            if (_showControls && _showQuickMenu) _buildQuickMenu(),
             // 假锁屏（最顶层，覆盖一切；长按 2 秒解锁）
             if (_fakeLock) _buildFakeLock(),
           ],
@@ -1645,7 +1679,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Widget _buildGestureTip() {
     return Positioned(
       left: 24, right: 24,
-      bottom: MediaQuery.of(context).padding.bottom + 100,
+      bottom: _readerInsets.bottom + 100,
       child: IgnorePointer(child: AnimatedOpacity(
         opacity: _gestureTipVisible ? 1 : 0,
         duration: const Duration(milliseconds: 500),
@@ -1660,7 +1694,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _buildReadingStatus() {
-    return Positioned(left: 16, right: 16, bottom: MediaQuery.of(context).padding.bottom + 8,
+    return Positioned(left: 16, right: 16, bottom: _readerInsets.bottom + 8,
       child: IgnorePointer(child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           StreamBuilder<int>(stream: Stream.periodic(const Duration(minutes: 1), (i) => i),
@@ -1694,7 +1728,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   double _chapterBarTop() => 0;
 
   /// Compact header space remains stable when controls appear.
-  double _chapterTopArea() => max(24.0, MediaQuery.of(context).viewPadding.top) + 20 + _fontSize * _lineHeight;
+  double _chapterTopArea() => max(24.0, _readerInsets.top) + 20 + _fontSize * _lineHeight;
 
   /// 捕获当前视口状态：首可见 item 的 index + 其在视口内的像素偏移（相对视口顶）
   /// 用于模式切换后补偿滚动位置，保证正文文字屏幕位置不变
@@ -1708,7 +1742,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
     final H = MediaQuery.of(context).size.height -
         _chapterBarTop() -
-        _chapterTopArea() - MediaQuery.of(context).padding.bottom - 32;
+        _chapterTopArea() - _readerInsets.bottom - 32;
     return (first.index, first.itemLeadingEdge * H);
   }
 
@@ -1719,7 +1753,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (!mounted) return;
       final H = MediaQuery.of(context).size.height -
           _chapterBarTop() -
-          _chapterTopArea() - MediaQuery.of(context).padding.bottom - 32;
+          _chapterTopArea() - _readerInsets.bottom - 32;
       if (H <= 0) return;
       final newPx = beforePx + delta;
       final align = (newPx / H).clamp(0.0, 1.0);
@@ -1765,9 +1799,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       scrollOffsetController: _pageScrollController,
       itemPositionsListener: _itemPositionsListener,
       // Only reading mode replaces free scrolling with sentence/page gestures.
-      physics: (_inReadingMode || _showControls)
-          ? const NeverScrollableScrollPhysics()
-          : null,
+      physics: _inReadingMode ? const NeverScrollableScrollPhysics() : null,
       // 增大缓存区：跳转后能渲染更多 item，加速精确定位
       minCacheExtent: 1500,
       // 顶部留白由 Column 的标题栏承担；底部留 120 给进度条/朗读面板
@@ -1832,7 +1864,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           left: 16,
           right: 16,
           top: 14,
-          bottom: MediaQuery.of(context).padding.bottom + 14,
+          bottom: _readerInsets.bottom + 14,
         ),
         decoration: const BoxDecoration(
           color: Color(0xEE333333),
@@ -2005,7 +2037,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       });
     }
     _volumeChannel.invokeMethod('setKeepScreenOn', false);
-    _volumeChannel.invokeMethod('resetScreenBrightness');
+    _applyReaderBrightness();
   }
 
   /// 假锁屏界面：全黑，仅中央一个锁图标 + 长按 2 秒解锁（防误触）
@@ -2145,7 +2177,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     final selected = _settings.themeIndex == i;
                     return GestureDetector(
                       onTap: () {
-                        setState(() => _settings.themeIndex = i);
+                        _setTheme(i);
                         setSheetState(() {});
                         widget.storage.saveSettings(_settings.toJson());
                       },
@@ -2477,7 +2509,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // 朗读模式点击播放/暂停，滑动切句或翻页；普通阅读保留原操作。
     final inReading = _inReadingMode;
     return ReaderGestures(
-        enabled: inReading,
+        sentenceSwipesEnabled: inReading,
         onPreviousSentence: _prevSentence,
         onNextSentence: _nextSentence,
         onPreviousPage: _pageUp,
@@ -2499,7 +2531,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 } else if (y > h * 2 / 3) {
                   _pageDown();
                 } else {
-                  setState(() => _showControls = !_showControls);
+                  setState(() { _showControls = !_showControls; _showQuickMenu = false; });
                   _applySystemUi();
                 }
               },
@@ -2508,103 +2540,83 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _buildTopBar() {
-    return Positioned(
-      top: 0,
-      left: 0,
-      right: 0,
-      child: Container(
-        decoration: const BoxDecoration(
-          color: Color(0xF2333333),
-          border: Border(
-            bottom: BorderSide(color: Color(0x33777777), width: 1.5),
-          ),
-        ),
-        padding: EdgeInsets.only(
-          top: MediaQuery.of(context).padding.top,
-          left: 4,
-          right: 4,
-          bottom: 4,
-        ),
-        child: Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white),
+    return Positioned(top: 0, left: 0, right: 0,
+      child: Material(color: _menuColor,
+        child: Padding(padding: EdgeInsets.only(top: _readerInsets.top, left: 4, right: 4, bottom: 4),
+          child: Row(children: [
+            IconButton(tooltip: T('back'), icon: const ReaderIcon(ReaderSymbol.back, color: Colors.white70),
               onPressed: () async {
                 if (_inReadingMode) await _exitReadingMode();
                 _scheduleSave();
                 if (mounted) Navigator.of(context).pop();
-              },
-            ),
+              }),
             const Spacer(),
-            IconButton(
-              icon: _ttsLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2.2, color: Colors.white))
-                  : Icon(
-                      _inReadingMode
-                          ? Icons.pause
-                          : Icons.play_arrow,
-                      color: Colors.white),
-              tooltip: T('read'),
-              onPressed: _ttsLoading ? null : _play,
-            ),
-            IconButton(
-              icon: const Icon(Icons.checkroom, color: Colors.white),
-              tooltip: T('pageTheme'),
-              onPressed: _openThemePanel,
-            ),
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: Colors.white),
-              onSelected: (v) {
-                switch (v) {
-                  case 'brightness':
-                    _openSettingsPanel('brightness');
-                    break;
-                  case 'fontsize':
-                    _openSettingsPanel('fontsize');
-                    break;
-                  case 'lineheight':
-                    _openSettingsPanel('lineheight');
-                    break;
-                  case 'rate':
-                    _openSettingsPanel('rate');
-                    break;
-                  case 'voice':
-                    _openSettingsPanel('voice');
-                    break;
-                  case 'search':
-                    _openSearch();
-                    break;
-                  case 'bookmarks':
-                    _openBookmarks();
-                    break;
-                  case 'highlights':
-                    _openHighlights();
-                    break;
-                  case 'cachebook':
-                    _openBookCache();
-                    break;
-                }
-              },
-              itemBuilder: (ctx) => [
-                PopupMenuItem(value: 'brightness', child: Text(T('brightness'))),
-                PopupMenuItem(value: 'fontsize', child: Text(T('fontSize'))),
-                PopupMenuItem(value: 'lineheight', child: Text(T('lineHeight'))),
-                PopupMenuItem(value: 'rate', child: Text(T('speed'))),
-                PopupMenuItem(value: 'voice', child: Text(T('voice'))),
-                PopupMenuItem(value: 'search', child: Text(T('searchTitle'))),
-                PopupMenuItem(value: 'bookmarks', child: Text(T('bookmark'))),
-                PopupMenuItem(value: 'highlights', child: Text(T('highlight'))),
-                PopupMenuItem(value: 'cachebook', child: Text(T('cacheBook'))),
-              ],
-            ),
-          ],
+            IconButton(tooltip: T('read'), icon: const ReaderIcon(ReaderSymbol.headphones, color: Colors.white70),
+              onPressed: _ttsLoading ? null : _play),
+            IconButton(key: const ValueKey('night-mode'), tooltip: T(_isNight ? 'dayMode' : 'nightMode'),
+              icon: ReaderIcon(_isNight ? ReaderSymbol.sun : ReaderSymbol.moon, color: Colors.white70), onPressed: _toggleNight),
+            IconButton(key: const ValueKey('reader-menu'), tooltip: T('readerMenu'),
+              icon: ReaderIcon(ReaderSymbol.more, color: _showQuickMenu ? const Color(0xFF9BC5DD) : Colors.white70),
+              onPressed: () => setState(() => _showQuickMenu = !_showQuickMenu)),
+          ]),
         ),
       ),
     );
+  }
+
+  Widget _quickAction(ReaderSymbol symbol, String label, VoidCallback action) => Expanded(
+    child: IconButton(tooltip: label, iconSize: 28,
+      icon: ReaderIcon(symbol, size: 28, color: Colors.white70),
+      onPressed: () { setState(() => _showQuickMenu = false); action(); }),
+  );
+
+  Widget _buildQuickMenu() {
+    final width = min(312.0, MediaQuery.sizeOf(context).width - 16);
+    final maxHeight = MediaQuery.sizeOf(context).height - _readerInsets.top - 72;
+    return Positioned.fill(child: Stack(children: [
+      GestureDetector(behavior: HitTestBehavior.opaque,
+        onTap: () => setState(() => _showQuickMenu = false)),
+      Positioned(top: _readerInsets.top + 56, right: 8, width: width,
+        child: Material(color: _menuColor, borderRadius: BorderRadius.circular(3),
+          child: ConstrainedBox(constraints: BoxConstraints(maxHeight: maxHeight),
+            child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(8),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Row(children: [
+                  const ReaderIcon(ReaderSymbol.bulb, color: Colors.white54),
+                  Expanded(child: Slider(key: const ValueKey('quick-brightness'),
+                    value: _settings.brightness.clamp(0.01, 1.0), min: 0.01, max: 1,
+                    onChanged: (value) {
+                      setState(() => _settings.brightness = value);
+                      _applyReaderBrightness(); widget.storage.saveSettings(_settings.toJson());
+                    })),
+                  const ReaderIcon(ReaderSymbol.bulb, color: Colors.white),
+                ]),
+                Row(children: [
+                  const ReaderIcon(ReaderSymbol.smallText, color: Colors.white70),
+                  Expanded(child: Slider(value: _settings.fontSize.clamp(14, 32), min: 14, max: 32, divisions: 18,
+                    onChanged: (value) {
+                      setState(() => _settings.fontSize = value); widget.storage.saveSettings(_settings.toJson());
+                    })),
+                  const ReaderIcon(ReaderSymbol.largeText, color: Colors.white70),
+                ]),
+                Row(children: [
+                  _quickAction(ReaderSymbol.note, T('highlight'), _openHighlights),
+                  _quickAction(ReaderSymbol.search, T('searchTitle'), _openSearch),
+                  _quickAction(ReaderSymbol.theme, T('pageTheme'), _openThemePanel),
+                  _quickAction(ReaderSymbol.play, T('read'), _play),
+                ]),
+                Row(children: [
+                  const Expanded(child: SizedBox()),
+                  _quickAction(ReaderSymbol.bookmark, T('bookmark'), _openBookmarks),
+                  _quickAction(ReaderSymbol.rotate, T('rotateScreen'), _toggleOrientation),
+                  _quickAction(ReaderSymbol.settings, T('readerSettings'), () => _openSettingsPanel('all')),
+                ]),
+              ]),
+            )),
+          ),
+        ),
+      ),
+    ]));
   }
 
   Widget _buildBottomBar() {
@@ -2623,16 +2635,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
           left: 12,
           right: 12,
           top: 6,
-          bottom: MediaQuery.of(context).padding.bottom + 6,
+          bottom: _readerInsets.bottom + 6,
         ),
         child: Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.skip_previous,
-                  size: 18, color: Colors.white),
+              icon: const ReaderIcon(ReaderSymbol.previousChapter, size: 18, color: Colors.white70),
               visualDensity: VisualDensity.compact,
-              onPressed: _isPlaying ? _prevSentence : null,
-              tooltip: T('prev'),
+              key: const ValueKey('previous-chapter'),
+              onPressed: _chapter > 0 ? () => _changeChapter(-1) : null,
+              tooltip: T('previousChapter'),
             ),
             Text(
               '${(_percent * 100).toStringAsFixed(1)}%',
@@ -2654,11 +2666,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
               style: const TextStyle(fontSize: 11, color: Color(0xFFD6D6D6)),
             ),
             IconButton(
-              icon: const Icon(Icons.skip_next,
-                  size: 18, color: Colors.white),
+              icon: const ReaderIcon(ReaderSymbol.nextChapter, size: 18, color: Colors.white70),
               visualDensity: VisualDensity.compact,
-              onPressed: _isPlaying ? _nextSentence : null,
-              tooltip: T('next'),
+              key: const ValueKey('next-chapter'),
+              onPressed: _chapter < widget.book.chapters.length - 1 ? () => _changeChapter(1) : null,
+              tooltip: T('nextChapter'),
             ),
           ],
         ),
@@ -2666,19 +2678,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  Widget _buildFloatingChapter() {
-    return Positioned(
-      left: 8,
-      top: MediaQuery.of(context).size.height / 2 - 28,
-      child: FloatingActionButton.small(
-        heroTag: 'chapterFab',
-        backgroundColor: const Color(0xDD333333),
-        foregroundColor: Colors.white,
-        onPressed: _openChapterList,
-        child: const Icon(Icons.menu_book, size: 20),
+  Widget _buildFloatingChapter() => Positioned(
+    left: 0, top: MediaQuery.sizeOf(context).height / 2 - 24,
+    child: Material(color: const Color(0xDD333333),
+      borderRadius: const BorderRadius.horizontal(right: Radius.circular(14)),
+      child: InkWell(key: const ValueKey('contents-handle'), onTap: _openChapterList,
+        borderRadius: const BorderRadius.horizontal(right: Radius.circular(14)),
+        child: Tooltip(message: T('toc'), child: const SizedBox(width: 16, height: 48,
+          child: Center(child: ReaderIcon(ReaderSymbol.contents, size: 12, color: Colors.white70)))),
       ),
-    );
-  }
+    ),
+  );
 
   Future<void> _openChapterList() async {
     final selected = await showGeneralDialog<int>(
@@ -2761,16 +2771,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  Widget _buildBrightnessOverlay() {
-    if (_settings.brightness >= 1.0) return const SizedBox.shrink();
-    final dark = (1 - _settings.brightness) * 0.7;
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: Container(color: Colors.black.withValues(alpha: dark)),
-      ),
-    );
-  }
-
   // 设置面板（由右上角菜单触发）
   /// 音色显示名：中文界面显示中文友好名，其他界面显示英文名
   static String _voiceLabel(String id) {
@@ -2800,12 +2800,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
       context: context,
       builder: (ctx) => _SettingsSheet(
         settings: _settings,
+        onCache: _openBookCache,
         onChanged: (s) {
           setState(() => _settings = s);
           _tts.setSpeechRate(s.speechRate);
           if (s.voice.isNotEmpty) _tts.setVoice(s.voice);
           // 变速/切音色后缓存坐标（voice/rate 段）变化，重建朗读侧缓存
           _refreshTtsCache();
+          _applyReaderBrightness();
           widget.storage.saveSettings(s.toJson());
         },
         onVoiceLoad: () async => sortedEdgeVoices()
@@ -2900,10 +2902,12 @@ class _ChapterSheetState extends State<_ChapterSheet> {
 /// 设置底部弹层
 class _SettingsSheet extends StatefulWidget {
   final ReadingSettings settings;
+  final VoidCallback onCache;
   final ValueChanged<ReadingSettings> onChanged;
   final Future<List<dynamic>> Function() onVoiceLoad;
   const _SettingsSheet({
     required this.settings,
+    required this.onCache,
     required this.onChanged,
     required this.onVoiceLoad,
   });
@@ -3057,10 +3061,12 @@ class _SettingsSheetState extends State<_SettingsSheet> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              ListTile(leading: const Icon(Icons.storage_outlined), title: Text(T('cacheBook')),
+                onTap: () { Navigator.pop(context); widget.onCache(); }),
               // 亮度
               _row(T('brightness'), Icons.brightness_6, Slider(
-                value: _s.brightness,
-                min: 0.3,
+                value: _s.brightness.clamp(0.01, 1.0),
+                min: 0.01,
                 max: 1.0,
                 onChanged: (v) => setState(() {
                   _s.brightness = v;
@@ -3507,4 +3513,3 @@ class _HighlightSheetState extends State<_HighlightSheet> {
     );
   }
 }
-

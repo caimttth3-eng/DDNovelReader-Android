@@ -21,6 +21,29 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('normal reading supports horizontal pages and vertical scrolling', (tester) async {
+    final actions = <String>[];
+    final controller = ScrollController();
+    await tester.pumpWidget(MaterialApp(home: ReaderGestures(
+      sentenceSwipesEnabled: false,
+      onPreviousSentence: () => actions.add('sentence'), onNextSentence: () => actions.add('sentence'),
+      onPreviousPage: () => actions.add('previous'), onNextPage: () => actions.add('next'),
+      child: ListView.builder(controller: controller, itemCount: 100,
+        itemBuilder: (_, i) => SizedBox(height: 80, child: Text('$i'))),
+    )));
+    await tester.drag(find.byType(ListView), const Offset(-200, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView), const Offset(200, 0));
+    await tester.pumpAndSettle();
+    expect(actions, ['next', 'previous']);
+    await tester.drag(find.byType(ListView), const Offset(0, -200));
+    await tester.pumpAndSettle();
+    expect(actions, ['next', 'previous']);
+    expect(controller.offset, greaterThan(0));
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
   testWidgets('long presses and child buttons remain accessible', (tester) async {
     var presses = 0;
     var taps = 0;

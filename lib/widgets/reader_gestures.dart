@@ -12,6 +12,7 @@ class ReaderGestures extends StatefulWidget {
     required this.onNextPage,
     this.onTapUp,
     this.enabled = true,
+    this.sentenceSwipesEnabled = true,
   });
 
   final Widget child;
@@ -21,6 +22,7 @@ class ReaderGestures extends StatefulWidget {
   final VoidCallback onNextPage;
   final GestureTapUpCallback? onTapUp;
   final bool enabled;
+  final bool sentenceSwipesEnabled;
 
   @override
   State<ReaderGestures> createState() => _ReaderGesturesState();
@@ -54,10 +56,14 @@ class _ReaderGesturesState extends State<ReaderGestures> {
   Widget build(BuildContext context) => GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTapUp: widget.onTapUp,
-        onPanDown: widget.enabled ? (_) => _distance = Offset.zero : null,
-        onPanUpdate: widget.enabled ? (details) => _distance += details.delta : null,
-        onPanEnd: widget.enabled ? _finish : null,
-        onPanCancel: widget.enabled ? () => _distance = Offset.zero : null,
+        onPanDown: widget.enabled && widget.sentenceSwipesEnabled ? (_) => _distance = Offset.zero : null,
+        onPanUpdate: widget.enabled && widget.sentenceSwipesEnabled ? (details) => _distance += details.delta : null,
+        onPanEnd: widget.enabled && widget.sentenceSwipesEnabled ? _finish : null,
+        onPanCancel: widget.enabled && widget.sentenceSwipesEnabled ? () => _distance = Offset.zero : null,
+        onHorizontalDragDown: widget.enabled && !widget.sentenceSwipesEnabled ? (_) => _distance = Offset.zero : null,
+        onHorizontalDragUpdate: widget.enabled && !widget.sentenceSwipesEnabled ? (details) => _distance += details.delta : null,
+        onHorizontalDragEnd: widget.enabled && !widget.sentenceSwipesEnabled ? _finish : null,
+        onHorizontalDragCancel: widget.enabled && !widget.sentenceSwipesEnabled ? () => _distance = Offset.zero : null,
         child: widget.child,
       );
 }
