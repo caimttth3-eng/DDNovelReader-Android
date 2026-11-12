@@ -13,6 +13,9 @@ class MainActivity : AudioServiceActivity() {
         if (!flutterEngine.plugins.has(SystemSpeechPlugin::class.java)) {
             flutterEngine.plugins.add(SystemSpeechPlugin())
         }
+        if (!flutterEngine.plugins.has(NotificationPermissionPlugin::class.java)) {
+            flutterEngine.plugins.add(NotificationPermissionPlugin())
+        }
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         val logChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.ddnovelreader/debug_log")
         logChannel.setMethodCallHandler { call, _ ->

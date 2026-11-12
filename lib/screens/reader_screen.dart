@@ -26,6 +26,7 @@ import '../services/book_cache_task.dart';
 import '../services/edge_tts.dart';
 import '../services/font_manager.dart';
 import '../services/tts_audio_handler.dart';
+import '../services/playback_notifications.dart';
 import '../services/tts_cache_store.dart';
 import '../services/tts_reader.dart';
 import '../services/system_tts.dart';
@@ -105,6 +106,13 @@ class _Item {
       {this.isParaStart = false})
       : isTitle = false,
         title = '';
+}
+
+class _PlaybackPermissionGate {
+  final foreground = Completer<void>();
+  bool cancelled = false;
+  void resume() { if (!foreground.isCompleted) foreground.complete(); }
+  void cancel() { cancelled = true; resume(); }
 }
 
 class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
@@ -190,6 +198,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   bool _followingWord = false;
   bool _isPlaying = false;
   int _playbackGeneration = 0;
+  final PlaybackNotifications _playbackNotifications = PlaybackNotifications();
+  PlaybackNotificationStatus? _notificationStatus;
+  bool _notificationSettingsPending = false;
+  _PlaybackPermissionGate? _permissionGate;
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
   int _ttsChapter = 0;
   int? _mediaChapter;
@@ -309,6 +321,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void dispose() {
+    _permissionGate?.cancel(); _permissionGate = null;
     _volumePollTimer?.cancel(); _volumePollTimer = null; _volumePollEpoch++;
     WidgetsBinding.instance.removeObserver(this);
     if (_autoActive) _volumeChannel.invokeMethod('setKeepScreenOn', false);
@@ -1346,9 +1359,27 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void _stopTtsLoading() { if (mounted && _ttsLoading) setState(() => _ttsLoading = false); }
 
   /// 进入朗读模式：全屏隐藏UI，开始TTS播放
-  Future<void> _play() async {
+  Future<void> _play({bool requestNotificationPermission = false}) async {
     if (_inReadingMode) return;
+    if (requestNotificationPermission && !_volumeForeground) return;
     final generation = ++_playbackGeneration;
+    if (requestNotificationPermission) {
+      final gate = _PlaybackPermissionGate();
+      _permissionGate?.cancel(); _permissionGate = gate;
+      try {
+        final result = await _checkPlaybackNotificationPermission();
+        if (!mounted || generation != _playbackGeneration || gate.cancelled) return;
+        if (_volumeForeground) gate.resume();
+        // Android may deliver the permission result before window focus and
+        // resumed. Wait for that event, but never revive a click after Home,
+        // actual screen-off, leaving this reader, or an explicit stop.
+        await gate.foreground.future;
+        if (!mounted || generation != _playbackGeneration || gate.cancelled || !_volumeForeground) return;
+        if (result.requested) _showNotificationStatus(result.status);
+      } finally {
+        if (identical(_permissionGate, gate)) _permissionGate = null;
+      }
+    }
     if (_autoActive) _stopAutoPage();
     _clearTtsPageBoundary();
     // 朗读起点 = 视口当前显示的位置（进度 = 滑到哪读到哪）
@@ -1466,6 +1497,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 彻底退出朗读模式：停止TTS，恢复正常阅读页UI
   Future<void> _exitReadingMode() async {
     final generation = ++_playbackGeneration;
+    _permissionGate?.cancel();
     _sleepTimer?.cancel();
     _sleepTimer = null;
     _sleepMinutes = 0;
@@ -1546,6 +1578,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _volumeForeground = state == AppLifecycleState.resumed;
     _syncMediaVolumePolling();
+    if (state == AppLifecycleState.resumed) _permissionGate?.resume();
+    if (state == AppLifecycleState.hidden || state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      _permissionGate?.cancel();
+    }
+    if (state == AppLifecycleState.resumed) {
+      final afterSettings = _notificationSettingsPending;
+      _notificationSettingsPending = false;
+      _refreshPlaybackNotifications(afterSettings: afterSettings);
+    }
     if (state != AppLifecycleState.resumed) {
       _saveDebounce?.cancel(); _saveProgress();
       if (_autoActive && !_autoPaused) _pauseAutoPage();
@@ -1555,6 +1596,53 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (!_isPlaying || _showReadingPanel) setState(() { _isPlaying = true; _showReadingPanel = false; });
       _onTtsSentenceChanged(_tts.currentIndex);
     }
+  }
+
+  Future<PlaybackNotificationCheck> _checkPlaybackNotificationPermission() async {
+    final result = await _playbackNotifications.checkForPlayback(foregroundUserAction: true);
+    if (mounted) setState(() => _notificationStatus = result.status);
+    return result;
+  }
+
+  void _showNotificationStatus(PlaybackNotificationStatus status) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(
+      content: Text(T(!status.supported ? 'playbackNotificationsUnavailable' : status.enabled
+        ? 'playbackNotificationsEnabled' : 'playbackNotificationsDisabled')),
+      action: status.supported && !status.enabled
+        ? SnackBarAction(label: T('notificationSettings'), onPressed: _openNotificationSettings) : null));
+  }
+
+  Future<void> _refreshPlaybackNotifications({bool afterSettings = false}) async {
+    final status = await _playbackNotifications.getStatus();
+    if (!mounted) return;
+    setState(() => _notificationStatus = status);
+    if (afterSettings) _showNotificationStatus(status);
+  }
+
+  Future<void> _openNotificationSettings() async {
+    _notificationSettingsPending = true;
+    final opened = await _playbackNotifications.openSettings();
+    if (!opened) {
+      _notificationSettingsPending = false;
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(T('notificationSettingsFailed'))));
+    }
+  }
+
+  Future<void> _openPlaybackNotifications() async {
+    final status = await _playbackNotifications.getStatus();
+    if (!mounted) return;
+    setState(() => _notificationStatus = status);
+    await showDialog<void>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(T('playbackNotifications')),
+      content: Text(T(!status.supported ? 'playbackNotificationsUnavailable' : status.enabled
+        ? 'playbackNotificationsEnabled' : 'playbackNotificationsDisabled')),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(T('cancel'))),
+        if (status.supported) TextButton(onPressed: () {
+          Navigator.pop(ctx); _openNotificationSettings();
+        }, child: Text(T('notificationSettings')))],
+    ));
   }
 
   Future<void> _openAutoPage() async {
@@ -2470,6 +2558,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                     label: T('voice'),
                     onTap: _openVoiceSelector,
                   ),
+                  _panelButton(key: const ValueKey('playback-notifications'),
+                    icon: _notificationStatus?.enabled == true ? Icons.notifications_active_outlined : Icons.notifications_none,
+                    label: T('playbackNotifications'), onTap: _openPlaybackNotifications,
+                    active: _notificationStatus?.enabled == true),
                   _panelButton(
                     icon: Icons.power_settings_new,
                     label: T('exit'),
@@ -2484,12 +2576,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Widget _panelButton({
+    Key? key,
     required IconData icon,
     required String label,
     required VoidCallback onTap,
     bool active = false,
   }) {
     return GestureDetector(
+      key: key,
       onTap: onTap,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3021,7 +3115,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               }),
             const Spacer(),
             IconButton(tooltip: T('read'), icon: const ReaderIcon(ReaderSymbol.headphones, color: Colors.white70),
-              onPressed: _ttsLoading ? null : _play),
+              onPressed: _ttsLoading ? null : () => _play(requestNotificationPermission: true)),
             IconButton(key: const ValueKey('night-mode'), tooltip: T(_isNight ? 'dayMode' : 'nightMode'),
               icon: ReaderIcon(_isNight ? ReaderSymbol.sun : ReaderSymbol.moon, color: Colors.white70), onPressed: _toggleNight),
             IconButton(key: const ValueKey('reader-menu'), tooltip: T('readerMenu'),

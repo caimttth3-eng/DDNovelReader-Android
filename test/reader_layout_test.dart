@@ -16,6 +16,7 @@ import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
 import 'package:duoduo_langdu/services/tts_audio_handler.dart';
+import 'package:duoduo_langdu/services/playback_notifications.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
 import 'package:duoduo_langdu/services/annotation_store.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -33,6 +34,8 @@ void main() {
       (call) async { volumeCalls.add(call); return ['getMediaVolume', 'getSystemBrightness'].contains(call.method) ? 0.5 : null; });
     messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async { platformCalls.add(call); return null; });
     messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/debug_log'), (_) async => null);
+    messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (_) async =>
+      {'supported': false, 'enabled': false, 'canRequest': false, 'asked': false});
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global/events'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers'), (call) async {
@@ -805,6 +808,127 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     await handler.playbackState.close(); await handler.mediaItem.close();
   });
+
+  for (final grant in [false, true]) {
+    testWidgets('foreground playback handles notification permission grant=$grant and settings refresh', (tester) async {
+      tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+      var enabled = false, asked = false, requests = 0, settingsOpened = 0;
+      Map<String, bool> status() => {'supported': true, 'enabled': enabled, 'canRequest': !asked, 'asked': asked};
+      messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (call) async {
+        if (call.method == 'requestNotificationPermission') { requests++; asked = true; enabled = grant; }
+        if (call.method == 'openNotificationSettings') { settingsOpened++; return true; }
+        return status();
+      });
+      final speech = _TestSpeech();
+      await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('notifications-$grant'),
+        storage: AppStorage(), ttsReader: speech)));
+      await tester.pumpAndSettle();
+      expect(requests, 0, reason: 'Opening a book must not prompt without a playback gesture');
+      await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+      expect(requests, 1); expect(speech.state, TtsState.playing);
+      expect(speech.startCalls, 1, reason: 'Denying notification permission must not block reading');
+      expect(find.text(grant ? '播放通知已开启' : '播放通知未开启，仍可继续朗读。可在系统设置中开启。'), findsOneWidget);
+      ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('playback-notifications'))); await tester.pumpAndSettle();
+      final dialog = find.byType(AlertDialog);
+      expect(find.descendant(of: dialog, matching: find.text(grant ? '播放通知已开启' :
+        '播放通知未开启，仍可继续朗读。可在系统设置中开启。')), findsOneWidget);
+      await tester.tap(find.descendant(of: dialog, matching: find.text('打开设置'))); await tester.pumpAndSettle();
+      expect(settingsOpened, 1);
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+      enabled = true;
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+      final statusIcon = tester.widget<Icon>(find.descendant(
+        of: find.byKey(const ValueKey('playback-notifications')), matching: find.byType(Icon)));
+      expect(statusIcon.icon, Icons.notifications_active_outlined,
+        reason: 'Returning from system settings refreshes the current status');
+      expect(requests, 1);
+      ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('退出')); await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+      expect(requests, 1, reason: 'Restarting playback must not repeat the permission prompt');
+      await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    });
+  }
+
+  testWidgets('media playback does not request notification permission', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    var requests = 0;
+    messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (call) async {
+      if (call.method == 'requestNotificationPermission') requests++;
+      return {'supported': true, 'enabled': false, 'canRequest': true, 'asked': false};
+    });
+    final handler = TtsAudioHandler(), previousHandler = globalAudioHandler;
+    globalAudioHandler = handler;
+    addTearDown(() { globalAudioHandler = previousHandler; });
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('media-notification-permission'),
+      storage: AppStorage(), ttsReader: speech)));
+    await tester.pumpAndSettle();
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+    await handler.play(); await tester.pumpAndSettle();
+    expect(speech.startCalls, 1); expect(requests, 0);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+    expect(requests, 0);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    await handler.playbackState.close(); await handler.mediaItem.close();
+  });
+
+  testWidgets('permission result delivered while inactive waits for resumed before starting once', (tester) async {
+    final permission = Completer<Map<String, bool>>();
+    var asked = false;
+    messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (call) async {
+      if (call.method == 'requestNotificationPermission') { asked = true; return permission.future; }
+      return {'supported': true, 'enabled': asked && permission.isCompleted, 'canRequest': !asked, 'asked': asked};
+    });
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('inactive-permission-result'),
+      storage: AppStorage(), ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pump();
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+    permission.complete({'supported': true, 'enabled': true, 'canRequest': false, 'asked': true});
+    await tester.pump();
+    expect(speech.startCalls, 0, reason: 'Permission result alone must not play before foreground resumes');
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+    expect(speech.startCalls, 1); expect(speech.state, TtsState.playing);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+    expect(speech.startCalls, 1, reason: 'Later foreground events only refresh current playback');
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  for (final leaveReader in [false, true]) {
+    testWidgets('permission completion after leaving foreground reader=$leaveReader does not start speech', (tester) async {
+      final permission = Completer<Map<String, bool>>();
+      messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (call) async {
+        if (call.method == 'requestNotificationPermission') return permission.future;
+        return {'supported': true, 'enabled': false, 'canRequest': true, 'asked': false};
+      });
+      final speech = _TestSpeech();
+      await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('leave-permission-$leaveReader'),
+        storage: AppStorage(), ttsReader: speech)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('朗读')); await tester.pump();
+      if (leaveReader) {
+        await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+      } else {
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden); await tester.pump();
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.paused); await tester.pump();
+      }
+      permission.complete({'supported': true, 'enabled': true, 'canRequest': false, 'asked': true});
+      await tester.pump();
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+      expect(speech.startCalls, 0); expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    });
+  }
 
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
