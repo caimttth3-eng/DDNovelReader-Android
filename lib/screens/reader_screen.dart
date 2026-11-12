@@ -1069,9 +1069,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       moved = visible.first.index != old.first.index ||
           (visible.first.itemLeadingEdge - old.first.itemLeadingEdge).abs() > 0.002;
       if (!moved) return false;
-      var target = visible.first.index;
-      while (target < _items.length - 1 && _items[target].isTitle) { target++; }
-      _updatePositionFromItem(target);
+      var targetItem = visible.first.index;
+      while (targetItem < _items.length - 1 && _items[targetItem].isTitle) { targetItem++; }
+      _updatePositionFromItem(targetItem);
       _pageAnimation.value = 0;
       setState(() => _pageReady = true);
       await _pageAnimation.forward().orCancel;

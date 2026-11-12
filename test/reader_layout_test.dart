@@ -473,6 +473,89 @@ void main() {
         image.dispose();
       });
     }
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    final volume = find.byKey(const ValueKey('reading-volume-slider'));
+    final speed = find.byKey(const ValueKey('reading-rate-slider'));
+    expect(tester.getRect(volume).width, closeTo(tester.getRect(speed).width, 0.1));
+    expect(tester.getRect(volume).left, closeTo(tester.getRect(speed).left, 0.1));
+    expect(tester.getCenter(speed).dy, closeTo(tester.getCenter(find.byKey(const ValueKey('reading-rate-minus'))).dy, 0.1));
+    expect(tester.getCenter(speed).dy, closeTo(tester.getCenter(find.byKey(const ValueKey('reading-rate-plus'))).dy, 0.1));
+    tester.widget<Slider>(speed).onChanged!(2.4); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['speechRate'], 2.4);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    final nextSpeech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('rate-restored'), storage: storage, ttsReader: nextSpeech)));
+    await tester.pumpAndSettle();
+    expect(nextSpeech.speechRate, 2.4);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('paging shows complete rows and optional overlap repeats exactly one boundary row', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('whole-lines'), storage: AppStorage())));
+    await tester.pumpAndSettle();
+    final list = find.byKey(const ValueKey('reader-body'));
+    List<(String,double,double)> lines({bool hidden = false}) {
+      final bounds = tester.getRect(list);
+      final clip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(bounds.size);
+      final result = <(String,double,double)>[];
+      for (final element in find.descendant(of: list, matching: find.byType(RichText)).evaluate()) {
+        final render = element.findRenderObject();
+        if (render is! RenderParagraph || !render.hasSize) continue;
+        final origin = render.localToGlobal(Offset.zero);
+        final text = render.text.toPlainText();
+        final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
+          boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+        final seen = <int>{};
+        for (final box in boxes) {
+          if (box.right - box.left < 0.01 || box.bottom - box.top < 2) continue;
+          final start = render.getPositionForOffset(Offset(-10000,(box.top+box.bottom)/2)).offset;
+          if (!seen.add(start)) continue;
+          final end = render.getPositionForOffset(Offset(10000,(box.top+box.bottom)/2)).offset;
+          final top = origin.dy + box.top, bottom = origin.dy + box.bottom;
+          if (top < bounds.top - 0.5 || (!hidden && bottom > bounds.top + clip.bottom + 0.5)) continue;
+          result.add((text.substring(start,end).replaceAll('\u200B','').replaceAll('\uFFFC','').trim(),top,bottom));
+        }
+      }
+      result.sort((a,b)=>a.$2.compareTo(b.$2)); return result;
+    }
+    final before = lines(); expect(before, isNotEmpty);
+    final all = lines(hidden: true);
+    final next = all.firstWhere((r)=>r.$2 >= before.last.$3 - 0.5).$1;
+    final viewport = tester.getRect(list);
+    final clip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(viewport.size);
+    expect(before.last.$3, closeTo(viewport.top+clip.bottom, 0.5));
+    await tester.tapAt(const Offset(360,360)); await tester.pumpAndSettle();
+    expect(lines().first.$1, next, reason: 'Default paging starts with the next complete line');
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    final overlap = find.byKey(const ValueKey('retain-page-line'));
+    expect(tester.widget<SwitchListTile>(overlap).value, isFalse);
+    tester.widget<SwitchListTile>(overlap).onChanged!(true); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(20,120)); await tester.pumpAndSettle();
+    final retained = lines().last.$1;
+    await tester.tapAt(const Offset(360,360)); await tester.pumpAndSettle();
+    expect(lines().first.$1, retained);
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-mode'))).onChanged!('scroll');
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(overlap).onChanged, isNull);
+    expect(tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(tester.getSize(list)).height, tester.getSize(list).height);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('slow initial speech does not produce an unrelated five-second network error', (tester) async {
+    final speech = _TestSpeech()..delay = const Duration(seconds: 7);
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('slow-speech'), storage: AppStorage(), ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pump();
+    await tester.pump(const Duration(seconds: 6));
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+    await tester.pump(const Duration(seconds: 2)); await tester.pumpAndSettle();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
@@ -537,6 +620,7 @@ void main() {
 }
 
 class _TestSpeech extends TtsReader {
+  Duration delay = Duration.zero;
   TtsState _status = TtsState.idle;
   int startedAt = -1;
   @override
@@ -544,6 +628,7 @@ class _TestSpeech extends TtsReader {
   @override
   Future<void> start(List<String> sentences, {List<int>? offsets, int chapterIndex = 0, int from = 0}) async {
     startedAt = from; _status = TtsState.playing; onSentenceChanged?.call(from);
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
   }
   @override
   Future<void> pause() async { _status = TtsState.paused; }

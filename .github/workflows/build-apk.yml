@@ -42,6 +42,7 @@ jobs:
           path: build/ui-previews/*.png
           if-no-files-found: warn
       - name: Probe online voice service
+        if: always()
         continue-on-error: true
         timeout-minutes: 2
         run: DD_READER_LIVE_TTS=1 flutter test test/edge_live_test.dart --reporter expanded
