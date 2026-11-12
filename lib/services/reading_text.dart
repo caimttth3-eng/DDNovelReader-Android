@@ -44,7 +44,7 @@ class ReadingText {
     return book;
   }
 
-  static final _link = RegExp(r'(?:https?://|www\.)[^\s<>“”]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', caseSensitive: false);
+  static final _link = RegExp(r'(?:https?://|www\.)[A-Za-z0-9][A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%+-]*|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', caseSensitive: false);
   static final _advert = RegExp(r'^(?:[【\[（(].*?[】\]）)]\s*)?(?:请?访问本站|请?记住本站|本书(?:由|来自)|更多(?:精彩|好书|小说)|(?:请|欢迎)?下载.{0,16}(?:APP|客户端)|(?:请|欢迎)?加入.{0,16}(?:群|QQ群)|(?:手机|电脑)访问).{0,160}$', caseSensitive: false);
   static final _author = RegExp(r'^(?:[【\[（(].*?[】\]）)]\s*)?(?:PS[：:]|P\.S\.|作者(?:有话说|的话)[：:]|(?:求|跪求|请大家).{0,12}(?:月票|推荐票|收藏|订阅|打赏)|本章完|未完待续).{0,160}$', caseSensitive: false);
 

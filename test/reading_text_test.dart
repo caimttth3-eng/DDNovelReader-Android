@@ -59,6 +59,8 @@ void main() {
     expect(format(text, filter: 'extra').chapters.first.paragraphs.map((p) => p.display).join(), isNot(contains('求月票')));
     expect(original.chapters.first.paragraphs.single.display, text);
     expect(ReadingText.fingerprint(filtered), isNot(ReadingText.fingerprint(untouched)), reason: 'Changed TTS text must not reuse old coordinate-only audio');
+    expect(format('链接https://example.com。然后出发。', filter: 'links').chapters.first.paragraphs.single.display,
+      contains('。然后出发。'), reason: 'URL filtering must not consume Chinese story text after the address');
   });
 
   test('parser preserves physical lines and original indentation for switches', () async {

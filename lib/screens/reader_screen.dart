@@ -44,6 +44,8 @@ class ReaderScreen extends StatefulWidget {
   final AppStorage storage;
   final BookProgress? initialProgress;
   final Future<void> Function(BookProgress p)? onProgressChanged;
+  @visibleForTesting
+  final TtsReader? ttsReader;
 
   const ReaderScreen({
     super.key,
@@ -51,6 +53,7 @@ class ReaderScreen extends StatefulWidget {
     required this.storage,
     this.initialProgress,
     this.onProgressChanged,
+    this.ttsReader,
   });
 
   @override
@@ -215,7 +218,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       ..addStatusListener((status) {
         if (status == AnimationStatus.completed && _autoActive && !_autoPaused) _advanceAutoPage();
       });
-    _tts = TtsReader();
+    _tts = widget.ttsReader ?? TtsReader();
     _tts.onSentenceChanged = _onTtsSentenceChanged;
     _tts.onCompleted = _onTtsCompleted;
     _tts.onError = _onTtsError;
@@ -294,6 +297,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     // 退出前确保最后一次进度写入（防抖可能未触发）
     _saveProgress();
     _sleepTimer?.cancel();
+    _ttsLoadingTimer?.cancel();
+    _lockTimer?.cancel();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     _volumeChannel.invokeMethod('resetScreenBrightness');
     // 恢复系统默认系统栏样式（书架页浅色背景使用深色图标）
@@ -826,9 +831,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     setState(() {
       _chapter = selected.chapterIndex;
       _para = selected.paragraphIndex;
+      _ttsSentence = selected.sentenceIndex;
     });
-    _jumpToItem(_itemIndexOf(selected.chapterIndex, selected.paragraphIndex,
-        selected.sentenceIndex));
+    _followSentence(selected.chapterIndex, selected.paragraphIndex, selected.sentenceIndex);
+    if (_inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
     _scheduleSave();
   }
 
@@ -852,9 +858,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     setState(() {
       _chapter = selected.chapterIndex;
       _para = selected.paragraphIndex;
+      _ttsSentence = selected.sentenceIndex;
     });
-    _jumpToItem(_itemIndexOf(selected.chapterIndex, selected.paragraphIndex,
-        selected.sentenceIndex));
+    _followSentence(selected.chapterIndex, selected.paragraphIndex, selected.sentenceIndex);
+    if (_inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
     _scheduleSave();
   }
 
@@ -974,7 +981,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return false;
       final visible = _visibleItems();
-      if (visible.isEmpty) return false;
+      if (visible.isEmpty) {
+        await _positionViewport(old.first.index, old.first.itemLeadingEdge);
+        return false;
+      }
       moved = visible.first.index != old.first.index ||
           (visible.first.itemLeadingEdge - old.first.itemLeadingEdge).abs() > 0.002;
       if (!moved) return false;
@@ -1050,13 +1060,16 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void _updatePositionFromItem(int index) {
     final it = _items[index];
     if (it.isTitle) return;
+    final visible = _visibleItems().where((p) => p.index == index);
+    final offset = visible.isEmpty ? 0 : _visibleOffset(visible.first);
+    final sentence = ReadingText.sentenceAt(_book.chapters[it.chapterIndex].paragraphs[it.paragraphIndex], offset);
     if (it.chapterIndex != _chapter ||
         it.paragraphIndex != _para ||
-        it.sentenceIndex != _ttsSentence) {
+        sentence != _ttsSentence) {
       setState(() {
         _chapter = it.chapterIndex;
         _para = it.paragraphIndex;
-        _ttsSentence = it.sentenceIndex;
+        _ttsSentence = sentence;
       });
       _scheduleSave();
     }
@@ -1099,13 +1112,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       }
       return;
     }
+    final sentence = ReadingText.sentenceAt(_book.chapters[it.chapterIndex].paragraphs[it.paragraphIndex], _visibleOffset(top));
     if (it.chapterIndex != _chapter ||
         it.paragraphIndex != _para ||
-        it.sentenceIndex != _ttsSentence) {
+        sentence != _ttsSentence) {
       setState(() {
         _chapter = it.chapterIndex;
         _para = it.paragraphIndex;
-        _ttsSentence = it.sentenceIndex;
+        _ttsSentence = sentence;
       });
       _scheduleSave();
     }
@@ -1142,7 +1156,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
   TtsCacheStore _currentCacheStore() =>
-      TtsCacheStore('${_book.id}-text-$_cacheFingerprint', _effectiveVoice, _settings.speechRate);
+      TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate, textFingerprint: _cacheFingerprint);
+
+  String get _cacheTaskKey => '${_book.id}/$_cacheFingerprint/$_effectiveVoice/${_settings.speechRate.toStringAsFixed(2)}';
 
   /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
   void _refreshTtsCache() {
@@ -2553,8 +2569,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 全书语音缓存管理：任务控制（开始/暂停/继续/取消）+ 缓存占用 + 清除
   Future<void> _openBookCache() async {
     final store = _currentCacheStore();
-    final task = activeBookCaches['${_book.id}-$_cacheFingerprint'] ??
-        (activeBookCaches['${_book.id}-$_cacheFingerprint'] = BookCacheTask(
+    final task = activeBookCaches[_cacheTaskKey] ??
+        (activeBookCaches[_cacheTaskKey] = BookCacheTask(
               book: _book,
               bookId: _book.id,
               store: store,
@@ -2715,7 +2731,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                                     );
                                     if (ok != true) return;
                                     task.cancel();
-                                    activeBookCaches.remove('${_book.id}-$_cacheFingerprint');
+                                    activeBookCaches.remove(_cacheTaskKey);
                                     await store.clear();
                                     if (ctx.mounted) {
                                       setSheetState(() => sizeBytes = 0);

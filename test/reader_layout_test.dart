@@ -13,6 +13,7 @@ import 'package:duoduo_langdu/screens/reader_screen.dart';
 import 'package:duoduo_langdu/screens/shelf_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
+import 'package:duoduo_langdu/services/tts_reader.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
@@ -264,6 +265,27 @@ void main() {
     expect(Theme.of(tester.element(find.byType(Slider).last)).brightness, Brightness.dark);
     await capture('reader-settings-night');
     expect(find.byWidgetPredicate((w) => w is DropdownButton<String> && w.value == 'zh-CN-XiaoxiaoNeural'), findsOneWidget);
+    final correction = find.byKey(const ValueKey('text-correction'));
+    tester.widget<SwitchListTile>(correction).onChanged!(false);
+    await tester.pumpAndSettle();
+    expect((await AppStorage().loadSettings())['textCorrection'], isFalse);
+    tester.widget<SwitchListTile>(correction).onChanged!(true);
+    await tester.pumpAndSettle();
+    final indent = find.byKey(const ValueKey('first-line-indent'));
+    tester.widget<SwitchListTile>(indent).onChanged!(false); await tester.pumpAndSettle();
+    expect((await AppStorage().loadSettings())['firstLineIndent'], isFalse);
+    tester.widget<SwitchListTile>(indent).onChanged!(true); await tester.pumpAndSettle();
+    final filter = find.byKey(const ValueKey('information-filter'));
+    expect(tester.widget<SwitchListTile>(filter).value, isFalse);
+    tester.widget<SwitchListTile>(filter).onChanged!(true); await tester.pumpAndSettle();
+    expect((await AppStorage().loadSettings())['informationFilterLevel'], 'none', reason: 'The user chooses a level');
+    final radios = find.byType(RadioListTile<String>);
+    expect(radios, findsNWidgets(3));
+    tester.widget<RadioListTile<String>>(radios.first).onChanged!('links'); await tester.pumpAndSettle();
+    expect((await AppStorage().loadSettings())['informationFilterLevel'], 'links');
+    await tester.ensureVisible(filter); await tester.pumpAndSettle();
+    await capture('reader-text-options');
+    tester.widget<SwitchListTile>(filter).onChanged!(false); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(20, 120));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu')));
@@ -378,13 +400,14 @@ void main() {
     expect(firstIndex() > initial || after < 0, isTrue);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
-    settings.pageTurnMode = 'scroll'; await storage.saveSettings(settings.toJson());
-    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('scroll'), storage: storage)));
+    settings.pageTurnMode = 'scroll'; settings.fontSize = 20; await storage.saveSettings(settings.toJson());
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('scroll'), storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle();
     expect(tester.widget<ScrollablePositionedList>(list).physics, isA<ClampingScrollPhysics>());
-    for (var i = 0; i < 12; i++) { await tester.drag(list, const Offset(0, -1000)); await tester.pumpAndSettle(); }
+    for (var i = 0; i < 40; i++) { await tester.drag(list, const Offset(0, -700)); await tester.pumpAndSettle(); }
     final scrollIndex = firstIndex();
-    expect(scrollIndex, greaterThan(5));
+    expect(scrollIndex, greaterThan(60));
     await tester.drag(list, const Offset(-220, 0)); await tester.pumpAndSettle();
     expect(firstIndex(), scrollIndex, reason: 'Scroll mode ignores horizontal swipes');
     // Enter speech mode far from the list's initial anchor. Do not depend on
@@ -397,7 +420,23 @@ void main() {
     expect(tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
       .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1), isNotEmpty);
     expect(before, isNotEmpty); expect(tester.takeException(), isNull);
+    expect(speech.startedAt, greaterThan(0), reason: 'Speech must start at the visible sentence rather than the chapter start');
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+}
+
+class _TestSpeech extends TtsReader {
+  TtsState _status = TtsState.idle;
+  int startedAt = -1;
+  @override
+  TtsState get state => _status;
+  @override
+  Future<void> start(List<String> sentences, {List<int>? offsets, int chapterIndex = 0, int from = 0}) async {
+    startedAt = from; _status = TtsState.playing; onSentenceChanged?.call(from);
+  }
+  @override
+  Future<void> pause() async { _status = TtsState.paused; }
+  @override
+  Future<void> stop() async { _status = TtsState.stopped; }
 }

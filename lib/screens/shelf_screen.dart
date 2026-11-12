@@ -269,7 +269,6 @@ class _ShelfScreenState extends State<ShelfScreen> {
           storage: _storage,
           initialProgress: saved,
           onProgressChanged: (p) async {
-            await _storage.saveProgress(p);
             // 同步书架腰封进度
             if (mounted) {
               setState(() => _progress[meta.id] = p);
@@ -305,10 +304,11 @@ class _ShelfScreenState extends State<ShelfScreen> {
         }
       }
       if (origId != null) {
-        final t = activeBookCaches[origId];
-        if (t != null) {
-          t.cancel();
-          activeBookCaches.remove(origId);
+        for (final entry in activeBookCaches.entries.toList()) {
+          if (entry.value.bookId == origId) {
+            entry.value.cancel();
+            activeBookCaches.remove(entry.key);
+          }
         }
       }
       await TtsCacheStore.clearBook(safeId);

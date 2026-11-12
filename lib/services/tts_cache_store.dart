@@ -30,8 +30,9 @@ class TtsCacheStore {
   final String bookId;
   final String voice;
   final double rate;
+  final String? textFingerprint;
 
-  TtsCacheStore(this.bookId, this.voice, this.rate);
+  TtsCacheStore(this.bookId, this.voice, this.rate, {this.textFingerprint});
 
   /// 缓存目录 key：语速按两位小数定值，与合成参数一一对应
   String get rateKey => rate.toStringAsFixed(2);
@@ -52,6 +53,7 @@ class TtsCacheStore {
       _safe(bookId),
       _safe(voice),
       rateKey,
+      if (textFingerprint != null) 'text-${_safe(textFingerprint!)}',
     ].join(Platform.pathSeparator));
     if (!await d.exists()) await d.create(recursive: true);
     return d;
