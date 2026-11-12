@@ -156,10 +156,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(AppAppearance.nightMode.value, isTrue);
     expect((await AppStorage().loadSettings())['themeIndex'], 2);
+    await tester.tap(find.byKey(const ValueKey('night-mode')));
+    await tester.pumpAndSettle();
+    expect(AppAppearance.nightMode.value, isFalse);
+    expect((await AppStorage().loadSettings())['themeIndex'], 0);
+    await tester.tap(find.byKey(const ValueKey('night-mode')));
+    await tester.pumpAndSettle();
     await capture('reader-night');
     await tester.tap(find.byKey(const ValueKey('reader-menu')));
     await tester.pumpAndSettle();
     await capture('reader-menu-night');
+    await tester.tap(find.byTooltip('阅读设置'));
+    await tester.pumpAndSettle();
+    expect(Theme.of(tester.element(find.byType(Slider).last)).brightness, Brightness.dark);
+    await capture('reader-settings-night');
+    await tester.tapAt(const Offset(20, 120));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reader-menu')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('横竖屏切换'));
     await tester.pumpAndSettle();
     expect(platformCalls.where((c) => c.method == 'SystemChrome.setPreferredOrientations').last.arguments,

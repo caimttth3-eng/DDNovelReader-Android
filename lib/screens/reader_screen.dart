@@ -1866,9 +1866,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
           top: 14,
           bottom: _readerInsets.bottom + 14,
         ),
-        decoration: const BoxDecoration(
-          color: Color(0xEE333333),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        decoration: BoxDecoration(
+          color: _menuColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2577,7 +2577,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
       GestureDetector(behavior: HitTestBehavior.opaque,
         onTap: () => setState(() => _showQuickMenu = false)),
       Positioned(top: _readerInsets.top + 56, right: 8, width: width,
-        child: Material(color: _menuColor, borderRadius: BorderRadius.circular(3),
+        child: SliderTheme(data: SliderTheme.of(context).copyWith(
+          trackHeight: 1,
+          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
+          overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+          tickMarkShape: SliderTickMarkShape.noTickMark,
+          activeTrackColor: Colors.white54, inactiveTrackColor: Colors.white24, thumbColor: Colors.white70,
+        ), child: Material(color: _menuColor, borderRadius: BorderRadius.circular(3),
           child: ConstrainedBox(constraints: BoxConstraints(maxHeight: maxHeight),
             child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(8),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -2614,7 +2620,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               ]),
             )),
           ),
-        ),
+        )),
       ),
     ]));
   }
@@ -2625,9 +2631,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       right: 0,
       bottom: 0,
       child: Container(
-        decoration: const BoxDecoration(
-          color: Color(0xF2333333),
-          border: Border(
+        decoration: BoxDecoration(
+          color: _menuColor,
+          border: const Border(
             top: BorderSide(color: Color(0x33777777), width: 1.5),
           ),
         ),
@@ -2729,7 +2735,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         margin: const EdgeInsets.symmetric(horizontal: 16),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: const Color(0xE6FFFFFF),
+          color: _isNight ? const Color(0xFF222222) : const Color(0xE6FFFFFF),
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
