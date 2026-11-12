@@ -400,6 +400,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       final index = exact ? p.viewportItem!.clamp(0, _items.length - 1) :
         p == null || p.atChapterTitle ? _chapterItem(_chapter) : _itemIndexOf(_chapter, _para);
       await _positionViewport(index, exact ? p.viewportAlignment : 0);
+      if (mounted && !exact && p != null && !p.atChapterTitle) {
+        await _followSentence(_chapter, _para, max(0, _ttsSentence));
+      }
       if (mounted) { _restoringProgress = false; _scheduleSave(); }
     });
   }

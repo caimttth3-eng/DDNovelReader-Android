@@ -100,6 +100,10 @@ void main() {
     await capture('reader-controls');
     final list = find.byKey(const ValueKey('reader-body'));
     final text = find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify && (w.textSpan?.toPlainText().contains('清晨，阳光照进窗前。') ?? false)).first;
+    expect(tester.widget<Text>(text).textSpan!.toPlainText(), startsWith('　　'));
+    final paragraphRender = tester.renderObject<RenderParagraph>(text);
+    final firstGlyph = paragraphRender.getBoxesForSelection(const TextSelection(baseOffset: 2, extentOffset: 3));
+    expect(firstGlyph.first.left, greaterThanOrEqualTo(38), reason: 'First-line indentation must also be visible when justified');
     final before = tester.getTopLeft(text);
     final listSize = tester.getSize(list);
     await tester.tapAt(const Offset(195, 360));
