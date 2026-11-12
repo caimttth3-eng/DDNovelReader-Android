@@ -1372,7 +1372,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final height = max(1.0, MediaQuery.sizeOf(context).height - top - _readerInsets.bottom - 32);
     return Positioned(left: 16, right: 16, top: top + (height - 2) * _autoClock.value,
       child: IgnorePointer(child: Container(key: const ValueKey('auto-reading-guide'), height: 1.5,
-        color: const Color(0xAA6498B5))));
+        color: _isNight ? const Color(0xCC9BC5DD) : const Color(0xCC377C9F))));
   });
 
   Widget _buildAutoPanel() => Positioned(left: 0, right: 0, bottom: 0,
@@ -1434,7 +1434,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (_ttsLoading || _paging) return;
     final chapter = _chapter + direction;
     if (chapter < 0 || chapter >= widget.book.chapters.length) return;
-    setState(() { _chapter = chapter; _para = 0; _ttsSentence = 0; });
+    setState(() { _showQuickMenu = false; _chapter = chapter; _para = 0; _ttsSentence = 0; });
     _jumpToItem(_itemIndexOf(chapter, 0), animate: false);
     if (_inReadingMode) _ttsFollowSeek(chapter, 0, 0);
     _scheduleSave();
@@ -1678,6 +1678,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void _seekTo(double ratio) {
     final (c, p) = _locateByRatio(ratio);
     setState(() {
+      _showQuickMenu = false;
       _chapter = c;
       _para = p;
     });
@@ -1814,6 +1815,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           // 拖动 seek 预览浮层
           // 朗读模式底部控制面板（暂停时显示）
           if (_inReadingMode && _showReadingPanel) _buildReadingPanel(),
+          if (_showControls && _showQuickMenu) _buildQuickMenu(),
           // 顶部控制栏
           if (_showControls) _buildTopBar(),
           // 底部进度条
@@ -1827,7 +1829,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           // TTS 加载中浮层（朗读模式点击恢复播放时显示）
           if (_inReadingMode && _ttsLoading) _buildTtsLoadingOverlay(),
             // 亮度遮罩
-            if (_showControls && _showQuickMenu) _buildQuickMenu(),
             if (_autoActive) _buildAutoGuide(),
             if (_autoActive && _showAutoPanel) _buildAutoPanel(),
             _buildDimMask(),

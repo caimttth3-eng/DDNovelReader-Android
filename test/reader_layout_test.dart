@@ -170,6 +170,15 @@ void main() {
     expect(find.text('第 1/20 章'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reader-menu')));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('next-chapter')));
+    await tester.pumpAndSettle();
+    expect(find.text('第 2/20 章'), findsOneWidget);
+    expect(find.byKey(const ValueKey('quick-brightness')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('previous-chapter')));
+    await tester.pumpAndSettle();
+    expect(find.text('第 1/20 章'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('reader-menu')));
+    await tester.pumpAndSettle();
     await capture('reader-menu');
     final brightness = find.byKey(const ValueKey('quick-brightness'));
     final slider = tester.getRect(brightness);
