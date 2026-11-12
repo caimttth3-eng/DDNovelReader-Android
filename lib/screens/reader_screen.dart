@@ -1791,7 +1791,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         } else {
           final para = widget.book.chapters[it.chapterIndex]
               .paragraphs[it.paragraphIndex];
-          final isCurrent = it.chapterIndex == _chapter &&
+          final isCurrent = _inReadingMode && it.chapterIndex == _chapter &&
               it.paragraphIndex == _para &&
               it.sentenceIndex == _ttsSentence;
           final sentenceText = (it.sentenceIndex < para.sentences.length)
@@ -3504,4 +3504,3 @@ class _HighlightSheetState extends State<_HighlightSheet> {
     );
   }
 }
-

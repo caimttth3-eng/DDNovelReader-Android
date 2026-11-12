@@ -38,12 +38,21 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     const fontPath = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc';
     if (File(fontPath).existsSync()) {
-      final loader = FontLoader('Preview');
-      loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
+      for (final family in ['Preview', 'Roboto']) {
+        final loader = FontLoader(family);
+        loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
+        await loader.load();
+      }
+    }
+    final icons = File('${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');
+    if (icons.existsSync()) {
+      final loader = FontLoader('MaterialIcons');
+      loader.addFont(Future.value(ByteData.sublistView(icons.readAsBytesSync())));
       await loader.load();
     }
     final key = GlobalKey();
     Widget app(Widget child) => RepaintBoundary(key: key, child: MaterialApp(
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true, fontFamily: 'Preview',
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6498B5))),
       home: child,
@@ -74,6 +83,11 @@ void main() {
     await tester.pumpWidget(app(ReaderScreen(book: book, storage: AppStorage())));
     await tester.pumpAndSettle();
     await capture('reader-controls');
+    await tester.tapAt(const Offset(300, 360));
+    await tester.pumpAndSettle();
+    await capture('reader');
+    await tester.tapAt(const Offset(300, 360));
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.menu_book));
     await tester.pumpAndSettle();
     expect(find.text('目录'), findsOneWidget);
