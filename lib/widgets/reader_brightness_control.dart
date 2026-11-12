@@ -45,10 +45,10 @@ class _AutoBulbPainter extends CustomPainter {
     canvas.drawPath(bulb, paint);
     canvas.drawLine(const Offset(11, 26), const Offset(21, 26), paint);
     canvas.drawLine(const Offset(13, 29), const Offset(19, 29), paint);
-    final letter = TextPainter(text: TextSpan(text: 'A', style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w600)),
-      textDirection: TextDirection.ltr)..layout();
-    letter.paint(canvas, Offset(16 - letter.width / 2, 7));
-    letter.dispose(); canvas.restore();
+    final letter = Path()..moveTo(12, 17)..lineTo(16, 8)..lineTo(20, 17)
+      ..moveTo(13.4, 14)..lineTo(18.6, 14);
+    canvas.drawPath(letter, paint);
+    canvas.restore();
   }
   @override
   bool shouldRepaint(_AutoBulbPainter oldDelegate) => oldDelegate.color != color;
