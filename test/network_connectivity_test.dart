@@ -44,7 +44,7 @@ void main() {
     await emit(false); await emit(null); await emit(true); await emit(true); await emit(false);
     await Future<void>.delayed(Duration.zero);
     expect(states, [false, true, false]);
-    await subscription.cancel();
+    await subscription.cancel().timeout(const Duration(seconds: 1));
     expect(calls, ['listen', 'cancel']);
   });
 
@@ -63,7 +63,7 @@ void main() {
       const StandardMethodCodec().encodeErrorEnvelope(code: 'network_monitor_unavailable'), (_) => sent.complete());
     await sent.future; await closed.future.timeout(const Duration(seconds: 1));
     expect(states, [true]);
-    await subscription.cancel();
+    await subscription.cancel().timeout(const Duration(seconds: 1));
   });
 
   test('overlapping readers keep monitoring until the final listener leaves', () async {
@@ -79,14 +79,14 @@ void main() {
     await listening.future.timeout(const Duration(seconds: 1));
     final b = NetworkConnectivity().availability.listen(second.add);
     await Future<void>.delayed(Duration.zero);
-    await a.cancel();
+    await a.cancel().timeout(const Duration(seconds: 1));
     expect(calls, ['listen']);
     final sent = Completer<void>();
     messenger.handlePlatformMessage(NetworkConnectivity.events.name,
       const StandardMethodCodec().encodeSuccessEnvelope(false), (_) => sent.complete());
     await sent.future; await Future<void>.delayed(Duration.zero);
     expect(second, [true, false]);
-    await b.cancel();
+    await b.cancel().timeout(const Duration(seconds: 1));
     expect(calls, ['listen', 'cancel']);
   });
 
@@ -107,6 +107,20 @@ void main() {
       const StandardMethodCodec().encodeSuccessEnvelope(false), (_) => sent.complete());
     await sent.future; await Future<void>.delayed(Duration.zero);
     expect(states, [false]);
-    await subscription.cancel();
+    await subscription.cancel().timeout(const Duration(seconds: 1));
+  });
+
+  test('leaving during the initial query cancels immediately and never starts a late monitor', () async {
+    final queried = Completer<void>(), result = Completer<bool>();
+    final calls = <String>[];
+    messenger.setMockMethodCallHandler(NetworkConnectivity.channel, (_) async {
+      queried.complete(); return result.future;
+    });
+    messenger.setMockMethodCallHandler(streamChannel, (call) async { calls.add(call.method); return null; });
+    final subscription = NetworkConnectivity().availability.listen((_) => fail('Disposed reader received a network event'));
+    await queried.future.timeout(const Duration(seconds: 1));
+    await subscription.cancel().timeout(const Duration(seconds: 1));
+    result.complete(true); await Future<void>.delayed(Duration.zero);
+    expect(calls, isEmpty);
   });
 }

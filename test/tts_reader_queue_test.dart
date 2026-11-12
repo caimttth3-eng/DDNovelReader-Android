@@ -75,6 +75,19 @@ class _SlowCache extends TtsCacheStore {
   Future<List<SpeechWord>> readWords(int ci, int off) async => [];
 }
 
+class _DeferredWriteCache extends TtsCacheStore {
+  final started = Completer<void>();
+  final release = Completer<void>();
+  _DeferredWriteCache() : super('deferred-write', 'voice', .5);
+  @override
+  Future<Uint8List?> read(int ci, int off) async => null;
+  @override
+  Future<void> write(int ci, int off, Uint8List audio, {List<SpeechWord>? words}) {
+    if (!started.isCompleted) started.complete();
+    return release.future;
+  }
+}
+
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   Future<void> waitFor(bool Function() ready, String reason) async {
@@ -136,6 +149,32 @@ void main() {
     await jump.timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('jump did not use its fresh audio request'));
     expect(player.played, [1, 2, 3]);
     await reader.dispose().timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('mock player disposal did not finish'));
+  });
+
+  test('cache writes do not delay playback but disposal drains them before cache teardown', () async {
+    final cache = _DeferredWriteCache();
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onWords([]); return Uint8List.fromList([7]);
+    }
+    final player = _ResumePlayer();
+    final reader = TtsReader(player: player, synthesize: synth)..setCache(cache)..setPrefetchSentences(0);
+    Future<void>? disposal;
+    addTearDown(() async {
+      if (!cache.release.isCompleted) cache.release.complete();
+      await (disposal ??= reader.dispose());
+    });
+    await reader.start(['正文。'], offsets: [0]).timeout(const Duration(seconds: 1));
+    await cache.started.future;
+    expect(player.played, [7]); expect(cache.release.isCompleted, isFalse);
+    var disposed = false;
+    final disposing = reader.dispose().then((_) { disposed = true; });
+    disposal = disposing;
+    await waitFor(() => player.state == PlayerState.disposed, 'Player cleanup must finish before waiting for cache writes.');
+    expect(disposed, isFalse, reason: 'A completed dispose must guarantee no cache file is still being written.');
+    cache.release.complete();
+    await disposing.timeout(const Duration(seconds: 1));
+    expect(disposed, isTrue);
   });
 
   test('dynamic prefetch windows preserve useful audio, cancel excess requests and never interrupt the current sentence', () async {

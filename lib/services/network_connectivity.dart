@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/services.dart';
 
 /// Reports whether Android has an Internet-capable default network. This does
@@ -20,31 +21,39 @@ class NetworkConnectivity {
 
   Stream<bool> get availability => _watch().distinct();
 
-  Stream<bool> _watch() async* {
-    final initial = await getAvailability();
-    // Do not subscribe to a missing native EventChannel on older builds or
-    // non-Android platforms. EventChannel reports failed listen calls globally.
-    if (initial == null) {
-      try {
-        if (await channel.invokeMethod<bool>('isSupported') != true) return;
-      } on MissingPluginException { return; }
-      on PlatformException { return; }
-      // A supported native host can temporarily have no capability snapshot.
-      // Keep listening rather than treating an undecided network as offline.
-    } else {
-      yield initial;
-    }
-    try {
-      // Share one native subscription while reader routes overlap during a
-      // transition. Disposing the old route must not stop the new monitor.
-      final stream = _events ??= events.receiveBroadcastStream();
-      await for (final value in stream) {
-        if (value is bool) yield value;
+  Stream<bool> _watch() {
+    StreamSubscription<dynamic>? subscription;
+    var cancelled = false;
+    late final StreamController<bool> controller;
+    void close() { if (!controller.isClosed) unawaited(controller.close()); }
+    Future<void> start() async {
+      final initial = await getAvailability();
+      if (cancelled) return;
+      // Unknown capabilities on a real Android host still need monitoring.
+      // A missing native plugin must not start an unsupported EventChannel.
+      if (initial == null) {
+        try {
+          if (await channel.invokeMethod<bool>('isSupported') != true) { close(); return; }
+        } on MissingPluginException { close(); return; }
+        on PlatformException { close(); return; }
       }
-    } on MissingPluginException {
-      // The host can detach during an activity or engine transition.
-    } on PlatformException {
-      // Actual speech errors remain authoritative if monitoring is unavailable.
+      if (cancelled) return;
+      if (initial != null) controller.add(initial);
+      // Share the native broadcast source while reader routes overlap. Use an
+      // explicit subscription so cancellation never waits for another network
+      // event, as an async generator awaiting its next event otherwise can.
+      final stream = _events ??= events.receiveBroadcastStream();
+      subscription = stream.listen((value) {
+        if (!cancelled && !controller.isClosed && value is bool) controller.add(value);
+      }, onError: (Object _, StackTrace __) {
+        // Actual speech requests remain authoritative if monitoring detaches.
+        close();
+      }, onDone: close);
     }
+    controller = StreamController<bool>(onListen: start, onCancel: () async {
+      cancelled = true;
+      await subscription?.cancel();
+    });
+    return controller.stream;
   }
 }

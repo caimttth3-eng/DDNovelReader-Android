@@ -51,6 +51,7 @@ class TtsReader {
   final Map<int, Uint8List> _prefetchCache = {};
   final Map<int, List<SpeechWord>> _wordCache = {};
   final Map<String, Future<Uint8List>> _audioRequests = {};
+  final Set<Future<void>> _cacheWrites = {};
   List<SpeechWord> _activeWords = [];
   int _activeAudioIndex = -1;
   int _lastWordStart = -1;
@@ -492,7 +493,13 @@ class TtsReader {
     if (_disposed || generation != _contentGeneration || token.cancelled) return Uint8List(0);
     if (_inMemoryWindow(idx)) _wordCache[idx] = words;
     if (audio.isNotEmpty && off >= 0 && cache != null) {
-      unawaited(cache.write(chapter, off, audio, words: words));
+      late final Future<void> pending;
+      pending = Future<void>.sync(() => cache.write(chapter, off, audio, words: words))
+        // Cache persistence is optional for playback, including storage errors.
+        .then<void>((_) {}, onError: (Object _, StackTrace __) {})
+        .whenComplete(() { _cacheWrites.remove(pending); });
+      _cacheWrites.add(pending);
+      unawaited(pending);
     }
     return audio;
   }
@@ -661,5 +668,9 @@ class TtsReader {
       await _player.stop();
       await _player.dispose();
     } catch (_) {}
+    // No new writes can start after the disposed/generation checks above.
+    // Draining here leaves playback non-blocking while making cache teardown
+    // and removal safe once disposal completes.
+    await Future.wait<void>(_cacheWrites.toList());
   }
 }
