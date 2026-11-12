@@ -2083,7 +2083,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _pendingScrollIndex = null;
     final generation = _navigationGeneration;
     final positionedGlyph = _ttsGlyphRect(c, p, offset);
-    await _pageScrollController.animateScroll(offset: max(0.0, (positionedGlyph?.top ?? top) - _ttsBodyHeight * 0.2),
+    final contextSpace = _inReadingMode ? _ttsBodyHeight * 0.2 : 0.0;
+    await _pageScrollController.animateScroll(offset: max(0.0, (positionedGlyph?.top ?? top) - contextSpace),
       duration: const Duration(milliseconds: 1));
     if (generation == _navigationGeneration) _scheduleSave();
   }

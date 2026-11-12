@@ -1060,7 +1060,7 @@ void main() {
     expect(find.descendant(of: find.byKey(const ValueKey('reading-cache')), matching: find.text('晓晓（女·温暖）')), findsOneWidget);
     expect(tester.widget<GestureDetector>(find.byKey(const ValueKey('reading-cache'))).onTap, isNotNull);
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
-    await tester.tap(find.text('晓晓（女·温暖）')); await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, '晓晓（女·温暖）')); await tester.pumpAndSettle();
     expect(speech.usingSystemFallback, isFalse); expect(speech.voice, TtsReader.defaultVoice);
     expect((await storage.loadSettings())['systemFallbackActive'], isFalse);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
@@ -1125,6 +1125,21 @@ void main() {
         expect(origin.dy + glyph.top, greaterThanOrEqualTo(tester.getRect(body).top - 1));
         expect(origin.dy + glyph.bottom, lessThanOrEqualTo(tester.getRect(body).bottom + 1),
           reason: 'The saved middle-of-sentence character must be visible');
+        final bodyRect = tester.getRect(body), rows = <Rect>[];
+        for (final paragraph in tester.renderObjectList<RenderParagraph>(find.descendant(of: body, matching: find.byType(RichText)))) {
+          if (!paragraph.hasSize) continue;
+          final boxes = paragraph.getBoxesForSelection(TextSelection(baseOffset: 0,
+            extentOffset: paragraph.text.toPlainText().length), boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+          final topLeft = paragraph.localToGlobal(Offset.zero);
+          for (final box in boxes) {
+            final rect = box.toRect().shift(topLeft);
+            if (rect.height > 2 && rect.width > 0.1 && rect.bottom > bodyRect.top + 0.5 && rect.top < bodyRect.bottom) rows.add(rect);
+          }
+        }
+        rows.sort((a, b) => a.top.compareTo(b.top));
+        expect(rows, isNotEmpty);
+        expect(rows.first.top, closeTo(bodyRect.top, 0.5),
+          reason: 'Normal reading restores at a complete line boundary, without a half row above the target');
       }
       final expectedTop = cutout != null ? 40.0 : size.width > size.height ? 24.0 : 48.0;
       expect(tester.getRect(header).height, 24, reason: 'Chapter chrome must stay compact at body font size 64');
