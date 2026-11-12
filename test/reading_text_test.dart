@@ -13,6 +13,20 @@ Book format(String text, {bool correction = true, bool indent = true, String fil
   ReadingText.format(source(text), merge: correction, indent: indent, filter: filter);
 
 void main() {
+  test('legacy whole-chapter annotations migrate beyond the first physical paragraph', () {
+    final original = Book(id: 'legacy', title: 'legacy', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [
+        ReadingText.paragraph('首段。'), ReadingText.paragraph('“第二段。”'),
+      ])]);
+    final formatted = ReadingText.format(original, merge: true, indent: true);
+    final start = ReadingText.legacySentenceAnchor(original, 0, 1);
+    final target = ReadingText.locate(formatted, 0, start);
+    expect(target.$1, 1);
+    expect(formatted.chapters[0].paragraphs[target.$1].display.substring(target.$2), startsWith('“第二段'));
+    final end = ReadingText.legacyAnchor(original, 0, '首段。 “第二段。'.length);
+    expect(end, greaterThan(start));
+    expect(ReadingText.locate(formatted, 0, end - 1).$1, 1);
+  });
   test('hard wraps merge for display and speech, with punctuation boundaries', () {
     final book = format('山间传来\n朋友的问候。\n第二段！\n“真的吗？”\n下一段。');
     final p = book.chapters.first.paragraphs;

@@ -449,17 +449,18 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     setState(() {
       _bookmarks = bms;
       _highlights = hls;
-      _remapAnnotations(widget.book);
+      _remapAnnotations(widget.book, legacy: true);
     });
   }
 
-  void _remapAnnotations(Book previous) {
+  void _remapAnnotations(Book previous, {bool legacy = false}) {
     _bookmarks = _bookmarks.map((b) {
       final c = b.chapterIndex.clamp(0, _book.chapters.length - 1);
       final oldParas = previous.chapters[c].paragraphs;
       final oldPara = oldParas[b.paragraphIndex.clamp(0, oldParas.length - 1)];
       final oldOffset = oldPara.sentences.isEmpty ? 0 : oldPara.sentences[b.sentenceIndex.clamp(0, oldPara.sentences.length - 1)].displayStart;
-      final anchor = b.chapterAnchor ?? ReadingText.anchor(previous, c, b.paragraphIndex, oldOffset);
+      final anchor = b.chapterAnchor ?? (legacy ? ReadingText.legacySentenceAnchor(previous, c, b.sentenceIndex)
+        : ReadingText.anchor(previous, c, b.paragraphIndex, oldOffset));
       final location = ReadingText.locate(_book, c, anchor);
       return Bookmark.fromJson({...b.toJson(), 'chapterIndex': c, 'paragraphIndex': location.$1,
         'sentenceIndex': ReadingText.sentenceAt(_book.chapters[c].paragraphs[location.$1], location.$2),
@@ -467,8 +468,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }).toList();
     _highlights = _highlights.map((h) {
       final c = h.chapterIndex.clamp(0, _book.chapters.length - 1);
-      final start = h.anchorStart ?? ReadingText.anchor(previous, c, h.paragraphIndex, h.charStart);
-      final end = h.anchorEnd ?? ReadingText.anchor(previous, c, h.paragraphIndex, h.charEnd);
+      final start = h.anchorStart ?? (legacy ? ReadingText.legacyAnchor(previous, c, h.charStart)
+        : ReadingText.anchor(previous, c, h.paragraphIndex, h.charStart));
+      final end = h.anchorEnd ?? (legacy ? ReadingText.legacyAnchor(previous, c, h.charEnd)
+        : ReadingText.anchor(previous, c, h.paragraphIndex, h.charEnd));
       final location = ReadingText.locate(_book, c, start);
       final ending = ReadingText.locate(_book, c, max(start, end - 1));
       return Highlight.fromJson({...h.toJson(), 'chapterIndex': c, 'paragraphIndex': location.$1,

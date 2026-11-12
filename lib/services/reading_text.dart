@@ -151,6 +151,27 @@ class ReadingText {
     return index < 0 ? (paragraph.sentences.length - 1).clamp(0, 1 << 30) : index;
   }
 
+  /// Before text switches existed, the parser flattened each whole chapter
+  /// into one paragraph. Migrate its stored annotation coordinates before
+  /// projecting them onto the new physical paragraphs.
+  static String _legacyText(Book source, int chapter) => source.chapters[chapter].paragraphs
+    .expand((p) => p.display.split('\n')).map((line) => line.trim())
+    .where((line) => line.isNotEmpty).join(' ');
+
+  static int legacyAnchor(Book source, int chapter, int offset) {
+    final text = _legacyText(source, chapter);
+    return text.substring(0, offset.clamp(0, text.length)).replaceAll(_spaces, '').length;
+  }
+
+  static int legacySentenceAnchor(Book source, int chapter, int sentence) {
+    final text = _legacyText(source, chapter);
+    final cleaned = const TextCleaner().clean(text);
+    final matches = RegExp(r'[^。！？!?；;\n]+[。！？!?；;]?').allMatches(cleaned.tts).toList();
+    if (matches.isEmpty) return 0;
+    final index = sentence.clamp(0, matches.length - 1);
+    return legacyAnchor(source, chapter, cleaned.displayOffsetOfTts(matches[index].start));
+  }
+
   // Old cache coordinates alone cannot distinguish changed sentence text.
   static String fingerprint(Book book) => sha256.convert(utf8.encode(jsonEncode([
     for (final c in book.chapters) [for (final p in c.paragraphs) [for (final s in p.sentences) s.tts]],
