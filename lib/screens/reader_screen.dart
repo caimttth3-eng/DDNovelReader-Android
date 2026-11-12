@@ -2422,10 +2422,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
           child: Text(
             _groupLabel(v.langCode),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
         ));

@@ -20,7 +20,7 @@ class ReaderBrightnessControl extends StatelessWidget {
         Positioned(left: 12 + (constraints.maxWidth - 24) * split - 2,
           child: IgnorePointer(child: Tooltip(message: T('brightnessSplit'),
             child: Container(key: const ValueKey('brightness-split'), width: 4, height: 4,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: Theme.of(context).colorScheme.primary)))),
+              decoration: BoxDecoration(shape: BoxShape.circle, color: Theme.of(context).colorScheme.primary))))),
       ]))),
     TextButton(key: const ValueKey('brightness-auto'), onPressed: onAutomatic,
       style: TextButton.styleFrom(minimumSize: const Size(44, 44), padding: EdgeInsets.zero),
