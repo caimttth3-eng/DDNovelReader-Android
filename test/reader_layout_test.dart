@@ -100,7 +100,7 @@ void main() {
       reason: 'Opening a book must not force maximum brightness');
     await capture('reader-controls');
     final list = find.byKey(const ValueKey('reader-body'));
-    final text = find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify && (w.textSpan?.toPlainText().contains('清晨，阳光照进窗前。') ?? false)).first;
+    final text = find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify && (w.textSpan?.toPlainText().replaceAll('\u200B', '').contains('清晨，阳光照进窗前。') ?? false)).first;
     expect(tester.widget<Text>(text).textSpan!.toPlainText(), startsWith('\uFFFC'));
     final paragraphRender = tester.renderObject<RenderParagraph>(text);
     final displayed = tester.widget<Text>(text).textSpan!.toPlainText();
@@ -420,7 +420,9 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     settings.pageTurnMode = 'scroll'; settings.fontSize = 20; await storage.saveSettings(settings.toJson());
     final speech = _TestSpeech();
-    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('scroll'), storage: storage, ttsReader: speech)));
+    final wordPreviewKey = GlobalKey();
+    await tester.pumpWidget(RepaintBoundary(key: wordPreviewKey,
+      child: MaterialApp(home: ReaderScreen(book: sample('scroll'), storage: storage, ttsReader: speech))));
     await tester.pumpAndSettle();
     expect(tester.widget<ScrollablePositionedList>(list).physics, isA<ClampingScrollPhysics>());
     for (var i = 0; i < 40; i++) { await tester.drag(list, const Offset(0, -700)); await tester.pumpAndSettle(); }
@@ -448,6 +450,17 @@ void main() {
       reason: 'The current word has a stronger highlight');
     expect(spans.any((s) => s.style?.backgroundColor == const Color(0x44FFC107)), isTrue,
       reason: 'The rest of the sentence stays highlighted');
+    if (Platform.isLinux) {
+      await tester.pump();
+      await tester.runAsync(() async {
+        final boundary = wordPreviewKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+        final image = await boundary.toImage(pixelRatio: 2);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await Directory('build/ui-previews').create(recursive: true);
+        await File('build/ui-previews/reader-word-highlight.png').writeAsBytes(png!.buffer.asUint8List());
+        image.dispose();
+      });
+    }
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 

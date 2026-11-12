@@ -168,6 +168,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   int _wordStart = -1, _wordEnd = -1;
   String _wordMapKey = '';
   CleanedText? _wordMap;
+  bool _followingWord = false;
   bool _isPlaying = false;
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
   int _ttsChapter = 0;
@@ -817,7 +818,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         spans.add(TextSpan(text: ReaderTypography.layout(para.display.substring(left, right)), recognizer: recognizer,
           style: TextStyle(color: word ? const Color(0xFF102A3A) : null,
             backgroundColor: word ? const Color(0xFF9BC5DD) : current ? const Color(0x44FFC107) : marked.isEmpty ? null : Color(marked.last.color),
-            fontWeight: current ? FontWeight.w600 : FontWeight.normal)));
+            fontWeight: FontWeight.normal)));
       }
       cursor = end;
     }
@@ -1694,13 +1695,38 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final right = _wordMap!.displayOffsetOfTts(base + end).clamp(left, para.display.length);
     while (left < right && para.display[left].trim().isEmpty) { left++; }
     setState(() { _wordStart = left; _wordEnd = right; });
+    _ensureWordVisible(left);
   }
 
-  Future<void> _followSentence(int c, int p, int sentence) async {
+  Future<void> _ensureWordVisible(int offset) async {
+    if (_paging || _followingWord || _pendingScrollIndex != null || !_itemScrollController.isAttached) return;
+    final index = _itemIndexOf(_chapter, _para);
+    final paragraph = _book.chapters[_chapter].paragraphs[_para];
+    final render = _paragraphKeys[index]?.currentContext?.findRenderObject();
+    final positions = _visibleItems().where((p) => p.index == index);
+    if (render is! RenderParagraph || positions.isEmpty) {
+      _followSentence(_chapter, _para, max(0, _ttsSentence), character: offset);
+      return;
+    }
+    final boxes = render.getBoxesForSelection(TextSelection(
+      baseOffset: ReaderTypography.layoutOffset(paragraph.display, offset),
+      extentOffset: ReaderTypography.layoutOffset(paragraph.display, min(offset + 1, paragraph.display.length))));
+    if (boxes.isEmpty) return;
+    final y = positions.first.itemLeadingEdge * _bodyHeight + 10 + boxes.first.top;
+    if (y >= 0 && y < _bodyHeight - _fontSize * _lineHeight) return;
+    _followingWord = true;
+    try {
+      await _pageScrollController.animateScroll(offset: y - _bodyHeight * 0.2,
+        duration: const Duration(milliseconds: 1));
+    } finally { _followingWord = false; }
+    if (mounted) _scheduleSave();
+  }
+
+  Future<void> _followSentence(int c, int p, int sentence, {int? character}) async {
     final index = _itemIndexOf(c, p);
     final paragraph = _book.chapters[c].paragraphs[p];
     if (paragraph.sentences.isEmpty) return;
-    final offset = paragraph.sentences[sentence.clamp(0, paragraph.sentences.length - 1)].displayStart;
+    final offset = character ?? paragraph.sentences[sentence.clamp(0, paragraph.sentences.length - 1)].displayStart;
     final painter = TextPainter(text: _paragraphSpan(_items[index], paragraph, gestures: false),
       textAlign: TextAlign.justify, textDirection: Directionality.of(context),
       textScaler: MediaQuery.textScalerOf(context));

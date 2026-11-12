@@ -1,9 +1,32 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:duoduo_langdu/models/speech_word.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
+import 'package:duoduo_langdu/services/tts_cache_store.dart';
 
 void main() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  test('cached audio and word timings round-trip together', () async {
+    final dir = await Directory.systemTemp.createTemp('word-cache-');
+    const channel = MethodChannel('plugins.flutter.io/path_provider');
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (_) async => dir.path);
+    addTearDown(() async {
+      binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+      await dir.delete(recursive: true);
+    });
+    final cache = TtsCacheStore('sample', 'voice', 1, textFingerprint: 'words1-test');
+    final words = [const SpeechWord(startMicros: 100000, durationMicros: 200000,
+      textStart: 0, textEnd: 2, text: '你好')];
+    await cache.write(0, 0, Uint8List.fromList([1, 2, 3]), words: words);
+    expect(await cache.read(0, 0), [1, 2, 3]);
+    final restored = await cache.readWords(0, 0);
+    expect(restored.single.text, '你好');
+    expect(speechWordAt(restored, const Duration(milliseconds: 150))!.textStart, 0);
+    expect(await cache.readWords(0, 99), isEmpty);
+  });
   test('Edge timestamps map repeated words and XML entities to source text', () {
     final collector = SpeechWordCollector('你好，你好，A&B。');
     collector.addMetadata(jsonEncode({'Metadata': [

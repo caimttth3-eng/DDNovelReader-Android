@@ -82,14 +82,23 @@ class TtsReader {
   }
 
   /// 设置音色（zh-CN 等）
-  void setVoice(String v) => _voice = v;
+  void setVoice(String v) {
+    if (_voice == v) return;
+    _voice = v; _invalidateAudio();
+  }
+
+  void _invalidateAudio() {
+    _contentGeneration++; _prefetchCache.clear(); _wordCache.clear();
+    _prefetchIndex = _index;
+  }
 
   /// 设置/替换磁盘缓存（切换书/音色/语速时由上层重建传入）
   void setCache(TtsCacheStore? store) => _cache = store;
 
   /// 设置语速（0.1~3.0，映射到 Edge rate 百分比 +200%）
   Future<void> setSpeechRate(double rate) async {
-    _speechRate = rate.clamp(0.1, 3.0);
+    final value = rate.clamp(0.1, 3.0);
+    if (value != _speechRate) { _speechRate = value; _invalidateAudio(); }
   }
 
   double get speechRate => _speechRate;
