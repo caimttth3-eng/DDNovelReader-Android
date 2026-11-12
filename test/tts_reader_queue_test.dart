@@ -9,9 +9,11 @@ import 'package:duoduo_langdu/services/tts_reader.dart';
 class _Player extends AudioPlayer {
   final played = <int>[];
   final completed = StreamController<void>.broadcast();
+  bool _readerEvents = false;
   bool staleCompletionOnStop = false;
+  _Player() { _readerEvents = true; }
   @override
-  Stream<void> get onPlayerComplete => completed.stream;
+  Stream<void> get onPlayerComplete => _readerEvents ? completed.stream : super.onPlayerComplete;
   @override
   Future<void> stop() async {
     if (staleCompletionOnStop && !completed.isClosed) { completed.add(null); await Future<void>.delayed(Duration.zero); }
@@ -22,7 +24,7 @@ class _Player extends AudioPlayer {
     played.add((source as BytesSource).bytes.first);
   }
   @override
-  Future<void> dispose() async { await completed.close(); await super.dispose(); }
+  Future<void> dispose() async { await super.dispose(); await completed.close(); }
 }
 
 void main() {
@@ -56,12 +58,14 @@ void main() {
     final old = reader.start(['old-0', 'old-1']);
     await waitFor('old-0');
     expect(requested, ['old-0'], reason: 'Future sentences must not compete with first sound');
-    requests['old-0']!.complete(Uint8List.fromList([1])); await old;
+    requests['old-0']!.complete(Uint8List.fromList([1]));
+    await old.timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('initial current sentence did not enter playback'));
     await waitFor('old-1');
     player.staleCompletionOnStop = true;
     final next = reader.start(['new-0', 'new-1']); await waitFor('new-0');
     expect(reader.currentIndex, 0, reason: 'A completion queued during stop must not advance the new chapter');
-    requests['new-0']!.complete(Uint8List.fromList([2])); await next;
+    requests['new-0']!.complete(Uint8List.fromList([2]));
+    await next.timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('new chapter current sentence did not enter playback'));
     requests['old-1']!.complete(Uint8List.fromList([99]));
     await waitFor('new-1');
     final cancelledRequest = requests['new-1']!;
@@ -75,8 +79,8 @@ void main() {
     expect(identical(currentRequest, cancelledRequest), isFalse);
     cancelledRequest.complete(Uint8List.fromList([77]));
     currentRequest.complete(Uint8List.fromList([3]));
-    await jump;
+    await jump.timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('jump did not use its fresh audio request'));
     expect(player.played, [1, 2, 3]);
-    await reader.dispose();
+    await reader.dispose().timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('mock player disposal did not finish'));
   });
 }

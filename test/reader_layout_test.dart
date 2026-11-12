@@ -490,6 +490,73 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    var systemVolume = 0.5, reads = 0;
+    Completer<double>? delayed;
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/volume_keys'), (call) async {
+      if (call.method == 'getMediaVolume') {
+        reads++;
+        final pending = delayed; delayed = null;
+        return pending == null ? systemVolume : await pending.future;
+      }
+      if (call.method == 'setMediaVolume') systemVolume = (call.arguments as num).toDouble();
+      if (call.method == 'getSystemBrightness') return 0.5;
+      return null;
+    });
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('volume-sync'), storage: AppStorage(), ttsReader: _TestSpeech())));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    final volume = find.byKey(const ValueKey('reading-volume-slider'));
+    expect(tester.widget<Slider>(volume).value, 0.5);
+    systemVolume = 0.8;
+    await tester.pump(const Duration(milliseconds: 300)); await tester.pump();
+    expect(tester.widget<Slider>(volume).value, 0.8);
+    final stale = Completer<double>(); delayed = stale;
+    await tester.pump(const Duration(milliseconds: 250));
+    tester.widget<Slider>(volume).onChangeStart!(0.8);
+    tester.widget<Slider>(volume).onChanged!(0.6);
+    tester.widget<Slider>(volume).onChangeEnd!(0.6);
+    stale.complete(0.2); await tester.pump();
+    expect(tester.widget<Slider>(volume).value, 0.6);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+    final pausedReads = reads;
+    await tester.pump(const Duration(seconds: 1)); expect(reads, pausedReads);
+    systemVolume = 0.9;
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(milliseconds: 300)); await tester.pump();
+    expect(tester.widget<Slider>(volume).value, 0.9);
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    expect(volume, findsNothing);
+    final hiddenReads = reads;
+    await tester.pump(const Duration(seconds: 1)); expect(reads, hiddenReads);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 1)); expect(reads, hiddenReads);
+  });
+
+  testWidgets('single-line landscape pages still advance when overlap is enabled', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(844, 320);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..fontSize = 64..retainPageLine = true).toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('one-line'), storage: storage)));
+    await tester.pumpAndSettle();
+    final list = find.byKey(const ValueKey('reader-body'));
+    (int,double) anchor() {
+      final positions = tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
+        .where((p) => p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0).toList()..sort((a,b) => a.index.compareTo(b.index));
+      return (positions.first.index, positions.first.itemLeadingEdge);
+    }
+    final first = anchor();
+    await tester.tapAt(const Offset(800, 210)); await tester.pumpAndSettle();
+    final second = anchor(); expect(second, isNot(first));
+    await tester.tapAt(const Offset(800, 210)); await tester.pumpAndSettle();
+    expect(anchor(), isNot(second));
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
   testWidgets('paging shows complete rows and optional overlap repeats exactly one boundary row', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
@@ -632,6 +699,8 @@ class _TestSpeech extends TtsReader {
   }
   @override
   Future<void> pause() async { _status = TtsState.paused; }
+  @override
+  Future<bool> resume() async { _status = TtsState.playing; return true; }
   @override
   Future<void> stop() async { _status = TtsState.stopped; }
 }

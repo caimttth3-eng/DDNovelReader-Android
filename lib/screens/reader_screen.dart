@@ -194,6 +194,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   // 系统媒体音量（音量键正常调节，暂停面板也提供滑条）
   double _mediaVolume = 1.0;
+  Timer? _volumePollTimer;
+  bool _volumeReadInFlight = false;
+  bool _volumeDragging = false;
+  bool _volumeForeground = true;
+  int _volumeRevision = 0, _volumePollEpoch = 0, _volumeWrites = 0;
+  bool get _volumePanelVisible => _inReadingMode && _showReadingPanel && !_fakeLock && _volumeForeground;
 
   // 假锁屏（保持 app 前台，蓝牙耳机键可控；长按 2 秒解锁）
   bool _fakeLock = false;
@@ -311,6 +317,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void dispose() {
+    _volumePollTimer?.cancel(); _volumePollTimer = null; _volumePollEpoch++;
     WidgetsBinding.instance.removeObserver(this);
     if (_autoActive) _volumeChannel.invokeMethod('setKeepScreenOn', false);
     for (final recognizer in _sentenceRecognizers.values) { recognizer.dispose(); }
@@ -1035,7 +1042,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       final clip = _pageClipBottom ?? _bodyHeight;
       final complete = rows.where((r) => r.top >= -0.5 && r.bottom <= clip + 0.5).toList();
       if (complete.isEmpty) return false;
-      final retain = _settings.pageTurnMode != 'scroll' && _settings.retainPageLine;
+      final retain = _settings.pageTurnMode != 'scroll' && _settings.retainPageLine && complete.length > 1;
       _PageLine? target;
       if (direction > 0) {
         final last = complete.last;
@@ -1522,6 +1529,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _volumeForeground = state == AppLifecycleState.resumed;
+    _syncMediaVolumePolling();
     if (state != AppLifecycleState.resumed) {
       _saveDebounce?.cancel(); _saveProgress();
       if (_autoActive && !_autoPaused) _pauseAutoPage();
@@ -1862,7 +1871,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void _onTtsError() {
     if (!mounted) return;
     final failure = _tts.lastFailure;
-    final message = failure is PlatformException ? T('systemTtsUnavailable')
+    final message = failure is PlatformException ? T(_tts.usesSystemVoice ? 'systemTtsUnavailable' : 'voicePlaybackFailed')
       : failure is TimeoutException || failure is EdgeTtsException && failure.kind == 'timeout'
         ? T(_tts.usesSystemVoice ? 'systemTtsTimeout' : 'onlineTtsTimeout')
       : failure is EdgeTtsException ? (failure.status != null ? T('onlineTtsRejected', {'err': '${failure.status}'}) : T('onlineTtsUnavailable'))
@@ -2086,6 +2095,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
+    _syncMediaVolumePolling();
     _viewportSize = MediaQuery.sizeOf(context);
     _bodyExtent = _bodyHeight;
     if (!_settingsLoaded) {
@@ -2343,6 +2353,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                 Expanded(child: Slider(key: const ValueKey('reading-volume-slider'),
                   padding: const EdgeInsets.symmetric(horizontal: 12), value: _mediaVolume.clamp(0.0, 1.0),
                   min: 0, max: 1, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
+                  onChangeStart: (_) { _volumeDragging = true; _volumeRevision++; },
+                  onChangeEnd: (_) { _volumeDragging = false; _volumeRevision++; },
                   onChanged: _setMediaVolume)),
                 const SizedBox(width: 44, height: 44, child: Icon(Icons.volume_up, color: Color(0xFF9BC5DD), size: 20)),
               ]),
@@ -2423,17 +2435,34 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   /// 读取当前系统媒体音量（0.0~1.0）
-  Future<void> _loadMediaVolume() async {
+  Future<void> _loadMediaVolume({bool panelPoll = false}) async {
+    if (_volumeReadInFlight || _volumeDragging || _volumeWrites > 0 || (panelPoll && !_volumePanelVisible)) return;
+    _volumeReadInFlight = true;
+    final revision = _volumeRevision, epoch = _volumePollEpoch;
     try {
       final v = await _volumeChannel.invokeMethod<double>('getMediaVolume');
-      if (v != null && mounted) setState(() => _mediaVolume = v.clamp(0.0, 1.0));
-    } catch (_) {}
+      if (v != null && mounted && revision == _volumeRevision && epoch == _volumePollEpoch &&
+          !_volumeDragging && (!panelPoll || _volumePanelVisible)) {
+        final value = v.clamp(0.0, 1.0);
+        if ((value - _mediaVolume).abs() > 0.0001) setState(() => _mediaVolume = value);
+      }
+    } catch (_) {} finally { _volumeReadInFlight = false; }
   }
 
-  /// 设置系统媒体音量（音量键被 TTS 逐句占用，暂停面板用滑条调音量）
+  void _syncMediaVolumePolling() {
+    if (_volumePanelVisible) {
+      _volumePollTimer ??= Timer.periodic(const Duration(milliseconds: 250), (_) => _loadMediaVolume(panelPoll: true));
+    } else if (_volumePollTimer != null) {
+      _volumePollTimer!.cancel(); _volumePollTimer = null; _volumePollEpoch++;
+    }
+  }
+
+  /// Optimistic slider updates win over older reads until the system write completes.
   void _setMediaVolume(double v) {
+    _volumeRevision++; _volumeWrites++;
     setState(() => _mediaVolume = v.clamp(0.0, 1.0));
-    _volumeChannel.invokeMethod('setMediaVolume', _mediaVolume);
+    unawaited(_volumeChannel.invokeMethod<void>('setMediaVolume', _mediaVolume)
+      .catchError((Object _) {}).whenComplete(() => _volumeWrites--));
   }
 
   void _adjustRate(double delta) {
