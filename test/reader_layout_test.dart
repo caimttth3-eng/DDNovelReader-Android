@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 
@@ -15,6 +16,7 @@ import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
+import 'package:duoduo_langdu/services/annotation_store.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
@@ -202,6 +204,9 @@ void main() {
     await tester.pumpAndSettle();
     await capture('reader-menu');
     final brightness = find.byKey(const ValueKey('quick-brightness'));
+    final fontSlider = find.byWidgetPredicate((w) => w is Slider && w.max == 64);
+    expect(tester.getRect(fontSlider).width, closeTo(tester.getRect(brightness).width, 0.1));
+    expect(tester.getRect(fontSlider).left, closeTo(tester.getRect(brightness).left, 0.1));
     final slider = tester.getRect(brightness);
     await tester.dragFrom(slider.center, Offset(slider.width, 0));
     await tester.pumpAndSettle();
@@ -282,6 +287,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(Theme.of(tester.element(find.byType(Slider).last)).brightness, Brightness.dark);
     await capture('reader-settings-night');
+    final settingBrightness = find.byWidgetPredicate((w) => w is Slider && w.max == 1).last;
+    final settingFont = find.byWidgetPredicate((w) => w is Slider && w.max == 64).last;
+    expect(tester.getRect(settingFont).width, closeTo(tester.getRect(settingBrightness).width, 0.1));
+    expect(tester.getRect(settingFont).left, closeTo(tester.getRect(settingBrightness).left, 0.1));
     expect(find.byWidgetPredicate((w) => w is DropdownButton<String> && w.value == 'zh-CN-XiaoxiaoNeural'), findsOneWidget);
     final correction = find.byKey(const ValueKey('text-correction'));
     tester.widget<SwitchListTile>(correction).onChanged!(false);
@@ -467,6 +476,63 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  testWidgets('filter toggles preserve the first visible line and quick bookmark adds at it', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    final settings = ReadingSettings()..pageTurnMode = 'scroll'..informationFilterLevel = 'ads';
+    await storage.saveSettings(settings.toJson());
+    final book = Book(id: 'filter-position', title: 'filter', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: List.generate(30, (p) => Paragraph(
+        display: '第${p + 1}段 https://example.com/long/path 链接之后的正文。' +
+          List.generate(20, (s) => '这是第${s + 1}句，山间的风吹过树林，远方传来朋友的问候。').join(),
+        tts: '', sentences: const [], sentenceStartTts: const [])))]);
+    Future<void> open() async {
+      await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage)));
+      await tester.pumpAndSettle();
+    }
+    final list = find.byKey(const ValueKey('reader-body'));
+    (String, double) firstLine() {
+      final viewport = tester.getRect(list);
+      final texts = find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify);
+      final candidates = texts.evaluate().map((e) => e.findRenderObject()).whereType<RenderParagraph>()
+        .where((r) => r.localToGlobal(Offset.zero).dy < viewport.bottom && r.localToGlobal(Offset(0,r.size.height)).dy > viewport.top)
+        .toList()..sort((a,b) => a.localToGlobal(Offset.zero).dy.compareTo(b.localToGlobal(Offset.zero).dy));
+      final render = candidates.first;
+      final origin = render.localToGlobal(Offset.zero);
+      final point = render.getPositionForOffset(Offset(0, (viewport.top - origin.dy).clamp(0.0, render.size.height)));
+      final range = render.getLineBoundary(point);
+      final full = render.text.toPlainText();
+      var start = range.start;
+      while (start < range.end && (full[start] == '\u200B' || full[start] == '\n')) { start++; }
+      final boxes = render.getBoxesForSelection(TextSelection(baseOffset: start, extentOffset: start + 1));
+      return (full.substring(range.start, range.end).replaceAll('\u200B','').replaceAll('\n',''), origin.dy + boxes.first.top);
+    }
+    await open();
+    tester.widget<ScrollablePositionedList>(list).itemScrollController!.jumpTo(index: 12);
+    await tester.pumpAndSettle();
+    unawaited(tester.widget<ScrollablePositionedList>(list).scrollOffsetController!.animateScroll(
+      offset: 280, duration: const Duration(milliseconds: 1)));
+    await tester.pumpAndSettle();
+    final before = firstLine();
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    final filter = find.byKey(const ValueKey('information-filter'));
+    tester.widget<SwitchListTile>(filter).onChanged!(true); await tester.pumpAndSettle();
+    expect(firstLine().$1, before.$1); expect(firstLine().$2, closeTo(before.$2, 1));
+    tester.widget<SwitchListTile>(filter).onChanged!(false); await tester.pumpAndSettle();
+    expect(firstLine().$1, before.$1); expect(firstLine().$2, closeTo(before.$2, 1));
+    await tester.tapAt(const Offset(20, 120)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('添加书签')); await tester.pumpAndSettle();
+    final bookmarks = await AnnotationStore().loadBookmarks(book.id);
+    expect(bookmarks.length, 1); expect(bookmarks.single.chapterAnchor, isNotNull);
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    await open();
+    expect(firstLine().$1, before.$1); expect(firstLine().$2, closeTo(before.$2, 1));
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
 }
 
 class _TestSpeech extends TtsReader {

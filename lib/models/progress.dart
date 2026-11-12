@@ -12,6 +12,8 @@ class BookProgress {
   double viewportAlignment;
   String layoutSignature;
   bool atChapterTitle;
+  int? flowChapter;
+  int? flowAnchor;
 
   BookProgress({
     required this.bookId,
@@ -24,6 +26,8 @@ class BookProgress {
     this.viewportAlignment = 0,
     this.layoutSignature = '',
     this.atChapterTitle = false,
+    this.flowChapter,
+    this.flowAnchor,
   });
 
   Map<String, dynamic> toJson() => {
@@ -37,6 +41,8 @@ class BookProgress {
         'viewportAlignment': viewportAlignment,
         'layoutSignature': layoutSignature,
         'atChapterTitle': atChapterTitle,
+        'flowChapter': flowChapter,
+        'flowAnchor': flowAnchor,
       };
 
   factory BookProgress.fromJson(Map<String, dynamic> json) => BookProgress(
@@ -50,6 +56,8 @@ class BookProgress {
         viewportAlignment: (json['viewportAlignment'] as num?)?.toDouble() ?? 0,
         layoutSignature: json['layoutSignature'] as String? ?? '',
         atChapterTitle: json['atChapterTitle'] as bool? ?? false,
+        flowChapter: json['flowChapter'] as int?,
+        flowAnchor: json['flowAnchor'] as int?,
       );
 
   BookProgress copyWith({
@@ -69,6 +77,8 @@ class BookProgress {
         viewportAlignment: viewportAlignment,
         layoutSignature: layoutSignature,
         atChapterTitle: atChapterTitle,
+        flowChapter: flowChapter,
+        flowAnchor: flowAnchor,
       );
 }
 

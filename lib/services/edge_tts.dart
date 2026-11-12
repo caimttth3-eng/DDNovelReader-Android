@@ -25,6 +25,21 @@ const String _voiceList =
 /// 时钟偏差（秒），403 时通过服务器 Date 头校准
 double _clockSkew = 0.0;
 
+class EdgeTtsException implements Exception {
+  final String kind;
+  final int? status;
+  const EdgeTtsException(this.kind, {this.status});
+  @override
+  String toString() => 'Edge TTS: $kind${status == null ? '' : ' (HTTP $status)'}';
+}
+
+class EdgeSynthCancelToken {
+  bool cancelled = false;
+  void Function()? _abort;
+  void cancel() { cancelled = true; _abort?.call(); }
+  void check() { if (cancelled) throw const EdgeTtsException('cancelled'); }
+}
+
 /// 可用音色（分语言）。zhName=中文界面显示名；enName=其他语言界面显示名。
 class EdgeVoice {
   final String id;
@@ -470,7 +485,7 @@ Future<void> _syncClock() async {
       await res.drain<void>();
       if (date != null) {
         final server = HttpDate.parse(date).millisecondsSinceEpoch / 1000.0;
-        _clockSkew = server - _nowUnix();
+        _clockSkew = server - DateTime.now().toUtc().millisecondsSinceEpoch / 1000.0;
       }
     } finally {
       client.close();
@@ -489,20 +504,21 @@ String edgeRateStr(double rate) {
 /// 内部含一次 403 时钟同步重试。
 Future<Uint8List> edgeSynth(String text,
     {String voice = 'zh-CN-XiaoxiaoNeural', String rate = '+0%',
-    void Function(List<SpeechWord>)? onWords}) async {
+    void Function(List<SpeechWord>)? onWords, EdgeSynthCancelToken? cancelToken}) async {
+  final token = cancelToken ?? EdgeSynthCancelToken();
   for (var attempt = 0; attempt < 2; attempt++) {
-    final words = SpeechWordCollector(text);
-    final result = await _synthOnce(text, voice: voice, rate: rate, words: words);
-    if (result != null && result.isNotEmpty) {
-      onWords?.call(words.words);
-      return result;
-    }
-    if (attempt == 0) {
-      // 可能 403（时钟偏差）→ 同步时钟重试
+    token.check();
+    try {
+      final words = SpeechWordCollector(text);
+      final result = await _synthOnce(text, voice: voice, rate: rate, words: words, token: token);
+      if (result == null || result.isEmpty) throw const EdgeTtsException('no_audio');
+      onWords?.call(words.words); return result;
+    } on EdgeTtsException catch (error) {
+      if (error.status != 403 || attempt > 0 || token.cancelled) rethrow;
       await _syncClock();
     }
   }
-  return Uint8List(0);
+  throw const EdgeTtsException('no_audio');
 }
 
 /// 从音频二进制帧中提取 MP3 payload。
@@ -518,7 +534,8 @@ List<int> _extractAudioPayload(List<int> data) {
 }
 
 Future<Uint8List?> _synthOnce(String text,
-    {required String voice, required String rate, required SpeechWordCollector words}) async {
+    {required String voice, required String rate, required SpeechWordCollector words,
+    required EdgeSynthCancelToken token}) async {
   final connId = _connectId();
   final gec = _generateSecMsGec();
   final uri = Uri(
@@ -536,7 +553,14 @@ Future<Uint8List?> _synthOnce(String text,
   final client = HttpClient()..autoUncompress = false;
   client.connectionTimeout = const Duration(seconds: 15);
   WebSocket? ws;
+  Completer<Uint8List?>? waiting;
+  token._abort = () {
+    client.close(force: true);
+    if (ws != null) unawaited(ws!.close());
+    if (waiting != null && !waiting!.isCompleted) waiting!.completeError(const EdgeTtsException('cancelled'));
+  };
   try {
+    token.check();
     final request = await client.getUrl(uri).timeout(const Duration(seconds: 15));
     _wssHeaders().forEach((k, v) {
       request.headers.set(k, v);
@@ -549,28 +573,33 @@ Future<Uint8List?> _synthOnce(String text,
     final response = await request.close().timeout(const Duration(seconds: 15));
     if (response.statusCode != 101) {
       await response.drain<void>();
-      return null;
+      throw EdgeTtsException('service', status: response.statusCode);
     }
     final detached = await response.detachSocket();
     ws = WebSocket.fromUpgradedSocket(detached, serverSide: false);
-  } catch (_) {
-    return null;
+  } on EdgeTtsException { rethrow; }
+  on TimeoutException { throw const EdgeTtsException('timeout'); }
+  catch (_) {
+    token.check();
+    throw const EdgeTtsException('connection');
   } finally {
     client.close();
   }
 
+  final socket = ws!;
   final audioBuf = BytesBuilder();
   var gotAudio = false;
   final done = Completer<Uint8List?>();
+  waiting = done;
   final timer = Timer(const Duration(seconds: 20), () {
-    if (!done.isCompleted) done.complete(null);
+    if (!done.isCompleted) done.completeError(const EdgeTtsException('timeout'));
   });
 
   void finish() {
     if (!done.isCompleted) done.complete(gotAudio ? audioBuf.toBytes() : null);
   }
 
-  ws.listen(
+  socket.listen(
     (data) {
       if (data is List<int>) {
         // 服务端二进制帧为纯音频 payload（无文本头），直接全部作为音频
@@ -604,7 +633,7 @@ Future<Uint8List?> _synthOnce(String text,
       '{"context":{"synthesis":{"audio":{"metadataoptions":'
       '{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},'
       '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n';
-  ws.add(config);
+  socket.add(config);
 
   // 发送 SSML（带 X-RequestId，否则服务端 1002 关闭）
   final escaped = text
@@ -620,12 +649,13 @@ Future<Uint8List?> _synthOnce(String text,
       "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>"
       "<voice name='$voice'><prosody pitch='+0Hz' rate='$rate' volume='+0%'>"
       '$escaped</prosody></voice></speak>';
-  ws.add(ssml);
+  socket.add(ssml);
 
-  final result = await done.future;
-  timer.cancel();
   try {
-    await ws.close();
-  } catch (_) {}
-  return result;
+    token.check();
+    return await done.future;
+  } finally {
+    timer.cancel(); token._abort = null;
+    try { await socket.close().timeout(const Duration(seconds: 2)); } catch (_) {}
+  }
 }

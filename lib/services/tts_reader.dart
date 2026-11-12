@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'edge_tts.dart';
 import 'tts_cache_store.dart';
 import '../models/speech_word.dart';
+import 'system_tts.dart';
 
 enum TtsState { idle, playing, paused, stopped }
 
@@ -16,6 +17,13 @@ enum TtsState { idle, playing, paused, stopped }
 /// 音频获取优先级：内存预取 → 磁盘缓存（TtsCacheStore）→ 在线合成（并异步落盘）。
 /// 缓存坐标 = (章节索引, 章内 tts 字符偏移)，与 BookCacheTask 共用，命中零网络。
 class TtsReader {
+  static const systemVoice = SystemTtsClient.voiceId;
+  final SystemTtsClient _system = SystemTtsClient();
+  final Map<String, EdgeSynthCancelToken> _requestTokens = {};
+  final Map<int, Object> _audioFailures = {};
+  Object? lastFailure;
+  ValueChanged<bool>? onLoadingChanged;
+  bool get usesSystemVoice => _voice == systemVoice;
   static const defaultVoice = 'zh-CN-XiaoxiaoNeural';
   final AudioPlayer _player = AudioPlayer();
   final List<String> _sentences = [];
@@ -71,6 +79,7 @@ class TtsReader {
     _player.onPlayerComplete.listen((_) {
       // 当前句播放完，推进到下一句
       if (_disposed) return;
+      if (usesSystemVoice) return;
       if (_state != TtsState.playing) return;
       _index++;
       if (_index >= _sentences.length) {
@@ -130,13 +139,18 @@ class TtsReader {
     _prefetchIndex = _index - 1;
     _prefetchCompletes = 0;
     _setState(TtsState.playing);
-    _startPrefetch();
+    if (!usesSystemVoice) _startPrefetch();
     await _playCurrent();
   }
 
   /// 暂停（暂停音频播放，保留进度）
   Future<void> pause() async {
     if (_state != TtsState.playing) return;
+    _setState(TtsState.paused);
+    _playGeneration++;
+    onLoadingChanged?.call(false);
+    _cancelRequests();
+    if (usesSystemVoice) { await _system.stop(); return; }
     try {
       await _player.pause();
     } catch (_) {}
@@ -159,7 +173,7 @@ class TtsReader {
       _prefetchCache.clear();
       _prefetchIndex = _index - 1;
       _prefetchCompletes = 0;
-      _startPrefetch();
+      if (!usesSystemVoice) _startPrefetch();
       return _playCurrent();
     }
     _setState(TtsState.playing);
@@ -167,7 +181,7 @@ class TtsReader {
     _prefetchCache.clear();
     _prefetchIndex = _index - 1;
     _prefetchCompletes = 0;
-    _startPrefetch();
+    if (!usesSystemVoice) _startPrefetch();
     return _playCurrent();
   }
 
@@ -180,6 +194,8 @@ class TtsReader {
 
   Future<void> _stopInternal() async {
     _playGeneration++; _activeAudioIndex = -1; _activeWords = [];
+    onLoadingChanged?.call(false); _cancelRequests();
+    await _system.stop();
     _lastWordStart = -1; onWordChanged?.call(-1, -1);
     try {
       await _player.stop();
@@ -189,16 +205,14 @@ class TtsReader {
   /// 跳到指定句子继续朗读
   Future<void> jumpTo(int sentenceIndex) async {
     if (sentenceIndex < 0 || sentenceIndex >= _sentences.length) return;
-    try {
-      await _player.stop();
-    } catch (_) {}
+    await _stopInternal();
     _index = sentenceIndex;
     onSentenceChanged?.call(_index);
     if (_state == TtsState.playing) {
       _prefetchCache.clear();
       _prefetchIndex = _index - 1;
       _prefetchCompletes = 0;
-      _startPrefetch();
+      if (!usesSystemVoice) _startPrefetch();
       await _playCurrent();
     }
   }
@@ -245,8 +259,12 @@ class TtsReader {
     }
     Uint8List audio;
     List<SpeechWord> words = [];
-    try { audio = await edgeSynth(text, voice: voice, rate: rate, onWords: (value) => words = value); }
-    catch (_) { return Uint8List(0); }
+    final key = '$generation/$idx';
+    final token = EdgeSynthCancelToken(); _requestTokens[key] = token;
+    try { audio = await edgeSynth(text, voice: voice, rate: rate,
+      onWords: (value) => words = value, cancelToken: token); }
+    catch (error) { if (generation == _contentGeneration) _audioFailures[idx] = error; return Uint8List(0); }
+    finally { if (_requestTokens[key] == token) _requestTokens.remove(key); }
     if (_disposed || generation != _contentGeneration) return Uint8List(0);
     _wordCache[idx] = words;
     if (audio.isNotEmpty && off >= 0 && cache != null) {
@@ -266,17 +284,36 @@ class TtsReader {
     }
     final generation = ++_playGeneration;
     final sentence = _index;
+    lastFailure = null; onLoadingChanged?.call(true);
     _activeAudioIndex = -1; _activeWords = []; _lastWordStart = -1;
     onWordChanged?.call(-1, -1);
     onSentenceChanged?.call(_index);
 
-    // 取音频：内存/磁盘/在线
-    final audio = await _obtainAudio(sentence);
+    if (usesSystemVoice) {
+      try {
+        await _system.speak(_sentences[sentence], _speechRate,
+          onDone: () {
+            if (_disposed || generation != _playGeneration || _state != TtsState.playing) return;
+            _index++;
+            if (_index >= _sentences.length) _finishChapter(); else _playCurrent();
+          },
+          onRange: (start, end) { if (generation == _playGeneration && _state == TtsState.playing) onWordChanged?.call(start, end); },
+          onError: (error) { if (generation == _playGeneration) _fail(error); });
+        if (_disposed || generation != _playGeneration) return false;
+        onLoadingChanged?.call(false); return true;
+      } on SystemSpeechCancelled { return false; }
+      catch (error) { if (!_disposed && generation == _playGeneration) _fail(error); return false; }
+    }
+    // 取音频：内存/磁盘/在线。The deadline covers the actual operation,
+    // not an unrelated UI timer that can report failure while still loading.
+    Uint8List audio;
+    try { audio = await _obtainAudio(sentence).timeout(const Duration(seconds: 30)); }
+    catch (error) { if (!_disposed && generation == _playGeneration) _fail(error); return false; }
     if (_disposed || _state != TtsState.playing || generation != _playGeneration || sentence != _index) return false;
     _activeWords = _wordCache[sentence] ?? [];
     if (audio.isEmpty) {
       // 合成失败（可能离线）：计入失败，连续 3 次判定无法播放
-      return _handlePlayFailure();
+      _fail(_audioFailures[sentence] ?? const EdgeTtsException('no_audio')); return false;
     }
 
     _prefetchCompletes = 0;
@@ -286,47 +323,30 @@ class TtsReader {
       // 这是'反复暂停/恢复后卡死'的根因。stop 后再 play 保证回调可靠。
       await _player.stop();
       if (_disposed || generation != _playGeneration || sentence != _index) return false;
-      await _player.play(BytesSource(audio));
-      if (generation == _playGeneration && sentence == _index) _activeAudioIndex = sentence;
+      await _player.play(BytesSource(audio)).timeout(const Duration(seconds: 15));
+      if (generation == _playGeneration && sentence == _index) { _activeAudioIndex = sentence; onLoadingChanged?.call(false); }
       return true;
-    } catch (_) {
-      // 播放失败：重新取音频一次重试（缓存命中则零网络），仍失败计入失败数
-      try {
-        final retry = await _obtainAudio(_index);
-        if (_disposed || _state != TtsState.playing || generation != _playGeneration || sentence != _index) return false;
-        if (retry.isEmpty) throw Exception('empty synth');
-        await _player.stop();
-        _activeWords = _wordCache[sentence] ?? [];
-        await _player.play(BytesSource(retry));
-        if (generation == _playGeneration && sentence == _index) _activeAudioIndex = sentence;
-        return true;
-      } catch (_) {
-        return _handlePlayFailure();
-      }
+    } catch (error) {
+      if (!_disposed && generation == _playGeneration) _fail(error);
+      return false;
     }
   }
 
-  /// 单句播放/合成失败处理：连续失败 >=3 判定彻底无法播放，触发 onError；
-  /// 否则跳过该句继续。
-  Future<bool> _handlePlayFailure() async {
-    _prefetchCompletes++;
-    if (_prefetchCompletes >= 3) {
-      // 连续失败，判定无法播放（离线/播放器异常）：通知上层退出
-      _setState(TtsState.stopped);
-      onError?.call();
-      return false;
-    }
-    _index++;
-    if (_index >= _sentences.length) {
-      _finishChapter();
-      return false;
-    }
-    return _playCurrent();
+  void _cancelRequests() {
+    _contentGeneration++;
+    for (final token in _requestTokens.values.toList()) { token.cancel(); }
+    _requestTokens.clear(); _audioFailures.clear(); _audioRequests.clear();
+  }
+
+  void _fail(Object error) {
+    lastFailure = error;
+    _playGeneration++; _cancelRequests();
+    _setState(TtsState.stopped); onLoadingChanged?.call(false); onError?.call();
   }
 
   /// 后台预取：从当前句之后开始，提前合成若干句
   void _startPrefetch() {
-    if (_prefetching) return;
+    if (_prefetching || usesSystemVoice) return;
     _prefetching = true;
     _prefetchLoop();
   }
@@ -335,7 +355,7 @@ class TtsReader {
 
   Future<void> _prefetchLoop() async {
     try {
-      while (!_disposed && _state == TtsState.playing) {
+      while (!_disposed && !usesSystemVoice && _state == TtsState.playing) {
         // 计算下一个要预取的位置
         final nextToPrefetch = _prefetchIndex + 1;
         final maxPrefetch = _index + _maxAhead;
@@ -375,6 +395,7 @@ class TtsReader {
 
   Future<void> dispose() async {
     _disposed = true; _contentGeneration++; _playGeneration++;
+    _cancelRequests(); await _system.dispose();
     await _positionSubscription?.cancel();
     try {
       await _player.stop();
