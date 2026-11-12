@@ -5,6 +5,7 @@ class Bookmark {
   final int chapterIndex;
   final int paragraphIndex;
   final int sentenceIndex;
+  final int? chapterAnchor;
   final String chapterTitle; // 冗余，列表直接显示
   final String snippet; // 句子预览
   final DateTime createdAt;
@@ -15,6 +16,7 @@ class Bookmark {
     required this.chapterIndex,
     required this.paragraphIndex,
     required this.sentenceIndex,
+    this.chapterAnchor,
     required this.chapterTitle,
     required this.snippet,
     required this.createdAt,
@@ -26,6 +28,7 @@ class Bookmark {
         'chapterIndex': chapterIndex,
         'paragraphIndex': paragraphIndex,
         'sentenceIndex': sentenceIndex,
+        'chapterAnchor': chapterAnchor,
         'chapterTitle': chapterTitle,
         'snippet': snippet,
         'createdAt': createdAt.toIso8601String(),
@@ -37,6 +40,7 @@ class Bookmark {
         chapterIndex: json['chapterIndex'] as int? ?? 0,
         paragraphIndex: json['paragraphIndex'] as int? ?? 0,
         sentenceIndex: json['sentenceIndex'] as int? ?? 0,
+        chapterAnchor: json['chapterAnchor'] as int?,
         chapterTitle: json['chapterTitle'] as String? ?? '',
         snippet: json['snippet'] as String? ?? '',
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
@@ -52,6 +56,8 @@ class Highlight {
   final int paragraphIndex;
   final int charStart; // 段内 display 字符偏移（含）
   final int charEnd; // 段内 display 字符偏移（不含）
+  final int? anchorStart;
+  final int? anchorEnd;
   final int color; // ARGB
   final String note;
   final DateTime createdAt;
@@ -63,6 +69,8 @@ class Highlight {
     required this.paragraphIndex,
     required this.charStart,
     required this.charEnd,
+    this.anchorStart,
+    this.anchorEnd,
     required this.color,
     required this.note,
     required this.createdAt,
@@ -82,6 +90,8 @@ class Highlight {
         'paragraphIndex': paragraphIndex,
         'charStart': charStart,
         'charEnd': charEnd,
+        'anchorStart': anchorStart,
+        'anchorEnd': anchorEnd,
         'color': color,
         'note': note,
         'createdAt': createdAt.toIso8601String(),
@@ -94,6 +104,8 @@ class Highlight {
         paragraphIndex: json['paragraphIndex'] as int? ?? 0,
         charStart: json['charStart'] as int? ?? 0,
         charEnd: json['charEnd'] as int? ?? 0,
+        anchorStart: json['anchorStart'] as int?,
+        anchorEnd: json['anchorEnd'] as int?,
         color: json['color'] as int? ?? 0x3385B5FF,
         note: json['note'] as String? ?? '',
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
@@ -107,6 +119,8 @@ class Highlight {
         paragraphIndex: paragraphIndex,
         charStart: charStart,
         charEnd: charEnd,
+        anchorStart: anchorStart,
+        anchorEnd: anchorEnd,
         color: color ?? this.color,
         note: note ?? this.note,
         createdAt: createdAt,

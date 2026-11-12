@@ -135,7 +135,7 @@ List<(String, String)>? splitChapters(String text) {
   final chapters = <(String, String)>[];
   // 第一章标题之前的文字归入"简介"章
   final intro =
-      lines.sublist(0, heads[0].$1).join('\n').trim();
+      lines.sublist(0, heads[0].$1).join('\n').trimRight();
   if (intro.isNotEmpty) {
     chapters.add(('简介', intro));
   }
@@ -147,7 +147,7 @@ List<(String, String)>? splitChapters(String text) {
       start++;
     }
     final end = (k + 1 < heads.length) ? heads[k + 1].$1 : lines.length;
-    final body = lines.sublist(start, end).join('\n').trim();
+    final body = lines.sublist(start, end).join('\n').trimRight();
     if (body.isNotEmpty) {
       chapters.add((heads[k].$2, body));
     }
@@ -161,14 +161,14 @@ List<(String, String)>? splitChapters(String text) {
 List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000}) {
   var paras = text
       .split(RegExp(r'\n\s*\n'))
-      .map((p) => p.trim())
+      .map((p) => p.trimRight())
       .where((p) => p.isNotEmpty)
       .toList();
   if (paras.length <= 1) {
     // 没有空行分隔段落时，退化为按每行聚合
     paras = text
         .split('\n')
-        .map((l) => l.trim())
+        .map((l) => l.trimRight())
         .where((l) => l.isNotEmpty)
         .toList();
   }
@@ -213,24 +213,10 @@ List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000}) {
 String normalizeBody(String text) {
   if (text.isEmpty) return '';
   text = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-  text = text.replaceAll('\u3000', '  ');
   text = text.replaceAll('\ufeff', '');
-  text = text.replaceAll(RegExp(r'[ \t]+\n'), '\n'); // 行尾空格
-  text = text.replaceAll(RegExp(r'\n{2,}'), '\n'); // 折叠空行
-  text = text.trim();
-  if (text.contains('\n')) {
-    final paras = text
-        .split('\n')
-        .map((p) => p.trim())
-        .where((p) => p.isNotEmpty)
-        .toList();
-    return paras.join('\n');
-  }
-  final lines = text
-      .split('\n')
-      .map((l) => l.trimRight())
-      .where((l) => l.trim().isNotEmpty)
-      .toList();
+  final lines = text.split('\n').map((line) => line.trimRight()).toList();
+  while (lines.isNotEmpty && lines.first.trim().isEmpty) { lines.removeAt(0); }
+  while (lines.isNotEmpty && lines.last.trim().isEmpty) { lines.removeLast(); }
   return lines.join('\n');
 }
 
@@ -243,4 +229,3 @@ List<(String, String)> makeChapters(String text) {
   final fb = fallbackSplit(text);
   return fb.map((c) => (c.$1, normalizeBody(c.$2))).toList();
 }
-

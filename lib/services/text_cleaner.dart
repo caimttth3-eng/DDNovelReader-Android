@@ -125,10 +125,11 @@ class TextCleaner {
   }
 
   String _removeEmojiKaomoji(String s) {
+    String mask(Match m) => List.filled(m.end - m.start, '\u0000').join();
     return s
-        .replaceAll(_emojiRe, '')
-        .replaceAll(_controlRe, '')
-        .replaceAll(_kaomojiRe, '');
+        .replaceAllMapped(_emojiRe, mask)
+        .replaceAllMapped(_controlRe, mask)
+        .replaceAllMapped(_kaomojiRe, mask);
   }
 
   bool _isControl(int cp) {

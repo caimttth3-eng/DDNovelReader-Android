@@ -98,10 +98,10 @@ void main() {
       reason: 'Opening a book must not force maximum brightness');
     await capture('reader-controls');
     final list = find.byKey(const ValueKey('reader-body'));
-    final text = find.text('清晨，阳光照进窗前。').first;
+    final text = find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify && (w.textSpan?.toPlainText().contains('清晨，阳光照进窗前。') ?? false)).first;
     final before = tester.getTopLeft(text);
     final listSize = tester.getSize(list);
-    await tester.tapAt(const Offset(300, 360));
+    await tester.tapAt(const Offset(195, 360));
     await tester.pumpAndSettle();
     tester.view.viewPadding = const FakeViewPadding();
     tester.view.padding = const FakeViewPadding();
@@ -109,7 +109,7 @@ void main() {
     expect(tester.getTopLeft(text), before, reason: 'Hiding chrome must not move the text');
     expect(tester.getSize(list), listSize, reason: 'Toolbars must overlay the text viewport');
     await capture('reader');
-    await tester.tapAt(const Offset(300, 360));
+    await tester.tapAt(const Offset(195, 360));
     await tester.pumpAndSettle();
     tester.view.viewPadding = const FakeViewPadding(top: 40, bottom: 24);
     tester.view.padding = const FakeViewPadding(top: 40, bottom: 24);
@@ -133,15 +133,17 @@ void main() {
     }
     final firstPage = topIndex();
     await tester.drag(list, const Offset(-220, 0));
+    await tester.pumpAndSettle();
+    expect(topIndex(), firstPage, reason: 'Tap mode must ignore swipes');
+    await tester.tapAt(const Offset(360, 360));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 16));
-    await tester.pump(const Duration(milliseconds: 60));
     for (var frame = 0; frame < 20; frame++) {
       final current = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-incoming-transform')));
       if (current.translation.dx > 0) break;
       await tester.pump(const Duration(milliseconds: 16));
     }
-    await tester.pump(const Duration(milliseconds: 48));
+    await tester.pump(const Duration(milliseconds: 16));
     final incoming = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-incoming-transform')));
     final outgoing = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-outgoing-transform')));
     expect(incoming.translation.dx, greaterThan(0));
@@ -152,13 +154,13 @@ void main() {
     await tester.pumpAndSettle();
     final nextPage = topIndex();
     expect(nextPage, greaterThan(firstPage));
-    await tester.drag(list, const Offset(220, 0));
+    await tester.tapAt(const Offset(30, 360));
     await tester.pumpAndSettle();
     expect(topIndex(), lessThan(nextPage));
     await tester.tap(find.byKey(const ValueKey('next-chapter')));
     await tester.pumpAndSettle();
     expect(find.text('第 2/20 章'), findsOneWidget);
-    expect(topIndex(), greaterThanOrEqualTo(31));
+    expect(topIndex(), greaterThanOrEqualTo(16));
     await tester.tap(find.byKey(const ValueKey('next-chapter')));
     await tester.pumpAndSettle();
     expect(find.text('第 3/20 章'), findsOneWidget);
@@ -223,7 +225,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1400));
     for (var frame = 0; frame < 8; frame++) { await tester.pump(const Duration(milliseconds: 60)); }
     expect(topIndex(), greaterThan(autoStartPage));
-    await tester.tapAt(const Offset(300, 360));
+    await tester.tapAt(const Offset(195, 360));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('auto-page-pause')));
     await tester.pumpAndSettle();
@@ -234,7 +236,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('auto-page-pause')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-    await tester.tapAt(const Offset(300, 360));
+    await tester.tapAt(const Offset(195, 360));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('auto-page-stop')));
     await tester.pumpAndSettle();
@@ -261,7 +263,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(Theme.of(tester.element(find.byType(Slider).last)).brightness, Brightness.dark);
     await capture('reader-settings-night');
-    expect(tester.widget<DropdownButton<String>>(find.byType(DropdownButton<String>)).value, 'zh-CN-XiaoxiaoNeural');
+    expect(find.byWidgetPredicate((w) => w is DropdownButton<String> && w.value == 'zh-CN-XiaoxiaoNeural'), findsOneWidget);
     await tester.tapAt(const Offset(20, 120));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu')));
@@ -301,4 +303,101 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });
+  Book sample(String id) => Book(id: id, title: id, filePath: '', format: BookFormat.txt,
+    addedAt: DateTime(2026), chapters: List.generate(12, (c) => Chapter(title: '第${c + 1}章',
+      paragraphs: List.generate(30, (p) => Paragraph(
+        display: '第${c + 1}章第${p + 1}段。' + List.filled(6, '山间的风吹过树林，远方传来朋友的问候。').join(),
+        tts: '', sentences: const [], sentenceStartTts: const [])))));
+
+  testWidgets('each book restores its viewport and long seeks keep text visible', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    final a = sample('book-a'), b = sample('book-b');
+    Future<void> open(Book book) async {
+      await tester.pumpWidget(MaterialApp(home: ReaderScreen(key: ValueKey(book.id), book: book, storage: storage)));
+      await tester.pumpAndSettle();
+    }
+    final list = find.byKey(const ValueKey('reader-body'));
+    List<ItemPosition> visible() => (tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
+      .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1).toList()..sort((a,b) => a.index.compareTo(b.index)));
+    Future<void> assertVisible() async {
+      expect(visible(), isNotEmpty);
+      final paragraph = find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify);
+      expect(paragraph, findsWidgets);
+      expect(tester.takeException(), isNull);
+    }
+    await open(a);
+    expect(visible().first.index, 0, reason: 'New books open on their chapter heading');
+    final progressSlider = find.byWidgetPredicate((w) => w is Slider && w.max == 1 && w.min == 0);
+    tester.widget<Slider>(progressSlider).onChanged!(0.82);
+    await tester.pumpAndSettle();
+    await assertVisible();
+    final seekIndex = visible().first.index;
+    expect(seekIndex, greaterThan(250));
+    await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    await assertVisible();
+    expect(visible().first.index, greaterThanOrEqualTo(seekIndex));
+    await tester.pump(const Duration(milliseconds: 500));
+    final savedA = (await storage.loadProgress(a.id))!;
+    expect(savedA.chapterIndex, greaterThan(6));
+    final aIndex = visible().first.index, aEdge = visible().first.itemLeadingEdge;
+    await open(b);
+    expect(visible().first.index, 0);
+    tester.widget<Slider>(progressSlider).onChanged!(0.25);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 500));
+    final savedB = (await storage.loadProgress(b.id))!;
+    expect(savedB.chapterIndex, lessThan(savedA.chapterIndex));
+    await open(a);
+    await assertVisible();
+    expect(visible().first.index, aIndex);
+    expect(visible().first.itemLeadingEdge, closeTo(aEdge, 0.025));
+    await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    await assertVisible();
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('swipe and scroll modes are exclusive and text options persist', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    final settings = ReadingSettings()..pageTurnMode = 'swipe'..fontSize = 64;
+    await storage.saveSettings(settings.toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('modes'), storage: storage)));
+    await tester.pumpAndSettle();
+    final list = find.byKey(const ValueKey('reader-body'));
+    int firstIndex() => (tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
+      .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1).toList()..sort((a,b) => a.index.compareTo(b.index))).first.index;
+    final initial = firstIndex();
+    await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    expect(firstIndex(), initial, reason: 'Swipe mode ignores side taps');
+    await tester.drag(list, const Offset(-220, 0)); await tester.pumpAndSettle();
+    final after = tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
+      .firstWhere((p) => p.index == firstIndex()).itemLeadingEdge;
+    expect(firstIndex() > initial || after < 0, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    settings.pageTurnMode = 'scroll'; await storage.saveSettings(settings.toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('scroll'), storage: storage)));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ScrollablePositionedList>(list).physics, isA<ClampingScrollPhysics>());
+    for (var i = 0; i < 12; i++) { await tester.drag(list, const Offset(0, -1000)); await tester.pumpAndSettle(); }
+    final scrollIndex = firstIndex();
+    expect(scrollIndex, greaterThan(5));
+    await tester.drag(list, const Offset(-220, 0)); await tester.pumpAndSettle();
+    expect(firstIndex(), scrollIndex, reason: 'Scroll mode ignores horizontal swipes');
+    // Enter speech mode far from the list's initial anchor. Do not depend on
+    // internet audio: its loading frame must keep the same visible paragraph.
+    final before = tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
+      .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1).toList();
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读'));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 32));
+    expect(tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
+      .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1), isNotEmpty);
+    expect(before, isNotEmpty); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
 }

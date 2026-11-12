@@ -351,8 +351,8 @@ class BookParser {
   List<Paragraph> _toParagraphs(String body) {
     final blocks = body
         .split(RegExp(r'\n\s*\n'))
-        .map((b) => b.replaceAll('\n', ' ').trim())
-        .where((b) => b.isNotEmpty)
+        .map((b) => b.trimRight())
+        .where((b) => b.trim().isNotEmpty)
         .toList();
     if (blocks.isEmpty) return const [];
     return blocks.map((b) => _buildParagraph(b)).toList();

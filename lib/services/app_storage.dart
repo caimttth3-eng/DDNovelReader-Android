@@ -111,6 +111,11 @@ class ReadingSettings {
   double brightness = 0.25;
   bool automaticBrightness = true;
   int autoPageSeconds = 20;
+  String pageTurnMode = 'tap';
+  bool mergeNonSentenceBreaks = true;
+  bool firstLineIndent = true;
+  bool informationFilter = false;
+  String informationFilterLevel = 'none';
   double fontSize = 20.0;
   double lineHeight = 1.6;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
@@ -124,6 +129,11 @@ class ReadingSettings {
         'brightnessControlVersion': 2,
         'automaticBrightness': automaticBrightness,
         'autoPageSeconds': autoPageSeconds,
+        'pageTurnMode': pageTurnMode,
+        'textCorrection': mergeNonSentenceBreaks,
+        'firstLineIndent': firstLineIndent,
+        'informationFilter': informationFilter,
+        'informationFilterLevel': informationFilterLevel,
         'fontSize': fontSize,
         'lineHeight': lineHeight,
         'speechRate': speechRate,
@@ -142,7 +152,14 @@ class ReadingSettings {
       s.automaticBrightness = json['automaticBrightness'] as bool? ?? true;
     }
     s.autoPageSeconds = ((json['autoPageSeconds'] as num?)?.toInt() ?? 20).clamp(1, 120);
-    s.fontSize = (json['fontSize'] as num?)?.toDouble() ?? s.fontSize;
+    final mode = json['pageTurnMode'];
+    s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'tap';
+    s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
+    s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;
+    s.informationFilter = json['informationFilter'] as bool? ?? false;
+    final level = json['informationFilterLevel'];
+    s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'none';
+    s.fontSize = ((json['fontSize'] as num?)?.toDouble() ?? s.fontSize).clamp(14, 64);
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
     s.speechRate = (json['speechRate'] as num?)?.toDouble() ?? s.speechRate;
     s.voice = json['voice'] as String? ?? '';
