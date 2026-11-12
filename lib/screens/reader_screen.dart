@@ -147,6 +147,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _suppressScrollTrack = false;
   bool _scrollThrottle = false;
   int? _pendingScrollIndex; // 待跳转 item，渲染出真实高度后校正视口
+  bool _heightCorrectionScheduled = false;
 
   List<int> _itemCharPrefix = [0]; // 每个 item 的 display 字符前缀和（用于 O(log n) 按字定位）
 
@@ -972,7 +973,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// 报告 item 实际渲染高度。scrollable_positioned_list 自管 item 定位，
   /// 这里仅用渲染回调驱动跳转后校正（itemPositions 二次收敛）。
   void _recordHeight(int index, double height) {
-    _maybeCorrectScroll();
+    if (_heightCorrectionScheduled) return;
+    _heightCorrectionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _heightCorrectionScheduled = false;
+      if (mounted) _maybeCorrectScroll();
+    });
   }
 
   // ---------- TTS ----------
@@ -3498,3 +3504,4 @@ class _HighlightSheetState extends State<_HighlightSheet> {
     );
   }
 }
+
