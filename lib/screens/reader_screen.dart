@@ -183,6 +183,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   // 当前 TTS 句子索引（-1 表示未在朗读）
   int _ttsSentence = -1;
   int _wordStart = -1, _wordEnd = -1;
+  (int, int)? _pendingTtsSentence;
+  (int, int)? _pendingTtsWord;
   String _wordMapKey = '';
   CleanedText? _wordMap;
   bool _followingWord = false;
@@ -1090,6 +1092,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (mounted) {
         final image = _pageImage; _pageImage = null;
         setState(() { _outgoingPage = null; _pageReady = false; _paging = false; });
+        _flushPendingTtsUpdates();
         WidgetsBinding.instance.addPostFrameCallback((_) => image?.dispose());
         _scheduleSave();
         if (!automatic && _autoActive && !_autoPaused) _autoClock.forward(from: 0);
@@ -1356,6 +1359,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _play() async {
     if (_inReadingMode) return;
     if (_autoActive) _stopAutoPage();
+    _clearTtsPageBoundary();
     // 朗读起点 = 视口当前显示的位置（进度 = 滑到哪读到哪）
     final pos = _viewportPosition();
     final startC = pos?.$1 ?? _chapter;
@@ -1729,7 +1733,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _chapter = c;
       _para = p;
       _ttsSentence = s;
+      // Every restart (including a voice change from the paused panel) starts
+      // playback. Keep scroll tracking and the visible controls in that state
+      // before follow/tts callbacks can produce a scroll notification.
+      if (_inReadingMode) {
+        _isPlaying = true;
+        _showReadingPanel = false;
+      }
     });
+    if (_inReadingMode) globalAudioHandler?.notifyPlaying();
     _followSentence(c, p, s);
     _scheduleSave();
     _refreshTtsCache();
@@ -1742,8 +1754,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onTtsSentenceChanged(int idx) {
-    if (!mounted || _paging) return;
+    if (!mounted) return;
     if (idx < 0) return;
+    if (_paging) {
+      _pendingTtsSentence = (_ttsChapter, idx);
+      _pendingTtsWord = null;
+      return;
+    }
     // 把 TtsReader 的句子索引映射回 (chapter, para, sIndex)
     final c = _ttsChapter;
     if (c < 0 || c >= _book.chapters.length) return;
@@ -1770,16 +1787,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         _ttsSentence = s;
         _wordStart = -1; _wordEnd = -1;
       });
-      // 高亮跟随：每次句子变化都滚动到该句子 item，保持在视口 25% 位置
-      if (_itemScrollController.isAttached) {
-        _followSentence(c, p, s);
-      }
       _scheduleSave();
     }
+    // A replay after a page animation may already have the right sentence but
+    // still need to bring it back inside the newly laid out viewport.
+    if (_itemScrollController.isAttached) _followSentence(c, p, s);
   }
 
   void _onTtsWordChanged(int start, int end) {
     if (!mounted || !_inReadingMode) return;
+    if (_paging) {
+      // Word offsets belong to the queued sentence, never the old screen one.
+      if (_pendingTtsSentence != null) _pendingTtsWord = (start, end);
+      return;
+    }
     if (start < 0 || end <= start) {
       if (_wordStart >= 0) setState(() { _wordStart = -1; _wordEnd = -1; });
       return;
@@ -1796,31 +1817,63 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _ensureWordVisible(left);
   }
 
+  void _flushPendingTtsUpdates() {
+    final sentence = _pendingTtsSentence, word = _pendingTtsWord;
+    _pendingTtsSentence = null; _pendingTtsWord = null;
+    if (!mounted || !_inReadingMode || sentence == null || sentence.$1 != _ttsChapter) return;
+    _onTtsSentenceChanged(sentence.$2);
+    if (word != null) _onTtsWordChanged(word.$1, word.$2);
+  }
+
+  void _clearTtsPageBoundary() {
+    if (_pageEndKey == null) return;
+    _pageEndKey = null;
+    _pageClipBottom = null;
+    _schedulePageGeometry();
+  }
+
+  RenderBox? get _ttsBodyBox {
+    final render = _pageBoundary.currentContext?.findRenderObject();
+    return render is RenderBox && render.hasSize ? render : null;
+  }
+
+  double get _ttsBodyHeight => _ttsBodyBox?.size.height ?? _bodyExtent;
+  double get _ttsVisibleBottom => min(_ttsBodyHeight,
+    _settings.pageTurnMode == 'scroll' ? _ttsBodyHeight : (_pageClipBottom ?? _ttsBodyHeight));
+
+  Rect? _ttsGlyphRect(int c, int p, int offset) {
+    final body = _ttsBodyBox;
+    final render = _paragraphKeys[_itemIndexOf(c, p)]?.currentContext?.findRenderObject();
+    if (body == null || render is! RenderParagraph || !render.hasSize) return null;
+    final paragraph = _book.chapters[c].paragraphs[p];
+    final boxes = render.getBoxesForSelection(TextSelection(baseOffset: _renderOffset(c, p, offset),
+      extentOffset: _renderOffset(c, p, min(offset + 1, paragraph.display.length))),
+      boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+    if (boxes.isEmpty) return null;
+    return boxes.first.toRect().shift(render.localToGlobal(Offset.zero, ancestor: body));
+  }
+
+  bool _ttsGlyphVisible(Rect glyph) => glyph.top >= -0.25 && glyph.bottom <= _ttsVisibleBottom + 0.25;
+
   Future<void> _ensureWordVisible(int offset) async {
     if (_paging || _followingWord || _pendingScrollIndex != null || !_itemScrollController.isAttached) return;
-    final index = _itemIndexOf(_chapter, _para);
-    final paragraph = _book.chapters[_chapter].paragraphs[_para];
-    final render = _paragraphKeys[index]?.currentContext?.findRenderObject();
-    final positions = _visibleItems().where((p) => p.index == index);
-    if (render is! RenderParagraph || positions.isEmpty) {
+    _clearTtsPageBoundary();
+    final glyph = _ttsGlyphRect(_chapter, _para, offset);
+    if (glyph == null) {
       _followSentence(_chapter, _para, max(0, _ttsSentence), character: offset);
       return;
     }
-    final boxes = render.getBoxesForSelection(TextSelection(
-      baseOffset: _renderOffset(_chapter, _para, offset),
-      extentOffset: _renderOffset(_chapter, _para, min(offset + 1, paragraph.display.length))));
-    if (boxes.isEmpty) return;
-    final y = positions.first.itemLeadingEdge * _bodyHeight + 10 + boxes.first.top;
-    if (y >= 0 && y < _bodyHeight - _fontSize * _lineHeight) return;
+    if (_ttsGlyphVisible(glyph)) return;
     _followingWord = true;
     try {
-      await _pageScrollController.animateScroll(offset: y - _bodyHeight * 0.2,
+      await _pageScrollController.animateScroll(offset: glyph.top - _ttsBodyHeight * 0.2,
         duration: const Duration(milliseconds: 1));
     } finally { _followingWord = false; }
     if (mounted) _scheduleSave();
   }
 
   Future<void> _followSentence(int c, int p, int sentence, {int? character}) async {
+    _clearTtsPageBoundary();
     final index = _itemIndexOf(c, p);
     final paragraph = _book.chapters[c].paragraphs[p];
     if (paragraph.sentences.isEmpty) return;
@@ -1830,22 +1883,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       textScaler: MediaQuery.textScalerOf(context));
     if (ReaderTypography.leadingLength(paragraph.display) > 0) painter.setPlaceholderDimensions([
       PlaceholderDimensions(size: Size(_indentWidth(paragraph), 1), alignment: ui.PlaceholderAlignment.middle)]);
-    painter.layout(maxWidth: MediaQuery.sizeOf(context).width - 32);
+    painter.layout(maxWidth: (_ttsBodyBox?.size.width ?? MediaQuery.sizeOf(context).width) - 32);
     final boxes = painter.getBoxesForSelection(TextSelection(baseOffset: _renderOffset(c, p, offset),
       extentOffset: _renderOffset(c, p, min(offset + 1, paragraph.display.length))));
     final top = boxes.isEmpty ? 0.0 : boxes.first.top + 10;
     painter.dispose();
-    final position = _visibleItems().where((pos) => pos.index == index);
-    if (position.isNotEmpty) {
-      final y = position.first.itemLeadingEdge * _bodyHeight + top;
-      if (y >= 0 && y < _bodyHeight - _fontSize * _lineHeight) return;
-    }
+    final glyph = _ttsGlyphRect(c, p, offset);
+    if (glyph != null && _ttsGlyphVisible(glyph)) return;
     final before = _navigationGeneration;
     await _positionViewport(index, 0);
     if (!mounted || _paging || _navigationGeneration != before + 1) return;
     _pendingScrollIndex = null;
     final generation = _navigationGeneration;
-    await _pageScrollController.animateScroll(offset: max(0.0, top - _bodyHeight * 0.2),
+    final positionedGlyph = _ttsGlyphRect(c, p, offset);
+    await _pageScrollController.animateScroll(offset: max(0.0, (positionedGlyph?.top ?? top) - _ttsBodyHeight * 0.2),
       duration: const Duration(milliseconds: 1));
     if (generation == _navigationGeneration) _scheduleSave();
   }
