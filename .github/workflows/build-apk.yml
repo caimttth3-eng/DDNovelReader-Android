@@ -35,11 +35,12 @@ jobs:
           sudo apt-get install -y fonts-noto-cjk
           flutter test
       - name: Upload UI previews
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: DDNovelReader-ui-previews
           path: build/ui-previews/*.png
-          if-no-files-found: error
+          if-no-files-found: warn
       - name: Restore Gradle wrapper
         run: |
           flutter create --platforms=android --project-name wrapper_seed /tmp/wrapper_seed

@@ -136,6 +136,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 16));
     await tester.pump(const Duration(milliseconds: 60));
+    for (var frame = 0; frame < 20; frame++) {
+      final current = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-incoming-transform')));
+      if (current.translation.dx > 0) break;
+      await tester.pump(const Duration(milliseconds: 16));
+    }
     final incoming = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-incoming-transform')));
     final outgoing = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-outgoing-transform')));
     expect(incoming.translation.dx, greaterThan(0));

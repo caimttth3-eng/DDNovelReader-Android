@@ -268,6 +268,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (_autoActive) _volumeChannel.invokeMethod('setKeepScreenOn', false);
     _pageAnimation.dispose(); _autoClock.dispose();
     _saveDebounce?.cancel();
     // 退出前确保最后一次进度写入（防抖可能未触发）
@@ -1337,6 +1338,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     });
     widget.storage.saveSettings(_settings.toJson());
     _autoClock.duration = Duration(seconds: selected);
+    _volumeChannel.invokeMethod('setKeepScreenOn', true);
     _autoClock.forward(from: 0);
   }
 
@@ -1349,16 +1351,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   void _pauseAutoPage() {
     _autoClock.stop();
+    _volumeChannel.invokeMethod('setKeepScreenOn', false);
     if (mounted) setState(() { _autoPaused = true; _showAutoPanel = true; });
   }
 
   void _resumeAutoPage() {
+    _volumeChannel.invokeMethod('setKeepScreenOn', true);
     setState(() { _autoPaused = false; _showAutoPanel = false; _showControls = false; });
     if (_autoClock.value >= 1) { _autoClock.forward(from: 0); } else { _autoClock.forward(); }
   }
 
   void _stopAutoPage() {
     _autoClock.stop(); _autoClock.value = 0;
+    _volumeChannel.invokeMethod('setKeepScreenOn', false);
     if (mounted) setState(() { _autoActive = false; _autoPaused = false; _showAutoPanel = false; _showControls = true; });
   }
 
