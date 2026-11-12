@@ -490,6 +490,75 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  testWidgets('speech sentence and word highlights follow across paragraphs and offscreen', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    final settings = ReadingSettings()..fontSize = 20..mergeNonSentenceBreaks = false..firstLineIndent = false;
+    await storage.saveSettings(settings.toJson());
+    String sentence(int paragraph, int sentence) => sentence == 0
+      ? '第${paragraph.toString().padLeft(2, '0')}段清晨风吹过树林。' : '朋友在第${paragraph.toString().padLeft(2, '0')}段带来问候。';
+    final book = Book(id: 'speech-paragraph-follow', title: '跨段朗读', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: List.generate(36, (p) => Paragraph(
+        display: sentence(p, 0) + sentence(p, 1), tts: '', sentences: const [], sentenceStartTts: const [])))]);
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    expect(speech.startedAt, 0);
+    final body = find.byKey(const ValueKey('reader-body'));
+    final viewport = tester.getRect(body);
+    final initialPositions = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value;
+    expect(initialPositions.any((p) => p.index == 21 && p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0), isFalse,
+      reason: 'The final test paragraph must start outside the viewport');
+    List<TextSpan> coloredSpans(Text text) {
+      final found = <TextSpan>[];
+      void visit(InlineSpan span) {
+        if (span is! TextSpan) return;
+        if (span.style?.backgroundColor == const Color(0xFF9BC5DD) ||
+            span.style?.backgroundColor == const Color(0x44FFC107)) found.add(span);
+        for (final child in span.children ?? <InlineSpan>[]) { visit(child); }
+      }
+      if (text.textSpan != null) visit(text.textSpan!);
+      return found;
+    }
+    String plain(InlineSpan span) => span.toPlainText().replaceAll('\u200B', '');
+    // Exercise every sentence transition, including the first sentence of a
+    // different paragraph. Cached list children must lose their old highlight.
+    for (var p = 0; p <= 20; p++) {
+      for (var s = 0; s < 2; s++) {
+        speech.onSentenceChanged?.call(p * 2 + s);
+        speech.onWordChanged?.call(0, 3);
+        await tester.pumpAndSettle();
+        final rich = tester.widgetList<Text>(find.byType(Text)).where((w) => w.textAlign == TextAlign.justify).toList();
+        final highlighted = rich.where((w) => coloredSpans(w).isNotEmpty).toList();
+        expect(highlighted, hasLength(1), reason: 'Only paragraph $p may retain speech colors');
+        final current = highlighted.single;
+        expect(plain(current.textSpan!), contains(sentence(p, s)));
+        final spans = coloredSpans(current);
+        expect(spans.where((w) => w.style?.backgroundColor == const Color(0xFF9BC5DD)).map(plain).join(),
+          sentence(p, s).substring(0, 3), reason: 'The word cursor must move into paragraph $p sentence $s');
+        expect(spans.where((w) => w.style?.backgroundColor == const Color(0x44FFC107)).map(plain).join(),
+          sentence(p, s).substring(3), reason: 'The current sentence must follow the audio');
+        final position = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value
+          .singleWhere((pos) => pos.index == p + 1);
+        expect(position.itemLeadingEdge, lessThan(1));
+        expect(position.itemTrailingEdge, greaterThan(0));
+        final paragraphFinder = find.byWidgetPredicate((w) => identical(w, current));
+        final render = tester.renderObject<RenderParagraph>(paragraphFinder);
+        final displayed = current.textSpan!.toPlainText();
+        final glyphOffset = displayed.indexOf(sentence(p, s).substring(0, 1));
+        final glyph = render.getBoxesForSelection(TextSelection(baseOffset: glyphOffset, extentOffset: glyphOffset + 1)).first;
+        final cursorY = render.localToGlobal(Offset(glyph.left, glyph.top)).dy;
+        expect(cursorY, greaterThanOrEqualTo(viewport.top - 1));
+        expect(cursorY, lessThan(viewport.bottom), reason: 'The actual highlighted glyph must scroll onscreen');
+        expect(tester.takeException(), isNull);
+      }
+    }
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
