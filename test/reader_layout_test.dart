@@ -559,6 +559,127 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  testWidgets('speech clears previous page limits and replays events received during a page turn', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..fontSize = 20..mergeNonSentenceBreaks = false
+      ..firstLineIndent = false).toJson());
+    String sentence(int paragraph, int sentence) => sentence == 0
+      ? '第${paragraph.toString().padLeft(2, '0')}段清晨风吹过树林。' : '朋友在第${paragraph.toString().padLeft(2, '0')}段带来问候。';
+    final book = Book(id: 'speech-after-paging', title: '翻页后朗读', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: List.generate(36, (p) => Paragraph(
+        display: sentence(p, 0) + sentence(p, 1), tts: '', sentences: const [], sentenceStartTts: const [])))]);
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(30, 360)); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    expect(speech.startedAt, greaterThan(0), reason: 'Exercise a backward page endpoint before starting speech');
+    Future<void> assertCursor(int idx) async {
+      await tester.pumpAndSettle();
+      final expected = sentence(idx ~/ 2, idx % 2);
+      final highlighted = <(Text, TextSpan)>[];
+      void visit(Text text, InlineSpan span) {
+        if (span is! TextSpan) return;
+        if (span.style?.backgroundColor == const Color(0xFF9BC5DD)) highlighted.add((text, span));
+        for (final child in span.children ?? <InlineSpan>[]) { visit(text, child); }
+      }
+      for (final text in tester.widgetList<Text>(find.byType(Text))) {
+        if (text.textSpan != null) visit(text, text.textSpan!);
+      }
+      expect(highlighted, hasLength(1));
+      final (text, word) = highlighted.single;
+      final blue = word.toPlainText().replaceAll('\u200B', '');
+      expect(blue, expected.substring(0, 3), reason: 'Queued word offsets belong to the new sentence');
+      expect(text.textSpan!.toPlainText().replaceAll('\u200B', ''), contains(expected));
+      final render = tester.renderObject<RenderParagraph>(find.byWidgetPredicate((w) => identical(w, text)));
+      final start = text.textSpan!.toPlainText().indexOf(blue);
+      final line = render.getBoxesForSelection(TextSelection(baseOffset: start, extentOffset: start + 1),
+        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle).first;
+      final clipFinder = find.byKey(const ValueKey('reader-page-clip'));
+      final clip = tester.widget<ClipRect>(clipFinder);
+      final clipSize = tester.getSize(clipFinder);
+      final bounds = clip.clipper?.getClip(clipSize) ?? (Offset.zero & clipSize);
+      final origin = render.localToGlobal(Offset.zero) - tester.getTopLeft(clipFinder);
+      final glyph = line.toRect().shift(origin);
+      expect(glyph.top, greaterThanOrEqualTo(bounds.top - 0.5));
+      expect(glyph.bottom, lessThanOrEqualTo(bounds.bottom + 0.5),
+        reason: 'The complete highlighted line must fit inside the actual page clip');
+      expect(tester.takeException(), isNull);
+    }
+    for (var idx = speech.startedAt; idx < speech.startedAt + 14; idx++) {
+      speech.onSentenceChanged?.call(idx); speech.onWordChanged?.call(0, 3);
+      await assertCursor(idx);
+    }
+    // Deliver a complete sentence/word event while the 80 ms horizontal page
+    // animation is active. It must be replayed after the page settles.
+    await tester.tapAt(const Offset(360, 360)); await tester.pump(const Duration(milliseconds: 16));
+    speech.onSentenceChanged?.call(60); speech.onWordChanged?.call(0, 3);
+    await assertCursor(60);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  for (final target in [
+    ('zh-CN-YunxiNeural', '云希（男·阳光）'),
+    (TtsReader.systemVoice, '使用系统文本转语音能力'),
+  ]) {
+    testWidgets('changing paused speech voice to ${target.$1} resumes UI follow state', (tester) async {
+      tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+      final speech = _TestSpeech();
+      final storage = AppStorage();
+      await storage.saveSettings((ReadingSettings()..fontSize = 20..voice = TtsReader.defaultVoice).toJson());
+      await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('voice-follow-${target.$1}'),
+        storage: storage, ttsReader: speech)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+      expect(speech.state, TtsState.paused);
+      expect(find.byKey(const ValueKey('reading-volume-slider')), findsOneWidget);
+      await tester.tap(find.text('音源')); await tester.pumpAndSettle();
+      await tester.tap(find.text(target.$2)); await tester.pumpAndSettle();
+      expect(speech.voice, target.$1);
+      expect(speech.state, TtsState.playing);
+      expect(find.byKey(const ValueKey('reading-volume-slider')), findsNothing,
+        reason: 'Changing voice restarts audio and must also leave the paused UI state');
+      final body = find.byKey(const ValueKey('reader-body'));
+      for (var idx = 14; idx <= 27; idx++) {
+        speech.onSentenceChanged?.call(idx); speech.onWordChanged?.call(0, 2);
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        final expectedParagraph = idx ~/ 7;
+        final expectedSentence = idx % 7;
+        final blue = <TextSpan>[];
+        final yellow = <TextSpan>[];
+        Text? highlighted;
+        void visit(Text text, InlineSpan span) {
+          if (span is! TextSpan) return;
+          if (span.style?.backgroundColor == const Color(0xFF9BC5DD)) { blue.add(span); highlighted = text; }
+          if (span.style?.backgroundColor == const Color(0x44FFC107)) yellow.add(span);
+          for (final child in span.children ?? <InlineSpan>[]) { visit(text, child); }
+        }
+        for (final text in tester.widgetList<Text>(find.byType(Text))) {
+          if (text.textSpan != null) visit(text, text.textSpan!);
+        }
+        expect(blue, hasLength(1));
+        expect(highlighted!.textSpan!.toPlainText().replaceAll('\u200B', ''),
+          contains('第1章第${expectedParagraph + 1}段。'));
+        final blueText = blue.single.toPlainText().replaceAll('\u200B', '');
+        expect(blueText, expectedSentence == 0 ? '第1' : '山间',
+          reason: 'A scroll notification must not move the word cursor back to the viewport start');
+        final yellowText = yellow.map((span) => span.toPlainText().replaceAll('\u200B', '')).join();
+        expect(yellowText, expectedSentence == 0 ? '章第${expectedParagraph + 1}段。' : '的风吹过树林，远方传来朋友的问候。');
+        final positions = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value;
+        expect(positions.any((p) => p.index == expectedParagraph + 1 && p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0), isTrue);
+        expect(tester.takeException(), isNull);
+      }
+      await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    });
+  }
+
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
