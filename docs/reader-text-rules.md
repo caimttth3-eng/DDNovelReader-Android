@@ -15,6 +15,12 @@
 
 首行缩进是独立开关：段首不足两个空格时改为两个全角空格；已有两个及以上空格时保留。正文按段落两端对齐。
 
+排版允许标点位于行首：仅在显示层加入零宽断行机会，避免标点禁则把前面的汉字一起推到下一行而拉大字距。保存进度、书签、划线和朗读高亮时映射回原文坐标，不删除行尾字符。
+
+## 朗读高亮
+
+整句使用浅色底，正在读的词使用更醒目的蓝色底和深色文字。词的位置来自 Edge `WordBoundary` 元数据，时间来自播放器实际进度，暂停后高亮保持，继续播放按实际进度更新。音频和词时间戳一起缓存，缓存播放也使用相同时间轴。音源没有返回有效词时间戳时保留句子高亮，不生成估算的逐词进度。
+
 ## 无关信息过滤
 
 默认关闭。开启后展开级别，首次不自动选级别；选定后才执行过滤。关闭后恢复未过滤内容。
@@ -35,6 +41,7 @@
 
 - [calibre：启发式处理](https://manual.calibre-ebook.com/conversion.html#heuristic-processing)：依据标点和排版线索修复硬断行。本项目按用户要求采用明确句末规则，不自动纠正词语和情节。
 - [Legado：替换净化](https://github.com/LegadoTeam/legado)：参考规则化净化及可关闭的设置形式；本项目提供内置分级规则。
+- [edge-tts 的词边界协议](https://github.com/rany2/edge-tts/blob/master/src/edge_tts/communicate.py)：读取音频元数据中的词与时间戳。
 - [scrollable_positioned_list 源码](https://github.com/google/flutter.widgets/blob/master/packages/scrollable_positioned_list/lib/src/scrollable_positioned_list.dart)：按索引定位；页间动画捕获当前画面，不额外建立带负对齐锚点的列表。
 
 自动化覆盖文本与朗读分句、闭引号、原始缩进、分级过滤、源坐标映射、缓存指纹、逐书进度恢复、三种翻页输入以及远距离跳转/滚动后翻页和进入朗读。实际设备上的音频播放与手感仍需实机验证。

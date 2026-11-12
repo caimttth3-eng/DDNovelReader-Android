@@ -14,6 +14,7 @@ import 'package:duoduo_langdu/screens/shelf_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
+import 'package:duoduo_langdu/services/reader_typography.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
@@ -100,10 +101,23 @@ void main() {
     await capture('reader-controls');
     final list = find.byKey(const ValueKey('reader-body'));
     final text = find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify && (w.textSpan?.toPlainText().contains('清晨，阳光照进窗前。') ?? false)).first;
-    expect(tester.widget<Text>(text).textSpan!.toPlainText(), startsWith('　　'));
+    expect(tester.widget<Text>(text).textSpan!.toPlainText(), startsWith('\uFFFC'));
     final paragraphRender = tester.renderObject<RenderParagraph>(text);
-    final firstGlyph = paragraphRender.getBoxesForSelection(const TextSelection(baseOffset: 2, extentOffset: 3));
+    final displayed = tester.widget<Text>(text).textSpan!.toPlainText();
+    final firstGlyph = paragraphRender.getBoxesForSelection(TextSelection(baseOffset: displayed.indexOf('清'), extentOffset: displayed.indexOf('清') + 1));
     expect(firstGlyph.first.left, greaterThanOrEqualTo(38), reason: 'First-line indentation must also be visible when justified');
+    final punctuationSource = '甲乙丙丁，后面继续。';
+    final punctuationLayout = ReaderTypography.layout(punctuationSource, paragraphStart: true);
+    final painter = TextPainter(text: TextSpan(text: punctuationLayout,
+      style: const TextStyle(fontSize: 20, fontFamily: 'Preview')), textDirection: TextDirection.ltr,
+      textAlign: TextAlign.justify)..layout(maxWidth: 80);
+    final lastLetter = painter.getBoxesForSelection(TextSelection(baseOffset: ReaderTypography.layoutOffset(punctuationSource, 3),
+      extentOffset: ReaderTypography.layoutOffset(punctuationSource, 4)));
+    final comma = painter.getBoxesForSelection(TextSelection(baseOffset: ReaderTypography.layoutOffset(punctuationSource, 4),
+      extentOffset: ReaderTypography.layoutOffset(punctuationSource, 5)));
+    expect(lastLetter.first.top, 0, reason: 'Four full-width characters fit before the punctuation');
+    expect(comma.first.top, greaterThan(lastLetter.first.top), reason: 'Punctuation may start the next line');
+    painter.dispose();
     final before = tester.getTopLeft(text);
     final listSize = tester.getSize(list);
     await tester.tapAt(const Offset(195, 360));
@@ -425,6 +439,15 @@ void main() {
       .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1), isNotEmpty);
     expect(before, isNotEmpty); expect(tester.takeException(), isNull);
     expect(speech.startedAt, greaterThan(0), reason: 'Speech must start at the visible sentence rather than the chapter start');
+    speech.onWordChanged?.call(0, 2);
+    await tester.pump();
+    final spans = <TextSpan>[];
+    void collect(InlineSpan span) { if (span is TextSpan) { spans.add(span); for (final child in span.children ?? <InlineSpan>[]) { collect(child); } } }
+    for (final text in tester.widgetList<Text>(find.byType(Text))) { if (text.textSpan != null) collect(text.textSpan!); }
+    expect(spans.any((s) => s.style?.backgroundColor == const Color(0xFF9BC5DD)), isTrue,
+      reason: 'The current word has a stronger highlight');
+    expect(spans.any((s) => s.style?.backgroundColor == const Color(0x44FFC107)), isTrue,
+      reason: 'The rest of the sentence stays highlighted');
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 

@@ -12,6 +12,8 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../i18n.dart';
 import '../services/app_appearance.dart';
 import '../services/reading_text.dart';
+import '../services/reader_typography.dart';
+import '../services/text_cleaner.dart';
 import '../widgets/reader_icon.dart';
 import '../widgets/reader_brightness_control.dart';
 import '../widgets/reader_gestures.dart';
@@ -119,7 +121,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   BookProgress? _lastProgress;
   Size _viewportSize = Size.zero;
   double _bodyExtent = 1;
-  String get _layoutSignature => '$_textSignature/$_fontSize/$_lineHeight/$_fontFamily/$_viewportSize';
+  String get _layoutSignature => 'typography2/$_textSignature/$_fontSize/$_lineHeight/$_fontFamily/$_viewportSize';
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ScrollOffsetController _pageScrollController = ScrollOffsetController();
   bool _paging = false;
@@ -163,6 +165,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   int _para = 0;
   // 当前 TTS 句子索引（-1 表示未在朗读）
   int _ttsSentence = -1;
+  int _wordStart = -1, _wordEnd = -1;
+  String _wordMapKey = '';
+  CleanedText? _wordMap;
   bool _isPlaying = false;
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
   int _ttsChapter = 0;
@@ -220,6 +225,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       });
     _tts = widget.ttsReader ?? TtsReader();
     _tts.onSentenceChanged = _onTtsSentenceChanged;
+    _tts.onWordChanged = _onTtsWordChanged;
     _tts.onCompleted = _onTtsCompleted;
     _tts.onError = _onTtsError;
     _book = widget.book;
@@ -364,7 +370,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _book = ReadingText.format(widget.book, merge: _settings.mergeNonSentenceBreaks,
       indent: _settings.firstLineIndent,
       filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none');
-    _cacheFingerprint = ReadingText.fingerprint(_book);
+    _cacheFingerprint = 'words1-${ReadingText.fingerprint(_book)}';
+    _wordMapKey = ''; _wordMap = null; _wordStart = -1; _wordEnd = -1;
     _items = _flatten(_book);
     _paragraphKeys.clear();
     for (final recognizer in _sentenceRecognizers.values) { recognizer.dispose(); }
@@ -782,17 +789,23 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   TextSpan _paragraphSpan(_Item it, Paragraph para, {bool gestures = true}) {
     final spans = <InlineSpan>[];
-    var cursor = 0;
+    final leading = ReaderTypography.leadingLength(para.display);
+    if (leading > 0) spans.add(WidgetSpan(alignment: ui.PlaceholderAlignment.middle,
+      child: SizedBox(width: _indentWidth(para), height: 1)));
+    var cursor = leading;
     for (var i = 0; i < para.sentences.length; i++) {
       final sentence = para.sentences[i];
       final start = sentence.displayStart.clamp(cursor, para.display.length);
       final end = sentence.displayEnd.clamp(start, para.display.length);
-      if (start > cursor) spans.add(TextSpan(text: para.display.substring(cursor, start)));
+      if (start > cursor) spans.add(TextSpan(text: ReaderTypography.layout(para.display.substring(cursor, start))));
       final current = _inReadingMode && it.chapterIndex == _chapter && it.paragraphIndex == _para && i == _ttsSentence;
       final recognizer = gestures ? _sentenceRecognizers.putIfAbsent('${it.chapterIndex}/${it.paragraphIndex}/$i', () => LongPressGestureRecognizer()) : null;
       if (recognizer != null) recognizer.onLongPress = () => _onSentenceLongPress(_Item.sentence(it.chapterIndex, it.paragraphIndex, i), para);
       final marks = _hlIndex[_hlKey(it.chapterIndex, it.paragraphIndex)] ?? [];
       final points = <int>{start, end};
+      if (current && _wordStart >= 0 && _wordEnd > _wordStart) {
+        points.add(_wordStart.clamp(start, end)); points.add(_wordEnd.clamp(start, end));
+      }
       for (final h in marks) {
         if (h.charEnd > start && h.charStart < end) { points.add(h.charStart.clamp(start, end)); points.add(h.charEnd.clamp(start, end)); }
       }
@@ -800,15 +813,26 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       for (var j = 0; j + 1 < sorted.length; j++) {
         final left = sorted[j], right = sorted[j + 1];
         final marked = marks.where((h) => h.charStart < right && h.charEnd > left);
-        spans.add(TextSpan(text: para.display.substring(left, right), recognizer: recognizer,
-          style: TextStyle(backgroundColor: current ? const Color(0x44FFC107) : marked.isEmpty ? null : Color(marked.last.color),
+        final word = current && _wordStart < right && _wordEnd > left && _wordStart >= 0;
+        spans.add(TextSpan(text: ReaderTypography.layout(para.display.substring(left, right)), recognizer: recognizer,
+          style: TextStyle(color: word ? const Color(0xFF102A3A) : null,
+            backgroundColor: word ? const Color(0xFF9BC5DD) : current ? const Color(0x44FFC107) : marked.isEmpty ? null : Color(marked.last.color),
             fontWeight: current ? FontWeight.w600 : FontWeight.normal)));
       }
       cursor = end;
     }
-    if (cursor < para.display.length) spans.add(TextSpan(text: para.display.substring(cursor)));
+    if (cursor < para.display.length) spans.add(TextSpan(text: ReaderTypography.layout(para.display.substring(cursor))));
     return TextSpan(style: TextStyle(fontSize: _fontSize, height: _lineHeight, color: _theme.text,
       fontFamily: _fontFamily.isEmpty ? null : _fontFamily), children: spans);
+  }
+
+  double _indentWidth(Paragraph paragraph) {
+    var units = 0.0;
+    final leading = ReaderTypography.leadingLength(paragraph.display);
+    for (var i = 0; i < leading; i++) {
+      units += paragraph.display[i] == '　' ? 1 : paragraph.display[i] == '\t' ? 2 : 0.5;
+    }
+    return MediaQuery.textScalerOf(context).scale(_fontSize) * units;
   }
 
   static String _fmtTime(DateTime t) {
@@ -1201,7 +1225,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final render = _paragraphKeys[position.index]?.currentContext?.findRenderObject();
     if (render is! RenderParagraph) return 0;
     final y = max(0.0, -position.itemLeadingEdge * _bodyExtent - 10);
-    return render.getPositionForOffset(Offset(0, y)).offset;
+    final it = _items[position.index];
+    if (it.isTitle) return 0;
+    return ReaderTypography.sourceOffset(_book.chapters[it.chapterIndex].paragraphs[it.paragraphIndex].display,
+      render.getPositionForOffset(Offset(0, y)).offset);
   }
 
   /// 开始 TTS 加载态：显示 loading，15 秒未出声则超时提示并退出加载态
@@ -1642,6 +1669,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         _chapter = c;
         _para = p;
         _ttsSentence = s;
+        _wordStart = -1; _wordEnd = -1;
       });
       // 高亮跟随：每次句子变化都滚动到该句子 item，保持在视口 25% 位置
       if (_itemScrollController.isAttached) {
@@ -1651,6 +1679,23 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
   }
 
+  void _onTtsWordChanged(int start, int end) {
+    if (!mounted || !_inReadingMode) return;
+    if (start < 0 || end <= start) {
+      if (_wordStart >= 0) setState(() { _wordStart = -1; _wordEnd = -1; });
+      return;
+    }
+    final para = _book.chapters[_chapter].paragraphs[_para];
+    if (_ttsSentence < 0 || _ttsSentence >= para.sentenceStartTts.length) return;
+    final key = '$_textSignature/$_chapter/$_para';
+    if (_wordMapKey != key) { _wordMapKey = key; _wordMap = const TextCleaner().clean(para.display); }
+    final base = para.sentenceStartTts[_ttsSentence];
+    var left = _wordMap!.displayOffsetOfTts(base + start).clamp(0, para.display.length);
+    final right = _wordMap!.displayOffsetOfTts(base + end).clamp(left, para.display.length);
+    while (left < right && para.display[left].trim().isEmpty) { left++; }
+    setState(() { _wordStart = left; _wordEnd = right; });
+  }
+
   Future<void> _followSentence(int c, int p, int sentence) async {
     final index = _itemIndexOf(c, p);
     final paragraph = _book.chapters[c].paragraphs[p];
@@ -1658,9 +1703,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final offset = paragraph.sentences[sentence.clamp(0, paragraph.sentences.length - 1)].displayStart;
     final painter = TextPainter(text: _paragraphSpan(_items[index], paragraph, gestures: false),
       textAlign: TextAlign.justify, textDirection: Directionality.of(context),
-      textScaler: MediaQuery.textScalerOf(context))..layout(maxWidth: MediaQuery.sizeOf(context).width - 32);
-    final boxes = painter.getBoxesForSelection(TextSelection(baseOffset: offset,
-      extentOffset: min(offset + 1, paragraph.display.length)));
+      textScaler: MediaQuery.textScalerOf(context));
+    if (ReaderTypography.leadingLength(paragraph.display) > 0) painter.setPlaceholderDimensions([
+      PlaceholderDimensions(size: Size(_indentWidth(paragraph), 1), alignment: ui.PlaceholderAlignment.middle)]);
+    painter.layout(maxWidth: MediaQuery.sizeOf(context).width - 32);
+    final boxes = painter.getBoxesForSelection(TextSelection(baseOffset: ReaderTypography.layoutOffset(paragraph.display, offset),
+      extentOffset: ReaderTypography.layoutOffset(paragraph.display, min(offset + 1, paragraph.display.length))));
     final top = boxes.isEmpty ? 0.0 : boxes.first.top + 10;
     painter.dispose();
     final position = _visibleItems().where((pos) => pos.index == index);

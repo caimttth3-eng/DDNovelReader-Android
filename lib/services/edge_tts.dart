@@ -15,6 +15,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../i18n.dart';
+import '../models/speech_word.dart';
 
 const String _trustedClientToken = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const String _secMsGecVersion = '2-143.0.3650.75';
@@ -487,10 +488,15 @@ String edgeRateStr(double rate) {
 /// 合成单句文本为 MP3 字节。
 /// 内部含一次 403 时钟同步重试。
 Future<Uint8List> edgeSynth(String text,
-    {String voice = 'zh-CN-XiaoxiaoNeural', String rate = '+0%'}) async {
+    {String voice = 'zh-CN-XiaoxiaoNeural', String rate = '+0%',
+    void Function(List<SpeechWord>)? onWords}) async {
   for (var attempt = 0; attempt < 2; attempt++) {
-    final result = await _synthOnce(text, voice: voice, rate: rate);
-    if (result != null && result.isNotEmpty) return result;
+    final words = SpeechWordCollector(text);
+    final result = await _synthOnce(text, voice: voice, rate: rate, words: words);
+    if (result != null && result.isNotEmpty) {
+      onWords?.call(words.words);
+      return result;
+    }
     if (attempt == 0) {
       // 可能 403（时钟偏差）→ 同步时钟重试
       await _syncClock();
@@ -512,7 +518,7 @@ List<int> _extractAudioPayload(List<int> data) {
 }
 
 Future<Uint8List?> _synthOnce(String text,
-    {required String voice, required String rate}) async {
+    {required String voice, required String rate, required SpeechWordCollector words}) async {
   final connId = _connectId();
   final gec = _generateSecMsGec();
   final uri = Uri(
@@ -574,6 +580,10 @@ Future<Uint8List?> _synthOnce(String text,
           gotAudio = true;
         }
       } else if (data is String) {
+        if (data.contains('Path:audio.metadata')) {
+          final separator = data.indexOf('\r\n\r\n');
+          if (separator >= 0) words.addMetadata(data.substring(separator + 4));
+        }
         if (data.contains('Path:turn.end')) {
           finish();
         }
@@ -588,7 +598,7 @@ Future<Uint8List?> _synthOnce(String text,
   );
 
   // 发送 speech.config
-  final config = 'X-Timestamp:$_jsDate\r\n'
+  final config = 'X-Timestamp:${_jsDate()}\r\n'
       'Content-Type:application/json; charset=utf-8\r\n'
       'Path:speech.config\r\n\r\n'
       '{"context":{"synthesis":{"audio":{"metadataoptions":'
