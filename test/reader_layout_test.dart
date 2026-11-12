@@ -500,8 +500,9 @@ void main() {
         .toList()..sort((a,b) => a.localToGlobal(Offset.zero).dy.compareTo(b.localToGlobal(Offset.zero).dy));
       final render = candidates.first;
       final origin = render.localToGlobal(Offset.zero);
-      final point = render.getPositionForOffset(Offset(0, (viewport.top - origin.dy).clamp(0.0, render.size.height)));
-      final range = render.getLineBoundary(point);
+      final y = (viewport.top - origin.dy).clamp(0.0, render.size.height);
+      final range = TextRange(start: render.getPositionForOffset(Offset(-10000, y)).offset,
+        end: render.getPositionForOffset(Offset(10000, y)).offset);
       final full = render.text.toPlainText();
       var start = range.start;
       while (start < range.end && (full[start] == '\u200B' || full[start] == '\n')) { start++; }

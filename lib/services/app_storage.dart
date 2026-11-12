@@ -112,6 +112,7 @@ class ReadingSettings {
   bool automaticBrightness = true;
   int autoPageSeconds = 20;
   String pageTurnMode = 'tap';
+  bool retainPageLine = false;
   bool mergeNonSentenceBreaks = true;
   bool firstLineIndent = true;
   bool informationFilter = false;
@@ -130,6 +131,7 @@ class ReadingSettings {
         'automaticBrightness': automaticBrightness,
         'autoPageSeconds': autoPageSeconds,
         'pageTurnMode': pageTurnMode,
+        'retainPageLine': retainPageLine,
         'textCorrection': mergeNonSentenceBreaks,
         'firstLineIndent': firstLineIndent,
         'informationFilter': informationFilter,
@@ -154,6 +156,7 @@ class ReadingSettings {
     s.autoPageSeconds = ((json['autoPageSeconds'] as num?)?.toInt() ?? 20).clamp(1, 120);
     final mode = json['pageTurnMode'];
     s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'tap';
+    s.retainPageLine = json['retainPageLine'] as bool? ?? false;
     s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
     s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;
     s.informationFilter = json['informationFilter'] as bool? ?? false;
@@ -161,7 +164,7 @@ class ReadingSettings {
     s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'none';
     s.fontSize = ((json['fontSize'] as num?)?.toDouble() ?? s.fontSize).clamp(14, 64);
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
-    s.speechRate = (json['speechRate'] as num?)?.toDouble() ?? s.speechRate;
+    s.speechRate = ((json['speechRate'] as num?)?.toDouble() ?? s.speechRate).clamp(0.5, 3.0);
     s.voice = json['voice'] as String? ?? '';
     s.themeIndex = (json['themeIndex'] as num?)?.toInt() ?? 0;
     s.dayThemeIndex = (json['dayThemeIndex'] as num?)?.toInt() ?? 0;

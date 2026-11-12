@@ -116,6 +116,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   final GlobalKey _pageBoundary = GlobalKey();
   ui.Image? _pageImage;
   final Map<int, GlobalKey> _paragraphKeys = {};
+  final Map<int, GlobalKey> _titleKeys = {};
+  double? _pageClipBottom;
+  bool _pageGeometryScheduled = false;
+  String? _pageEndKey;
   final Map<String, LongPressGestureRecognizer> _sentenceRecognizers = {};
   int _navigationGeneration = 0;
   bool _restoringProgress = true;
@@ -389,6 +393,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _wordMapKey = ''; _wordMap = null; _wordStart = -1; _wordEnd = -1;
     _items = _flatten(_book);
     _paragraphKeys.clear();
+    _titleKeys.clear(); _pageClipBottom = null; _pageEndKey = null;
     for (final recognizer in _sentenceRecognizers.values) { recognizer.dispose(); }
     _sentenceRecognizers.clear();
     _pendingScrollIndex = null;
@@ -927,6 +932,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   // ---------- 滚动/翻页 ----------
 
   void _jumpToItem(int index, {bool animate = true}) {
+    _pageEndKey = null;
     if (!mounted || index < 0 || index >= _items.length) return;
     if (!_itemScrollController.isAttached) {
       WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _jumpToItem(index, animate: false); });
@@ -1025,15 +1031,36 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     try {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return false;
-      final height = MediaQuery.sizeOf(context).height - _chapterTopArea() - _readerInsets.bottom - 32;
-      // This positional update is hidden behind the old page; only the horizontal
-      // animation below is visible to the reader.
+      final rows = _pageLines();
+      final clip = _pageClipBottom ?? _bodyHeight;
+      final complete = rows.where((r) => r.top >= -0.5 && r.bottom <= clip + 0.5).toList();
+      if (complete.isEmpty) return false;
+      final retain = _settings.pageTurnMode != 'scroll' && _settings.retainPageLine;
+      _PageLine? target;
+      if (direction > 0) {
+        final last = complete.last;
+        final candidates = rows.where((r) => r.top >= last.bottom - 0.5 && r.key != last.key).toList();
+        if (candidates.isEmpty) return false;
+        target = retain ? last : candidates.first;
+        _pageEndKey = null;
+      } else {
+        final first = complete.first;
+        final candidates = rows.where((r) => retain ? r.top <= first.top + 0.5 : r.bottom <= first.top + 0.5).toList();
+        if (candidates.isEmpty) return false;
+        final end = candidates.last;
+        final fitting = candidates.where((r) => end.bottom - r.top <= _bodyHeight + 0.5).toList();
+        if (fitting.isEmpty) return false;
+        target = fitting.first; _pageEndKey = end.key;
+      }
+      if (target.top.abs() < 0.5) return false;
+      // Move to an actual text-line boundary behind the frozen outgoing page.
       await _pageScrollController.animateScroll(
-        offset: direction * max(1.0, height - _fontSize * _lineHeight),
+        offset: target.top,
         duration: const Duration(milliseconds: 1),
       );
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return false;
+      _updatePageGeometry();
       final visible = _visibleItems();
       if (visible.isEmpty) {
         await _positionViewport(old.first.index, old.first.itemLeadingEdge);
@@ -1080,6 +1107,60 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           child: ColoredBox(color: _theme.bg, child: _outgoingPage!)),
       ])));
     });
+
+  List<_PageLine> _pageLines() {
+    final boundary = _pageBoundary.currentContext?.findRenderObject();
+    if (boundary is! RenderBox || !boundary.hasSize) return [];
+    final origin = boundary.localToGlobal(Offset.zero).dy;
+    final result = <_PageLine>[];
+    for (final entry in {..._titleKeys, ..._paragraphKeys}.entries) {
+      final render = entry.value.currentContext?.findRenderObject();
+      if (render is! RenderParagraph || !render.hasSize) continue;
+      final top = render.localToGlobal(Offset.zero).dy - origin;
+      if (top > _bodyExtent * 2 || top + render.size.height < -_bodyExtent) continue;
+      final text = render.text.toPlainText();
+      final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
+        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+      final lines = <Rect>[];
+      for (final box in boxes) {
+        final rect = box.toRect();
+        if (rect.width < 0.01 || rect.height < 2) continue;
+        final row = lines.indexWhere((r) => (r.top - rect.top).abs() < 0.5);
+        if (row < 0) lines.add(rect); else lines[row] = lines[row].expandToInclude(rect);
+      }
+      for (final rect in lines) {
+        final start = render.getPositionForOffset(Offset(-10000, rect.center.dy)).offset;
+        result.add(_PageLine('${entry.key}/$start', top + rect.top, top + rect.bottom));
+      }
+    }
+    result.sort((a,b) => a.top.compareTo(b.top));
+    return result;
+  }
+
+  void _schedulePageGeometry() {
+    if (_pageGeometryScheduled || !mounted) return;
+    _pageGeometryScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pageGeometryScheduled = false;
+      if (mounted) _updatePageGeometry();
+    });
+  }
+
+  void _updatePageGeometry() {
+    if (_settings.pageTurnMode == 'scroll') {
+      if (_pageClipBottom != null) setState(() => _pageClipBottom = null);
+      return;
+    }
+    final rows = _pageLines();
+    var limit = _bodyExtent;
+    if (_pageEndKey != null) {
+      final ends = rows.where((r) => r.key == _pageEndKey);
+      if (ends.isNotEmpty) limit = min(limit, ends.first.bottom);
+    }
+    final full = rows.where((r) => r.bottom <= limit + 0.25 && r.top >= -0.25).toList();
+    final bottom = full.isEmpty ? _bodyExtent : min(_bodyExtent, full.last.bottom);
+    if (_pageClipBottom == null || (_pageClipBottom! - bottom).abs() > 0.25) setState(() => _pageClipBottom = bottom);
+  }
 
   // Skip chapter headings and empty sentences, including at chapter boundaries.
   void _moveSentence(int direction) {
@@ -1131,6 +1212,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onScroll() {
+    _schedulePageGeometry();
     // 程序化跳转（章节/进度条/TTS 高亮）期间不覆盖正确位置；
     // 拖动 seek 期间由拖动逻辑控制位置。
     // TTS 朗读期间位置由 TTS 句子主导（_onTtsSentenceChanged），
@@ -1183,6 +1265,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 报告 item 实际渲染高度。scrollable_positioned_list 自管 item 定位，
   /// 这里仅用渲染回调驱动跳转后校正（itemPositions 二次收敛）。
   void _recordHeight(int index, double height) {
+    _schedulePageGeometry();
     if (_heightCorrectionScheduled) return;
     _heightCorrectionScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2181,7 +2264,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Widget _buildBody() {
-    return KeyedSubtree(key: ValueKey(_textSignature), child: ScrollablePositionedList.builder(
+    return ClipRect(key: const ValueKey('reader-page-clip'), clipper: _ReaderPageClipper(
+      _settings.pageTurnMode == 'scroll' ? null : _pageClipBottom),
+      child: KeyedSubtree(key: ValueKey(_textSignature), child: ScrollablePositionedList.builder(
       key: const ValueKey('reader-body'),
       itemScrollController: _itemScrollController,
       scrollOffsetController: _pageScrollController,
@@ -2203,6 +2288,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text(
               it.title,
+              key: _titleKeys.putIfAbsent(i, () => GlobalKey()),
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: _fontSize + 6,
@@ -2227,7 +2313,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           child: child,
         );
       },
-    ));
+    )));
   }
 
   // ---------- 朗读模式底部控制面板 ----------
@@ -2252,59 +2338,28 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 音量调节行（保留暂停面板的音量滑条）
-              Row(
-                children: [
-                  const Icon(Icons.volume_down, color: Color(0xFF9BC5DD), size: 20),
-                  Expanded(
-                    child: Slider(
-                      value: _mediaVolume.clamp(0.0, 1.0),
-                      min: 0.0,
-                      max: 1.0,
-                      activeColor: const Color(0xFF9BC5DD),
-                      inactiveColor: const Color(0x44C9A96E),
-                      onChanged: _setMediaVolume,
-                    ),
-                  ),
-                  const Icon(Icons.volume_up, color: Color(0xFF9BC5DD), size: 20),
-                ],
-              ),
-              const SizedBox(height: 2),
-              // 语速调节行
-              Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.remove_circle_outline,
-                        color: Color(0xFF9BC5DD)),
-                    onPressed: () => _adjustRate(-0.1),
-                  ),
-                  Expanded(
-                    child: Column(
-                      children: [
-                        Text(
-                          T('rateLabel', {'rate': rate.toStringAsFixed(1)}),
-                          style: const TextStyle(
-                              color: Color(0xFF9BC5DD), fontSize: 12),
-                        ),
-                        Slider(
-                          value: rate.clamp(0.5, 3.0),
-                          min: 0.5,
-                          max: 3.0,
-                          divisions: 25,
-                          activeColor: const Color(0xFF9BC5DD),
-                          inactiveColor: const Color(0x44C9A96E),
-                          onChanged: (v) => _setRate(v),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.add_circle_outline,
-                        color: Color(0xFF9BC5DD)),
-                    onPressed: () => _adjustRate(0.1),
-                  ),
-                ],
-              ),
+              Row(children: [
+                const SizedBox(width: 44, height: 44, child: Icon(Icons.volume_down, color: Color(0xFF9BC5DD), size: 20)),
+                Expanded(child: Slider(key: const ValueKey('reading-volume-slider'),
+                  padding: const EdgeInsets.symmetric(horizontal: 12), value: _mediaVolume.clamp(0.0, 1.0),
+                  min: 0, max: 1, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
+                  onChanged: _setMediaVolume)),
+                const SizedBox(width: 44, height: 44, child: Icon(Icons.volume_up, color: Color(0xFF9BC5DD), size: 20)),
+              ]),
+              Text(T('rateLabel', {'rate': rate.toStringAsFixed(1)}),
+                style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 12)),
+              Row(children: [
+                SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-minus'),
+                  padding: EdgeInsets.zero, icon: const Icon(Icons.remove_circle_outline, color: Color(0xFF9BC5DD)),
+                  onPressed: () => _adjustRate(-0.1))),
+                Expanded(child: Slider(key: const ValueKey('reading-rate-slider'),
+                  padding: const EdgeInsets.symmetric(horizontal: 12), value: rate.clamp(0.5, 3.0),
+                  min: 0.5, max: 3, divisions: 25, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
+                  onChanged: _setRate)),
+                SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-plus'),
+                  padding: EdgeInsets.zero, icon: const Icon(Icons.add_circle_outline, color: Color(0xFF9BC5DD)),
+                  onPressed: () => _adjustRate(0.1))),
+              ]),
               const SizedBox(height: 4),
               // 功能按钮行
               Row(
@@ -2388,6 +2443,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void _setRate(double rate) {
     _settings.speechRate = rate;
     _tts.setSpeechRate(rate);
+    _refreshTtsCache();
     widget.storage.saveSettings(_settings.toJson());
     setState(() {});
   }
@@ -3200,10 +3256,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final render = _paragraphKeys[position.index]?.currentContext?.findRenderObject();
     if (render is! RenderParagraph) return null;
     final y = max(0.0, -position.itemLeadingEdge * _bodyExtent - 10);
-    final at = render.getPositionForOffset(Offset(0, y));
-    final line = render.getLineBoundary(at);
+    final lineStart = render.getPositionForOffset(Offset(-10000, y)).offset;
     final text = _book.chapters[it.chapterIndex].paragraphs[it.paragraphIndex].display;
-    var sourceOffset = ReaderTypography.sourceOffset(text, line.start, lineBreakAt: _lineBreakFor(it.chapterIndex, it.paragraphIndex));
+    var sourceOffset = ReaderTypography.sourceOffset(text, lineStart, lineBreakAt: _lineBreakFor(it.chapterIndex, it.paragraphIndex));
     while (sourceOffset < text.length && text[sourceOffset].trim().isEmpty) { sourceOffset++; }
     final start = _renderOffset(it.chapterIndex, it.paragraphIndex, sourceOffset);
     final end = _renderOffset(it.chapterIndex, it.paragraphIndex, min(sourceOffset + 1, text.length));
@@ -3284,6 +3339,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           // 变速/切音色后缓存坐标（voice/rate 段）变化，重建朗读侧缓存
           _refreshTtsCache();
           _applyReaderBrightness();
+          _pageEndKey = null; _schedulePageGeometry();
           widget.storage.saveSettings(s.toJson());
         },
         onVoiceLoad: () async => [
@@ -3568,6 +3624,11 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   DropdownMenuItem(value: 'swipe', child: Text('左右滑动')),
                   DropdownMenuItem(value: 'scroll', child: Text('上下滚动'))],
                 onChanged: (value) { if (value != null) setState(() { _s.pageTurnMode = value; _update(); }); })),
+              SwitchListTile(key: const ValueKey('retain-page-line'), title: const Text('翻页后保留首行'),
+                subtitle: Text(_s.pageTurnMode == 'scroll' ? '上下滚动时不可用' : '下一页首行重复上一页最后一整行'),
+                value: _s.retainPageLine, onChanged: _s.pageTurnMode == 'scroll' ? null : (value) {
+                  setState(() { _s.retainPageLine = value; _update(); });
+                }),
               SwitchListTile(key: const ValueKey('text-correction'), title: const Text('文本修正'),
                 subtitle: const Text('合并非句换行、修复换行错位闭引号、清理不可见字符，同时调整朗读分句'),
                 value: _s.mergeNonSentenceBreaks,
@@ -3624,10 +3685,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               )),
               // 变速
               _row(T('speed'), Icons.speed, Slider(
-                value: _s.speechRate,
+                value: _s.speechRate.clamp(0.5, 3.0),
                 min: 0.5,
-                max: 2.0,
-                divisions: 15,
+                max: 3.0,
+                divisions: 25,
                 label: '${_s.speechRate.toStringAsFixed(2)}x',
                 onChanged: (v) => setState(() {
                   _s.speechRate = v;
@@ -4020,4 +4081,19 @@ class _ReaderLineAnchor {
   final double top;
   final bool title;
   const _ReaderLineAnchor(this.chapter, this.source, this.top, {this.title = false});
+}
+
+class _PageLine {
+  final String key;
+  final double top, bottom;
+  const _PageLine(this.key, this.top, this.bottom);
+}
+
+class _ReaderPageClipper extends CustomClipper<Rect> {
+  final double? bottom;
+  const _ReaderPageClipper(this.bottom);
+  @override
+  Rect getClip(Size size) => Rect.fromLTWH(0, 0, size.width, (bottom ?? size.height).clamp(0.0, size.height));
+  @override
+  bool shouldReclip(_ReaderPageClipper oldClipper) => bottom != oldClipper.bottom;
 }

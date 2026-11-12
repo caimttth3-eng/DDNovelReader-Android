@@ -62,4 +62,15 @@ void main() {
       expect(ReaderTypography.sourceOffset(source, rendered), i);
     }
   });
+  test('a retained viewport line has reversible display coordinates', () {
+    const source = '　　前面的正文，当前位置之后保持换行。';
+    const split = 8;
+    final layout = ReaderTypography.layout(source, paragraphStart: true, lineBreakAt: split);
+    expect(layout, contains('\n${source[split]}'));
+    for (var i = 2; i < source.length; i++) {
+      final rendered = ReaderTypography.layoutOffset(source, i, lineBreakAt: split);
+      expect(layout[rendered], source[i]);
+      expect(ReaderTypography.sourceOffset(source, rendered, lineBreakAt: split), i);
+    }
+  });
 }
