@@ -10,20 +10,49 @@ class ReadingText {
   static final _maps = Expando<List<List<List<int>>>>();
   static final _spaces = RegExp(r'\s');
   static final _end = RegExp(r'''[。！？!?；;.…][”’」』）》）\]"']*$''');
+  static final _speechDash = RegExp(r'[\u2014\u2015]+');
+  static final _speechSentence = RegExp(r'''[^。！？!?；;\n]+(?:[。！？!?；;]+[”’」』）》）\]"']*)?''');
+  static final _onlySpeechPunctuation = RegExp(r'''^[\s。！？!?；;，,：:.…“”‘’「」『』《》〈〉（）()\[\]"'、]+$''');
 
   static Paragraph paragraph(String display) {
-    final cleaned = const TextCleaner().clean(display);
     final sentences = <Sentence>[];
     final starts = <int>[];
-    for (final m in RegExp(r'''[^。！？!?；;\n]+(?:[。！？!?；;]+[”’」』）》）\]"']*)?''').allMatches(cleaned.tts)) {
-      if (m.group(0)!.trim().isEmpty) continue;
-      final start = cleaned.displayOffsetOfTts(m.start).clamp(0, display.length);
-      final end = cleaned.displayOffsetOfTts(m.end).clamp(start, display.length);
-      starts.add(m.start);
-      sentences.add(Sentence(display.substring(start, end), m.group(0)!,
-        displayStart: start, displayEnd: end));
+    final tts = StringBuffer();
+    final dashes = _speechDash.allMatches(display).toList();
+    void extendLast(int end, {bool pause = false}) {
+      if (sentences.isEmpty) return;
+      final previous = sentences.last;
+      sentences[sentences.length - 1] = Sentence(display.substring(previous.displayStart, end), previous.tts,
+        displayStart: previous.displayStart, displayEnd: end,
+        pauseAfterMilliseconds: pause ? 300 : previous.pauseAfterMilliseconds);
     }
-    return Paragraph(display: display, tts: cleaned.tts,
+    void appendSpeech(int from, int to) {
+      final cleaned = const TextCleaner().clean(display.substring(from, to));
+      // A trailing closing quote after a dash belongs to the visible segment;
+      // it must not cause a punctuation-only synthesis request.
+      if (dashes.isNotEmpty && (cleaned.tts.isEmpty || _onlySpeechPunctuation.hasMatch(cleaned.tts))) {
+        extendLast(to);
+        return;
+      }
+      final base = tts.length;
+      tts.write(cleaned.tts);
+      for (final m in _speechSentence.allMatches(cleaned.tts)) {
+        if (m.group(0)!.trim().isEmpty) continue;
+        final start = (from + cleaned.displayOffsetOfTts(m.start)).clamp(from, to);
+        final end = (from + cleaned.displayOffsetOfTts(m.end)).clamp(start, to);
+        starts.add(base + m.start);
+        sentences.add(Sentence(display.substring(start, end), m.group(0)!,
+          displayStart: start, displayEnd: end));
+      }
+    }
+    var cursor = 0;
+    for (final dash in dashes) {
+      appendSpeech(cursor, dash.start);
+      extendLast(dash.end, pause: true);
+      cursor = dash.end;
+    }
+    appendSpeech(cursor, display.length);
+    return Paragraph(display: display, tts: tts.toString(),
       sentences: sentences, sentenceStartTts: starts);
   }
 
@@ -174,7 +203,7 @@ class ReadingText {
 
   // Old cache coordinates alone cannot distinguish changed sentence text.
   static String fingerprint(Book book) => sha256.convert(utf8.encode(jsonEncode([
-    for (final c in book.chapters) [for (final p in c.paragraphs) [for (final s in p.sentences) s.tts]],
+    for (final c in book.chapters) [for (final p in c.paragraphs) [for (final s in p.sentences) [s.tts, s.pauseAfterMilliseconds]]],
   ]))).toString().substring(0, 20);
 }
 

@@ -10,6 +10,7 @@ class SystemTtsClient {
   int _serial = 0;
   int _epoch = 0;
   int _textLength = 0;
+  int _rangeOffset = 0;
   bool _disposed = false;
   Completer<void>? _started;
   void Function()? _done;
@@ -27,9 +28,15 @@ class SystemTtsClient {
         _initialization = null; throw error;
       });
 
-  Future<void> speak(String text, double rate, {required void Function() onDone,
+  /// [startOffset] is the latest reported word start in the original sentence,
+  /// measured in UTF-16 code units, as are Android's range callbacks. Engines
+  /// without range callbacks must resume from zero rather than an estimate.
+  /// Callbacks remain relative to [text], even when speaking only its suffix.
+  Future<void> speak(String text, double rate, {int startOffset = 0, required void Function() onDone,
     required void Function(int, int) onRange, required void Function(Object) onError}) async {
     if (_disposed || _owner != this) throw const SystemSpeechCancelled();
+    RangeError.checkValueInInterval(startOffset, 0, text.isEmpty ? 0 : text.length - 1, 'startOffset');
+    final spokenText = text.substring(startOffset);
     // Claim this operation before awaiting anything. A second speak or a stop
     // invalidates the earlier operation even while the engine is initializing.
     final stopping = stop();
@@ -40,11 +47,12 @@ class SystemTtsClient {
     if (_disposed || epoch != _epoch || _owner != this) throw const SystemSpeechCancelled();
     final id = '${identityHashCode(this)}-${++_serial}';
     _request = id; _done = onDone; _range = onRange; _error = onError;
-    _textLength = text.length;
+    _textLength = spokenText.length;
+    _rangeOffset = startOffset;
     final started = Completer<void>(); _started = started;
     try {
       await Future.wait<void>([
-        channel.invokeMethod<void>('speak', {'id': id, 'text': text, 'rate': rate}),
+        channel.invokeMethod<void>('speak', {'id': id, 'text': spokenText, 'rate': rate}),
         started.future.timeout(const Duration(seconds: 30)),
       ], eagerError: true);
     } catch (_) {
@@ -63,7 +71,7 @@ class SystemTtsClient {
         final start = data['start'], end = data['end'];
         if (start is! int || end is! int || start < 0 || end <= start || end > _textLength) return;
         if (!(_started?.isCompleted ?? true)) _started!.complete();
-        _range?.call(start, end);
+        _range?.call(_rangeOffset + start, _rangeOffset + end);
       case 'done':
         if (!(_started?.isCompleted ?? true)) _started!.complete();
         final done = _done;

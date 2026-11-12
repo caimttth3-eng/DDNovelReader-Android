@@ -55,7 +55,7 @@ void main() {
     expect(calls.where((c) => c.method == 'stop'), isNotEmpty);
     queued = Completer<void>(); final resumedQueued = queued!.future;
     final resumed = reader.resume(); await resumedQueued;
-    expect(spoken.last['text'], '下一句。');
+    expect(spoken.last['text'], '下一句。', reason: 'Without a range callback, resume honestly restarts the sentence');
     await emit('start', {'id': spoken.last['id']}); expect(await resumed, isTrue);
     await reader.stop(); expect(reader.state, TtsState.stopped);
     await reader.dispose();
@@ -74,6 +74,39 @@ void main() {
     await client.stop(); initialized.complete(); await expected;
     expect(calls.where((c) => c.method == 'speak'), isEmpty);
     await client.dispose();
+  });
+  test('system pause continues at the latest word and resets its offset for the next sentence', () async {
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    final words = <(int, int)>[];
+    reader.onWordChanged = (s, e) => words.add((s, e));
+    queued = Completer<void>(); final firstQueued = queued!.future;
+    final playback = reader.start(['甲乙丙丁。', '下一句。']);
+    await firstQueued;
+    final firstId = spoken.last['id'];
+    await emit('start', {'id': firstId}); await playback;
+    await emit('range', {'id': firstId, 'start': 2, 'end': 4});
+    expect(words.last, (2, 4));
+    await reader.pause();
+    await emit('range', {'id': firstId, 'start': 0, 'end': 2});
+    queued = Completer<void>(); final resumedQueued = queued!.future;
+    final resumed = reader.resume(); await resumedQueued;
+    expect(spoken.last['text'], '丙丁。');
+    final resumedId = spoken.last['id'];
+    await emit('start', {'id': resumedId}); expect(await resumed, isTrue);
+    await emit('range', {'id': resumedId, 'start': 1, 'end': 2});
+    expect(words.last, (3, 4), reason: 'Resumed callbacks still address the original sentence');
+    await reader.pause();
+    queued = Completer<void>(); final againQueued = queued!.future;
+    final again = reader.resume(); await againQueued;
+    expect(spoken.last['text'], '丁。', reason: 'A second pause must preserve the accumulated offset');
+    final againId = spoken.last['id'];
+    await emit('start', {'id': againId}); expect(await again, isTrue);
+    queued = Completer<void>(); final nextQueued = queued!.future;
+    await emit('done', {'id': againId}); await nextQueued;
+    expect(reader.currentIndex, 1);
+    expect(spoken.last['text'], '下一句。', reason: 'A new sentence starts at its own beginning');
+    await emit('start', {'id': spoken.last['id']});
+    await reader.dispose();
   });
   test('native rejection returns promptly instead of waiting for the start timeout', () async {
     messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
@@ -105,6 +138,41 @@ void main() {
     // is evidence that audio has begun and must release the loading state.
     await emit('range', {'id': id, 'start': 0, 'end': 1}); await second;
     expect(rangeCalls, 1);
+    await client.dispose();
+  });
+  test('resumed system speech uses a suffix and reports original UTF-16 ranges', () async {
+    final client = SystemTtsClient();
+    final ranges = <(int, int)>[];
+    queued = Completer<void>(); final firstQueued = queued!.future;
+    final first = client.speak('甲😀乙。', 1, startOffset: 1,
+      onDone: () {}, onRange: (s, e) => ranges.add((s, e)), onError: (_) {});
+    await firstQueued;
+    final oldId = spoken.last['id'];
+    expect(spoken.last['text'], '😀乙。');
+    await emit('range', {'id': oldId, 'start': 0, 'end': 2}); await first;
+    expect(ranges, [(1, 3)]);
+    await emit('range', {'id': oldId, 'start': 3, 'end': 5});
+    expect(ranges, [(1, 3)], reason: 'Ranges are bounded by the suffix, not the original sentence');
+    await client.stop();
+    queued = Completer<void>(); final secondQueued = queued!.future;
+    final second = client.speak('甲😀乙。', 1, startOffset: 3,
+      onDone: () {}, onRange: (s, e) => ranges.add((s, e)), onError: (_) {});
+    await secondQueued;
+    final id = spoken.last['id'];
+    expect(spoken.last['text'], '乙。');
+    await emit('range', {'id': oldId, 'start': 0, 'end': 2});
+    expect(ranges, [(1, 3)], reason: 'An earlier resumed request cannot change the new position');
+    await emit('range', {'id': id, 'start': 0, 'end': 1}); await second;
+    expect(ranges.last, (3, 4));
+    await client.dispose();
+  });
+  test('system speech rejects invalid resume offsets before sending text', () async {
+    final client = SystemTtsClient();
+    for (final offset in [-1, 3]) {
+      await expectLater(client.speak('一句。', 1, startOffset: offset,
+        onDone: () {}, onRange: (_, __) {}, onError: (_) {}), throwsRangeError);
+    }
+    expect(spoken, isEmpty);
     await client.dispose();
   });
   test('unconfigured system engine reports engine failure without skipping text', () async {

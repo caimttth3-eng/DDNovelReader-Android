@@ -29,6 +29,31 @@ class _Player extends AudioPlayer {
   Future<void> dispose() async { await super.dispose(); await completed.close(); }
 }
 
+class _ResumePlayer extends _Player {
+  final positions = StreamController<Duration>.broadcast();
+  final starts = <Duration>[];
+  Duration clock = Duration.zero;
+  Completer<void>? pauseGate;
+  Completer<Duration?>? positionGate;
+  @override
+  Stream<Duration> get onPositionChanged => positions.stream;
+  @override
+  Future<Duration?> getCurrentPosition() async => positionGate == null ? clock : await positionGate!.future;
+  @override
+  Future<void> pause() async { await pauseGate?.future; }
+  @override
+  Future<void> stop() async { clock = Duration.zero; await super.stop(); }
+  @override
+  Future<void> play(Source source, {double? volume, double? balance, AudioContext? ctx,
+    Duration? position, PlayerMode? mode}) async {
+    starts.add(position ?? Duration.zero); clock = position ?? Duration.zero;
+    await super.play(source, position: position);
+  }
+  void tick(int milliseconds) { clock = Duration(milliseconds: milliseconds); positions.add(clock); }
+  @override
+  Future<void> dispose() async { await super.dispose(); await positions.close(); }
+}
+
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() {
@@ -86,6 +111,140 @@ void main() {
     await reader.dispose().timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('mock player disposal did not finish'));
   });
 
+  test('repeated pause reloads the retained audio at the exact position offline and then completes the next sentence', () async {
+    final player = _ResumePlayer();
+    final requested = <String>[];
+    var offline = false;
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      requested.add(text);
+      if (offline) throw StateError('offline');
+      onWords([
+        const SpeechWord(startMicros: 0, durationMicros: 1000000, textStart: 0, textEnd: 2, text: '甲乙'),
+        const SpeechWord(startMicros: 1000000, durationMicros: 700000, textStart: 2, textEnd: 4, text: '丙丁'),
+        const SpeechWord(startMicros: 1700000, durationMicros: 600000, textStart: 4, textEnd: 6, text: '戊己'),
+      ]);
+      return Uint8List.fromList([text == 'current' ? 1 : 2]);
+    }
+    final reader = TtsReader(player: player, synthesize: synth);
+    addTearDown(reader.dispose);
+    final words = <(int, int)>[];
+    var finished = false;
+    reader.onWordChanged = (start, end) => words.add((start, end));
+    reader.onCompleted = () => finished = true;
+    await reader.start(['current', 'next']);
+    // Let the already-successful next-sentence prefetch enter memory.
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(requested, ['current', 'next']);
+    player.tick(1200); await Future<void>.delayed(Duration.zero);
+    expect(reader.currentWordStart, 2);
+    player.clock = const Duration(milliseconds: 1437);
+    await reader.pause();
+    expect(reader.state, TtsState.paused); expect(reader.currentIndex, 0);
+    expect(reader.currentWordStart, 2); expect(reader.currentWordEnd, 4);
+    player.tick(0); player.completed.add(null); await Future<void>.delayed(Duration.zero);
+    expect(reader.currentIndex, 0); expect(reader.currentWordStart, 2);
+    offline = true;
+    expect(await reader.resume(), isTrue);
+    expect(player.starts.last, const Duration(milliseconds: 1437));
+    expect(reader.currentWordStart, 2);
+    player.clock = const Duration(milliseconds: 1742);
+    player.pauseGate = Completer<void>();
+    final pausing = reader.pause();
+    final resuming = reader.resume();
+    await Future<void>.delayed(Duration.zero);
+    expect(player.played, [1, 1], reason: 'Resume must wait until pause captured the clock.');
+    player.pauseGate!.complete();
+    await pausing; expect(await resuming, isTrue);
+    expect(player.starts.last, const Duration(milliseconds: 1742));
+    expect(reader.currentWordStart, 4);
+    player.tick(1850); await Future<void>.delayed(Duration.zero);
+    expect(words.last, (4, 6));
+    player.completed.add(null); await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(reader.currentIndex, 1);
+    expect(player.played, [1, 1, 1, 2]);
+    expect(player.starts.last, Duration.zero, reason: 'A new sentence must not inherit the pause seek.');
+    expect(requested, ['current', 'next'], reason: 'Current audio, words and completed prefetch must survive pause without network.');
+    player.completed.add(null); await Future<void>.delayed(Duration.zero);
+    expect(finished, isTrue);
+  });
+
+  test('jump, voice and rate changes discard the paused audio position', () async {
+    final player = _ResumePlayer();
+    var requests = 0;
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      requests++; onWords([]); return Uint8List.fromList([requests]);
+    }
+    final reader = TtsReader(player: player, synthesize: synth);
+    addTearDown(reader.dispose);
+    await reader.start(['one']);
+    for (final change in <Future<void> Function()>[
+      () => reader.jumpTo(0),
+      () async => reader.setVoice('another-voice'),
+      () => reader.setSpeechRate(1.5),
+      () => reader.start(['new chapter']),
+    ]) {
+      player.clock = const Duration(milliseconds: 900);
+      await reader.pause();
+      await change();
+      if (reader.state != TtsState.playing) expect(await reader.resume(), isTrue);
+      expect(player.starts.last, Duration.zero);
+    }
+    expect(requests, 5);
+  });
+
+  test('an unresponsive pause position read falls back to the latest tick without blocking resume or stop', () async {
+    final player = _ResumePlayer();
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onWords([const SpeechWord(startMicros: 1000000, durationMicros: 1000000,
+        textStart: 2, textEnd: 4, text: '丙丁')]);
+      return Uint8List.fromList([1]);
+    }
+    final reader = TtsReader(player: player, synthesize: synth);
+    addTearDown(reader.dispose);
+    await reader.start(['甲乙丙丁。']);
+    player.tick(1234); await Future<void>.delayed(Duration.zero);
+    player.positionGate = Completer<Duration?>();
+    await reader.pause().timeout(const Duration(seconds: 3));
+    expect(reader.currentWordStart, 2);
+    expect(await reader.resume().timeout(const Duration(seconds: 1)), isTrue);
+    expect(player.starts.last, const Duration(milliseconds: 1234));
+    await reader.stop().timeout(const Duration(seconds: 1));
+    player.positionGate!.complete(const Duration(milliseconds: 9999));
+    await Future<void>.delayed(Duration.zero);
+    expect(reader.state, TtsState.stopped);
+    expect(reader.currentIndex, -1);
+  });
+
+  test('pause during punctuation delay resumes only its remaining silence and jump cancels it', () async {
+    final player = _ResumePlayer();
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onWords([]); return Uint8List.fromList([text == 'first' ? 1 : 2]);
+    }
+    final reader = TtsReader(player: player, synthesize: synth);
+    addTearDown(reader.dispose);
+    await reader.start(['first', 'second'], pauseAfterMilliseconds: [300, 0]);
+    player.completed.add(null);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(reader.currentIndex, 0); expect(player.played, [1]);
+    await reader.pause();
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    expect(reader.currentIndex, 0);
+    expect(await reader.resume(), isTrue);
+    expect(player.played, [1], reason: 'Completed audio must not replay when resuming a dash pause.');
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(player.played, [1, 2]);
+    await reader.start(['first', 'second'], pauseAfterMilliseconds: [300, 0]);
+    player.completed.add(null); await Future<void>.delayed(Duration.zero);
+    await reader.jumpTo(1);
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    expect(reader.currentIndex, 1, reason: 'The old delay must not advance a new navigation.');
+    expect(player.played, [1, 2, 1, 2]);
+  });
+
   for (final diskHit in [false, true]) {
     test('real AudioPlayer keeps sentence and word callbacks after ${diskHit ? 'disk cache' : 'prefetch'} transition', () async {
       // Keep the real AudioPlayer's internal completion listener and timer.
@@ -105,6 +264,7 @@ void main() {
       var holdNextPosition = false;
       Completer<int>? delayedOldPosition;
       final sourceBytes = <int>[];
+      final seeks = <int>[];
       Future<void> emit(String name, [Object? value]) async {
         final done = Completer<void>();
         messenger.handlePlatformMessage('xyz.luan/audioplayers/events/${player.playerId}',
@@ -123,6 +283,10 @@ void main() {
             resumes++;
           case 'stop':
             positionMillis = 0;
+          case 'seek':
+            positionMillis = (call.arguments as Map)['position'] as int;
+            seeks.add(positionMillis);
+            await emit('audio.onSeekComplete');
           case 'getCurrentPosition':
             if (holdNextPosition) {
               holdNextPosition = false;
@@ -173,17 +337,26 @@ void main() {
       // All future audio has been acquired before completing the current one.
       await waitUntil(() => diskHit || synthesized.length == 3, 'future sentences must finish prefetching');
       await Future<void>.delayed(const Duration(milliseconds: 100));
+      for (final position in [475, 485]) {
+        positionMillis = position;
+        await reader.pause();
+        expect(reader.currentIndex, 0); expect(reader.currentWordStart, 2);
+        expect(await reader.resume(), isTrue);
+        expect(positionMillis, position, reason: 'Real AudioPlayer must seek the reloaded BytesSource before resume.');
+        expect(reader.currentWordStart, 2);
+      }
+      expect(seeks, [475, 485]);
       holdNextPosition = true;
       await emit('audio.onComplete');
-      await waitUntil(() => resumes == 2 && !loading, 'completion must start the prefetched next sentence');
+      await waitUntil(() => resumes == 4 && !loading, 'completion must start the prefetched next sentence');
       expect(delayedOldPosition, isNotNull);
       delayedOldPosition!.complete(6000);
       positionMillis = 150;
       await waitUntil(() => words.contains((1, 1, 3)), 'next sentence must recover from a delayed old position');
       positionMillis = 450;
       await waitUntil(() => words.contains((1, 3, 4)), 'next sentence must advance its own word');
-      expect(sentences, [0, 1]);
-      expect(sourceBytes, [1, 2]);
+      expect(sentences, [0, 0, 0, 1]);
+      expect(sourceBytes, [1, 1, 1, 2]);
       expect(synthesized, diskHit ? isEmpty : orderedEquals(texts));
       await reader.stop();
     });
