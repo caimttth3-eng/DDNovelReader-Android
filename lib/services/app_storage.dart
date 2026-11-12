@@ -108,6 +108,9 @@ class AppStorage {
 
 /// 阅读偏好（含默认值）
 class ReadingSettings {
+  static const defaultPrefetchSentences = 8;
+  static const minPrefetchSentences = 0;
+  static const maxPrefetchSentences = 100;
   double brightness = 0.25;
   bool automaticBrightness = true;
   int autoPageSeconds = 20;
@@ -120,7 +123,10 @@ class ReadingSettings {
   double fontSize = 20.0;
   double lineHeight = 1.6;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
+  int prefetchSentences = defaultPrefetchSentences;
+  bool systemFallbackActive = false;
   String voice = '';
+  String themeMode = 'system';
   int themeIndex = 0; // 书页背景主题索引
   int dayThemeIndex = 0;
   String fontFamily = ''; // 用户自选字体 family 名，空=系统默认
@@ -139,7 +145,10 @@ class ReadingSettings {
         'fontSize': fontSize,
         'lineHeight': lineHeight,
         'speechRate': speechRate,
+        'prefetchSentences': prefetchSentences,
+        'systemFallbackActive': systemFallbackActive,
         'voice': voice,
+        'themeMode': themeMode,
         'themeIndex': themeIndex,
         'dayThemeIndex': dayThemeIndex,
         'fontFamily': fontFamily,
@@ -165,7 +174,12 @@ class ReadingSettings {
     s.fontSize = ((json['fontSize'] as num?)?.toDouble() ?? s.fontSize).clamp(14, 64);
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
     s.speechRate = ((json['speechRate'] as num?)?.toDouble() ?? s.speechRate).clamp(0.5, 3.0);
+    s.prefetchSentences = ((json['prefetchSentences'] as num?)?.toInt() ?? defaultPrefetchSentences)
+      .clamp(minPrefetchSentences, maxPrefetchSentences);
     s.voice = json['voice'] as String? ?? '';
+    s.systemFallbackActive = json['systemFallbackActive'] as bool? ?? false;
+    final themeMode = json['themeMode'];
+    s.themeMode = ['system', 'dark', 'light'].contains(themeMode) ? themeMode as String : 'system';
     s.themeIndex = (json['themeIndex'] as num?)?.toInt() ?? 0;
     s.dayThemeIndex = (json['dayThemeIndex'] as num?)?.toInt() ?? 0;
     s.fontFamily = json['fontFamily'] as String? ?? '';

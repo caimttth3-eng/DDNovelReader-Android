@@ -27,6 +27,9 @@ import '../services/edge_tts.dart';
 import '../services/font_manager.dart';
 import '../services/tts_audio_handler.dart';
 import '../services/playback_notifications.dart';
+import '../services/network_connectivity.dart';
+import '../services/display_cutout.dart';
+import '../services/reader_header_layout.dart';
 import '../services/tts_cache_store.dart';
 import '../services/tts_reader.dart';
 import '../services/system_tts.dart';
@@ -117,6 +120,9 @@ class _PlaybackPermissionGate {
 
 class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   late final TtsReader _tts;
+  StreamSubscription<bool>? _networkSubscription;
+  final Map<Size, DisplayCutoutGeometry> _cutoutGeometry = {};
+  int _cutoutRevision = 0;
   late List<_Item> _items;
   late Book _book;
   String _textSignature = '';
@@ -145,8 +151,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
   BookProgress? _lastProgress;
   Size _viewportSize = Size.zero;
+  double _headerReservedExtent = 24;
   double _bodyExtent = 1;
-  String get _layoutSignature => 'typography3/$_textSignature/$_fontSize/$_lineHeight/$_fontFamily/$_viewportSize/$_flowChapter/$_flowParagraph/$_flowOffset';
+  String get _layoutSignature => 'typography4/$_textSignature/$_fontSize/$_lineHeight/$_fontFamily/$_viewportSize/$_headerReservedExtent/$_flowChapter/$_flowParagraph/$_flowOffset';
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ScrollOffsetController _pageScrollController = ScrollOffsetController();
   bool _paging = false;
@@ -252,12 +259,23 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    AppAppearance.nightMode.addListener(_onAppearanceChanged);
+    _refreshDisplayCutout();
     _pageAnimation = AnimationController(vsync: this, duration: const Duration(milliseconds: 80));
     _autoClock = AnimationController(vsync: this, duration: const Duration(seconds: 20))
       ..addStatusListener((status) {
         if (status == AnimationStatus.completed && _autoActive && !_autoPaused) _advanceAutoPage();
       });
     _tts = widget.ttsReader ?? TtsReader();
+    _tts.onVoiceModeChanged = (fallback) {
+      if (!mounted) return;
+      setState(() {});
+      if (_settingsLoaded) {
+        _settings.systemFallbackActive = fallback;
+        widget.storage.saveSettings(_settings.toJson());
+      }
+    };
+    _networkSubscription = NetworkConnectivity().availability.listen(_tts.setNetworkAvailable);
     _tts.onSentenceChanged = _onTtsSentenceChanged;
     _tts.onWordChanged = _onTtsWordChanged;
     _tts.onCompleted = _onTtsCompleted;
@@ -321,6 +339,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void dispose() {
+    AppAppearance.nightMode.removeListener(_onAppearanceChanged);
+    _networkSubscription?.cancel();
     _permissionGate?.cancel(); _permissionGate = null;
     _volumePollTimer?.cancel(); _volumePollTimer = null; _volumePollEpoch++;
     WidgetsBinding.instance.removeObserver(this);
@@ -356,6 +376,42 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     globalAudioHandler?.onNextRequested = null;
     globalAudioHandler?.notifyStopped();
     super.dispose();
+  }
+
+  Future<void> _refreshDisplayCutout() async {
+    final revision = ++_cutoutRevision;
+    final geometry = await DisplayCutoutService.read();
+    if (!mounted || revision != _cutoutRevision || geometry == null) return;
+    setState(() => _cutoutGeometry[geometry.viewport] = geometry);
+  }
+
+  @override
+  void didChangeMetrics() {
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _refreshDisplayCutout(); });
+  }
+
+  ReaderHeaderLayout get _headerLayout {
+    final viewport = MediaQuery.sizeOf(context);
+    DisplayCutoutGeometry? native = _cutoutGeometry[viewport];
+    if (native == null) {
+      for (final candidate in _cutoutGeometry.values) {
+        if (candidate.matches(viewport)) { native = candidate; break; }
+      }
+    }
+    final features = MediaQuery.of(context).displayFeatures
+      .where((feature) => feature.type == ui.DisplayFeatureType.cutout).map((feature) => feature.bounds).toList();
+    final cutouts = features.isNotEmpty ? features : native?.cutouts ?? const <Rect>[];
+    return ReaderHeaderLayout.compute(viewport: viewport,
+      safeInsets: cutouts.isNotEmpty && native != null ? native.safeInsets : _readerInsets,
+      cutouts: cutouts, topLeftRadius: native?.topLeftRadius ?? 0, topRightRadius: native?.topRightRadius ?? 0,
+      // The reading layout stays immersive even while an OS bar is transiently
+      // revealed. Its visibility must never move the text beneath overlays.
+      statusBarVisible: false);
+  }
+
+  void _onAppearanceChanged() {
+    if (!mounted || !_settingsLoaded) return;
+    setState(() => _settings = AppAppearance.applyCurrentMode(_settings));
   }
   // ---------- 数据 ----------
 
@@ -415,14 +471,17 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _loadSettings() async {
     final raw = await widget.storage.loadSettings();
     if (!mounted) return;
-    _settings = ReadingSettings.fromJson(raw);
+    _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(raw));
     _formatBook();
     AppAppearance.nightMode.value = _isNight;
     _applyReaderBrightness();
     if (_settings.automaticBrightness) _syncSystemBrightness();
     _applySystemUi();
     await _tts.setSpeechRate(_settings.speechRate);
-    if (_settings.voice.isNotEmpty) _tts.setVoice(_settings.voice);
+    _tts.setPrefetchSentences(_settings.prefetchSentences);
+    final restoreFallback = _settings.systemFallbackActive;
+    _tts.setVoice(_settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice);
+    _tts.restoreSystemFallback(restoreFallback);
     final p = await widget.storage.loadProgress(_book.id) ?? widget.initialProgress;
     if (!mounted) return;
     final atTitle = p == null || p.atChapterTitle ||
@@ -446,7 +505,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         atTitle ? _chapterItem(_chapter) : _itemIndexOf(_chapter, _para);
       await _positionViewport(index, exact ? p.viewportAlignment : 0);
       if (mounted && !exact && p != null && !atTitle) {
-        await _followSentence(_chapter, _para, max(0, _ttsSentence));
+        await _followSentence(_chapter, _para, max(0, _ttsSentence), character: location.$2);
       }
       if (mounted) { _restoringProgress = false; _scheduleSave(); }
     });
@@ -1419,11 +1478,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   /// 朗读模式中暂停：保留全屏，弹出底部控制面板
-  Future<void> _pauseReading() async {
-    if (_ttsLoading) return; // 加载中忽略暂停，防误触
-    if (_tts.state != TtsState.playing) return;
+  Future<void> _pauseReading({bool force = false}) async {
+    if (_ttsLoading && !force) return; // Screen taps still ignore loading.
+    if (!_inReadingMode || (!force && _tts.state != TtsState.playing)) return;
+    if (force) {
+      _playbackGeneration++;
+      setState(() => _ttsLoading = false);
+    }
     final generation = _playbackGeneration;
-    await _tts.pause();
+    if (force && _tts.state != TtsState.playing) {
+      await _tts.stop();
+    } else {
+      await _tts.pause();
+    }
     if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
     await _loadMediaVolume();
     if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
@@ -1752,9 +1819,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void _setTheme(int index) {
     setState(() {
       _settings.themeIndex = index;
+      _settings.themeMode = index == 2 ? 'dark' : 'light';
       if (index != 2) _settings.dayThemeIndex = index;
     });
-    AppAppearance.nightMode.value = _isNight;
+    AppAppearance.setThemeMode(_settings.themeMode);
     widget.storage.saveSettings(_settings.toJson());
   }
 
@@ -2267,6 +2335,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Widget build(BuildContext context) {
     _syncMediaVolumePolling();
     _viewportSize = MediaQuery.sizeOf(context);
+    _headerReservedExtent = _chapterTopArea();
     _bodyExtent = _bodyHeight;
     if (!_settingsLoaded) {
       return const Scaffold(
@@ -2281,16 +2350,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           // 章节标题 Positioned 固定在正文区顶部，正文列表在标题下方独立滚动
           Padding(
             padding: EdgeInsets.only(
-              top: _chapterBarTop() + _chapterTopArea(),
+              top: _chapterTopArea(),
               bottom: _readerInsets.bottom + 32,
             ),
             child: _buildPageCanvas(),
           ),
           // 固定章节标题：位于顶部两行半空白之后，正文滚动时保持不动
-          Positioned(
-            top: max(24.0, _readerInsets.top) + 12,
-            left: 0,
-            right: 0,
+          Positioned.fromRect(
+            rect: _headerLayout.titleRect,
             child: _buildChapterHeader(),
           ),
           // 三区点击层
@@ -2382,6 +2449,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               return Text('${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
                 style: TextStyle(fontSize: 12, color: _theme.title));
             }),
+          if (_inReadingMode && !_showReadingPanel && _tts.usingSystemFallback)
+            Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text(T('offlineSystemVoice'),
+              maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 10, color: _theme.title)))),
           Text('${(_percent * 100).toStringAsFixed(1)}%', style: TextStyle(fontSize: 12, color: _theme.title)),
         ],
       )),
@@ -2401,21 +2472,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     return '第${c + 1}章 $t';
   }
 
-  /// 章节标题行距屏幕顶的偏移：恒为 0。
-  /// 正文区（空两行半→章节标题→正文）位置固定紧凑，不随顶栏显隐变化；
-  /// 顶栏是 Positioned 悬浮覆盖层，悬浮在正文区上方，不占位、不影响正文区。
-  double _chapterBarTop() => 0;
+  double _chapterTopArea() => _headerLayout.topArea;
 
-  /// Compact header space remains stable when controls appear.
-  double _chapterTopArea() => max(24.0, _readerInsets.top) + 20 + _fontSize * _lineHeight;
-
-  /// 章节标题栏：固定在正文区顶部（正文区布局的一部分，非悬浮），
-  /// 位于顶部两行半空白之后，一行高显示章节名，
-  /// 滚动/朗读切换章节时实时跟随（_chapter 变化触发重建）
+  /// A fixed-size chapter title occupies the safe top slot. Body font changes
+  /// and toolbar overlays never change this reserved height.
   Widget _buildChapterHeader() {
     return Container(
-      height: _fontSize * _lineHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+      key: const ValueKey('reader-chapter-header'),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: _theme.bg,
@@ -2430,6 +2494,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         child: Text(
           _chapterBarTitle(_chapter),
           maxLines: 1,
+          textScaler: TextScaler.noScaling,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: 12,
@@ -2503,6 +2568,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       right: 0,
       bottom: 0,
       child: Container(
+        key: const ValueKey('reading-panel'),
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height - _readerInsets.top),
         padding: EdgeInsets.only(
           left: 16,
           right: 16,
@@ -2513,7 +2580,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           color: _menuColor,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
-          child: Column(
+          child: SingleChildScrollView(child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(children: [
@@ -2541,8 +2608,23 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   onPressed: () => _adjustRate(0.1))),
               ]),
               const SizedBox(height: 4),
+              if (_tts.usingSystemFallback) Padding(key: const ValueKey('tts-offline-fallback'),
+                padding: const EdgeInsets.only(bottom: 4), child: Text(T('offlineSystemVoice'),
+                  style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 12))),
+              ListTile(key: const ValueKey('reading-prefetch'), dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+                title: Text(T('prefetchSentences', {'n': '${_settings.prefetchSentences}'}),
+                  style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 13)),
+                subtitle: Text(T('prefetchDescription'),
+                  style: const TextStyle(color: Color(0xFFA89060), fontSize: 11)),
+                trailing: const Icon(Icons.tune, color: Color(0xFF9BC5DD), size: 22),
+                onTap: _openPrefetchSettings),
+              if (_effectiveVoice == TtsReader.systemVoice)
+                Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(T('cacheOnlineOnly'),
+                  style: const TextStyle(color: Color(0xFFA89060), fontSize: 11))),
               // 功能按钮行
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
                   _panelButton(
@@ -2550,14 +2632,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                     label: _sleepMinutes > 0
                         ? T('minutes', {'m': '$_sleepMinutes'})
                         : T('timer'),
-                    onTap: _openSleepTimer,
+                    key: const ValueKey('reading-sleep'), onTap: _openSleepTimer,
                     active: _sleepMinutes > 0,
                   ),
                   _panelButton(
+                    key: const ValueKey('reading-voice'),
                     icon: Icons.record_voice_over,
-                    label: T('voice'),
+                    label: T('voice'), detail: _voiceLabel(_effectiveVoice),
                     onTap: _openVoiceSelector,
                   ),
+                  _panelButton(key: const ValueKey('reading-cache'), icon: Icons.download_outlined,
+                    label: T('cacheBook'), detail: _effectiveVoice == TtsReader.systemVoice
+                      ? T('cacheUnavailable') : _voiceLabel(_effectiveVoice),
+                    onTap: _effectiveVoice == TtsReader.systemVoice ? null : _openBookCache),
                   _panelButton(key: const ValueKey('playback-notifications'),
                     icon: _notificationStatus?.enabled == true ? Icons.notifications_active_outlined : Icons.notifications_none,
                     label: T('playbackNotifications'), onTap: _openPlaybackNotifications,
@@ -2567,10 +2654,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                     label: T('exit'),
                     onTap: _exitReadingMode,
                   ),
-                ],
+                ].map((button) => Expanded(child: button)).toList(),
               ),
             ],
-          ),
+          )),
       ),
     );
   }
@@ -2579,7 +2666,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     Key? key,
     required IconData icon,
     required String label,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
+    String? detail,
     bool active = false,
   }) {
     return GestureDetector(
@@ -2589,15 +2677,17 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon,
-              color: active ? const Color(0xFF9BC5DD) : const Color(0xFF9BC5DD),
+              color: onTap == null ? Colors.grey : const Color(0xFF9BC5DD),
               size: 26),
           const SizedBox(height: 4),
-          Text(label,
+          Text(label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   color: active
                       ? const Color(0xFF9BC5DD)
                       : const Color(0xFFA89060),
                   fontSize: 11)),
+          if (detail != null) Text(detail, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Color(0xFFA89060), fontSize: 10)),
         ],
       ),
     );
@@ -2646,13 +2736,24 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     setState(() {});
   }
 
+  Future<void> _openPrefetchSettings() async {
+    final count = await showDialog<int>(context: context, builder: (_) => _IntegerInputDialog(
+      title: T('prefetchTitle'), help: T('prefetchDescription'), value: _settings.prefetchSentences,
+      minimum: 0, maximum: 100, inputKey: const ValueKey('prefetch-number')));
+    if (count == null || !mounted) return;
+    _settings.prefetchSentences = count;
+    _tts.setPrefetchSentences(count);
+    widget.storage.saveSettings(_settings.toJson());
+    setState(() {});
+  }
+
   /// 定时播放：到时间自动暂停
   Future<void> _openSleepTimer() async {
     final options = [0, 15, 30, 60, 90];
     final selected = await showModalBottomSheet<int>(
       context: context,
       builder: (ctx) => SafeArea(
-        child: Column(
+        child: SingleChildScrollView(child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
@@ -2663,6 +2764,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             ),
             const Divider(height: 1),
             ...options.map((m) => ListTile(
+                  key: ValueKey('sleep-preset-$m'),
                   leading: Icon(
                     m == _sleepMinutes
                         ? Icons.radio_button_checked
@@ -2674,23 +2776,37 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                       : T('timerAfter', {'m': '$m'})),
                   onTap: () => Navigator.pop(ctx, m),
                 )),
+            ListTile(key: const ValueKey('sleep-custom'), leading: const Icon(Icons.edit_outlined),
+              title: Text(T('customSleepTimer')), subtitle: Text(T('numberRange', {'n': '1', 'total': '120'})),
+              onTap: () => Navigator.pop(ctx, -1)),
             const SizedBox(height: 8),
           ],
-        ),
+        )),
       ),
     );
     if (selected == null) return;
-    _setSleepTimer(selected);
+    if (selected == -1) {
+      if (!mounted) return;
+      final minutes = await showDialog<int>(context: context, builder: (_) => _IntegerInputDialog(
+        title: T('customSleepTimer'), value: _sleepMinutes > 0 ? _sleepMinutes : 30,
+        minimum: 1, maximum: 120, inputKey: const ValueKey('sleep-custom-minutes')));
+      if (minutes != null && mounted) _setSleepTimer(minutes);
+    } else {
+      _setSleepTimer(selected);
+    }
   }
 
   void _setSleepTimer(int minutes) {
+    minutes = minutes.clamp(0, 120);
     _sleepTimer?.cancel();
     _sleepTimer = null;
     _sleepMinutes = minutes;
     if (minutes > 0) {
       _sleepTimer = Timer(Duration(minutes: minutes), () {
+        if (!mounted) return;
+        setState(() { _sleepMinutes = 0; _sleepTimer = null; });
         if (mounted && _inReadingMode && _isPlaying) {
-          _pauseReading();
+          _pauseReading(force: true);
         }
       });
     }
@@ -2825,6 +2941,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     );
     if (selected == null) return;
     _settings.voice = selected;
+    _settings.systemFallbackActive = false;
     _tts.setVoice(selected);
     widget.storage.saveSettings(_settings.toJson());
     // 切换音源后从当前句重新开始（新音色需要重新合成）
@@ -2837,9 +2954,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 全书语音缓存管理：任务控制（开始/暂停/继续/取消）+ 缓存占用 + 清除
   Future<void> _openBookCache() async {
     if (_settings.voice == TtsReader.systemVoice) { _showToast(T('cacheOnlineOnly')); return; }
+    // Keep every operation bound to the selected online voice/rate, even if a
+    // temporary offline fallback or another settings change occurs later.
+    final voice = _effectiveVoice, rate = _settings.speechRate, cacheKey = _cacheTaskKey;
     final store = _currentCacheStore();
-    final task = activeBookCaches[_cacheTaskKey] ??
-        (activeBookCaches[_cacheTaskKey] = BookCacheTask(
+    final task = activeBookCaches[cacheKey] ??
+        (activeBookCaches[cacheKey] = BookCacheTask(
               book: _book,
               bookId: _book.id,
               store: store,
@@ -2848,6 +2968,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (task.status.state == 'idle') {
       await task.restoreFromDisk();
     }
+    if (!mounted) return;
     var sizeBytes = 0;
     var sizeLoaded = false;
 
@@ -2892,7 +3013,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                 final active = st.isActive;
                 return Padding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-                  child: Column(
+                  child: SingleChildScrollView(child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -2901,11 +3022,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                           const Icon(Icons.file_download_outlined,
                               color: Color(0xFF6498B5)),
                           const SizedBox(width: 10),
-                          Text(T('voiceCacheTitle'),
+                          Text(T('cacheBook'),
                               style: const TextStyle(
                                   fontSize: 16, fontWeight: FontWeight.bold)),
                         ],
                       ),
+                      const SizedBox(height: 10),
+                      Text('${T('voice')}: ${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(1)})}',
+                        key: const ValueKey('cache-binding'), style: const TextStyle(fontSize: 13)),
                       const SizedBox(height: 14),
                       Row(
                         children: [
@@ -2942,8 +3066,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                             fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant),
                       ),
                       const SizedBox(height: 14),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
+                      Wrap(
+                        alignment: WrapAlignment.end, spacing: 8, runSpacing: 4,
                         children: [
                           if (active) ...[
                             TextButton(
@@ -2966,9 +3090,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                               child: Text(T('cacheCancel')),
                             ),
                           ] else ...[
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
                                 FilledButton(
                                   onPressed: () =>
                                       task.start(resume: !st.isDone),
@@ -2976,14 +3097,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                                       ? T('cacheRestart')
                                       : T('cacheStart')),
                                 ),
-                                const SizedBox(width: 8),
                                 OutlinedButton(
                                   onPressed: () async {
                                     final ok = await showDialog<bool>(
                                       context: ctx,
                                       builder: (dctx) => AlertDialog(
                                         title: Text(T('cacheClear')),
-                                        content: Text(T('cacheClearConfirm')),
+                                        content: Text('${T('cacheClearSelectedConfirm')}\n${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(1)})}'),
                                         actions: [
                                           TextButton(
                                             onPressed: () =>
@@ -3000,7 +3120,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                                     );
                                     if (ok != true) return;
                                     task.cancel();
-                                    activeBookCaches.remove(_cacheTaskKey);
+                                    activeBookCaches.remove(cacheKey);
                                     await store.clear();
                                     if (ctx.mounted) {
                                       setSheetState(() => sizeBytes = 0);
@@ -3012,22 +3132,17 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                                   },
                                   child: Text(T('cacheClear')),
                                 ),
-                              ],
-                            ),
                             if (!st.isDone)
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: TextButton(
+                              TextButton(
                                   onPressed: () =>
                                       _startCacheFromCurrent(task),
                                   child: Text(T('cacheFromHere')),
-                                ),
                               ),
                           ],
                         ],
                       ),
                     ],
-                  ),
+                  )),
                 );
               },
             ),
@@ -3421,9 +3536,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       context: context,
       builder: (ctx) => _SettingsSheet(
         settings: _settings,
-        onCache: _openBookCache,
         onFontTune: _openFontFineTune,
         onChanged: (s) {
+          AppAppearance.setThemeMode(s.themeMode);
+          final current = AppAppearance.applyCurrentMode(s);
           final textChanged = _textSignature != _formatSignature(s);
           final voiceChanged = (s.voice.isEmpty ? TtsReader.defaultVoice : s.voice) != _tts.voice;
           final previous = _book;
@@ -3436,7 +3552,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             }
           }
           setState(() {
-            _settings = s;
+            _settings = current;
             if (textChanged) {
               _formatBook(); _flowChapter = null; _flowParagraph = null; _flowOffset = null;
               if (anchor != null && !anchor.title) {
@@ -3453,18 +3569,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             _restoreLineAnchor(anchor);
           }
           _tts.setSpeechRate(s.speechRate);
-          _tts.setVoice(s.voice.isEmpty ? TtsReader.defaultVoice : s.voice);
+          if (voiceChanged) _tts.setVoice(s.voice.isEmpty ? TtsReader.defaultVoice : s.voice);
           if (voiceChanged && _inReadingMode) _startTtsFrom(_chapter, _para, max(0, _ttsSentence));
           // 变速/切音色后缓存坐标（voice/rate 段）变化，重建朗读侧缓存
           _refreshTtsCache();
           _applyReaderBrightness();
           _pageEndKey = null; _schedulePageGeometry();
-          widget.storage.saveSettings(s.toJson());
+          widget.storage.saveSettings(_settings.toJson());
         },
-        onVoiceLoad: () async => [
-          {'id': TtsReader.systemVoice, 'name': T('systemTts')},
-          ...sortedEdgeVoices().map((v) => {'id': v.id, 'name': _voiceLabel(v.id)}),
-        ],
       ),
     );
   }
@@ -3552,18 +3664,49 @@ class _ChapterSheetState extends State<_ChapterSheet> {
 }
 
 /// 设置底部弹层
+class _IntegerInputDialog extends StatefulWidget {
+  final String title;
+  final String? help;
+  final int value, minimum, maximum;
+  final Key inputKey;
+  const _IntegerInputDialog({required this.title, this.help, required this.value, required this.minimum,
+    required this.maximum, required this.inputKey});
+  @override
+  State<_IntegerInputDialog> createState() => _IntegerInputDialogState();
+}
+
+class _IntegerInputDialogState extends State<_IntegerInputDialog> {
+  final _form = GlobalKey<FormState>();
+  late final _controller = TextEditingController(text: '${widget.value}');
+  @override
+  void dispose() { _controller.dispose(); super.dispose(); }
+  void _submit() {
+    if (_form.currentState!.validate()) Navigator.pop(context, int.parse(_controller.text));
+  }
+  @override
+  Widget build(BuildContext context) => AlertDialog(title: Text(widget.title),
+    content: Form(key: _form, child: Column(mainAxisSize: MainAxisSize.min, children: [
+      if (widget.help != null) Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(widget.help!)),
+      TextFormField(key: widget.inputKey, controller: _controller, autofocus: true,
+        keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: InputDecoration(helperText: T('numberRange', {'n': '${widget.minimum}', 'total': '${widget.maximum}'})),
+        validator: (text) {
+          final value = int.tryParse(text ?? '');
+          return value == null || value < widget.minimum || value > widget.maximum
+            ? T('numberRange', {'n': '${widget.minimum}', 'total': '${widget.maximum}'}) : null;
+        }, onFieldSubmitted: (_) => _submit()),
+    ])), actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(T('cancel'))),
+      FilledButton(onPressed: _submit, child: Text(T('ok')))]);
+}
+
 class _SettingsSheet extends StatefulWidget {
   final ReadingSettings settings;
-  final VoidCallback onCache;
   final VoidCallback onFontTune;
   final ValueChanged<ReadingSettings> onChanged;
-  final Future<List<dynamic>> Function() onVoiceLoad;
   const _SettingsSheet({
     required this.settings,
-    required this.onCache,
     required this.onFontTune,
     required this.onChanged,
-    required this.onVoiceLoad,
   });
 
   @override
@@ -3572,24 +3715,11 @@ class _SettingsSheet extends StatefulWidget {
 
 class _SettingsSheetState extends State<_SettingsSheet> {
   late ReadingSettings _s;
-  List<dynamic> _voices = [];
-  bool _voicesLoaded = false;
 
   @override
   void initState() {
     super.initState();
     _s = ReadingSettings.fromJson(widget.settings.toJson());
-    _loadVoices();
-  }
-
-  Future<void> _loadVoices() async {
-    final v = await widget.onVoiceLoad();
-    if (mounted) {
-      setState(() {
-        _voices = v;
-        _voicesLoaded = true;
-      });
-    }
   }
 
   /// 字体更换弹层：教程 + 导入 + 已导入列表（可删除）+ 恢复默认。
@@ -3715,8 +3845,11 @@ class _SettingsSheetState extends State<_SettingsSheet> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(leading: const Icon(Icons.storage_outlined), title: Text(T('cacheBook')),
-                onTap: () { Navigator.pop(context); widget.onCache(); }),
+              ListTile(title: Text(T('themeColor')), trailing: DropdownButton<String>(
+                key: const ValueKey('theme-mode'), value: _s.themeMode,
+                items: ['system', 'dark', 'light'].map((mode) => DropdownMenuItem(value: mode,
+                  child: Text(T(mode == 'system' ? 'followSystemTheme' : mode == 'dark' ? 'darkTheme' : 'lightTheme')))).toList(),
+                onChanged: (mode) { if (mode != null) setState(() { _s.themeMode = mode; _update(); }); })),
               // 亮度
               ReaderBrightnessControl(value: _s.brightness, automatic: _s.automaticBrightness,
                 onChanged: (value) => setState(() { _s.brightness = value; _s.automaticBrightness = false; _update(); }),
@@ -3802,50 +3935,6 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   _update();
                 }),
               )),
-              // 变速
-              _row(T('speed'), Icons.speed, Slider(
-                value: _s.speechRate.clamp(0.5, 3.0),
-                min: 0.5,
-                max: 3.0,
-                divisions: 25,
-                label: '${_s.speechRate.toStringAsFixed(2)}x',
-                onChanged: (v) => setState(() {
-                  _s.speechRate = v;
-                  _update();
-                }),
-              )),
-              // 音源
-              Row(
-                children: [
-                  const Icon(Icons.record_voice_over),
-                  const SizedBox(width: 12),
-                  Text(T('voice')),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _voicesLoaded && _voices.isNotEmpty
-                        ? DropdownButton<String>(
-                            value: _s.voice.isEmpty ? TtsReader.defaultVoice : _s.voice,
-                            isExpanded: true,
-                            hint: Text(T('default')),
-                            items: _voices.map((v) {
-                              final id = v is Map
-                                  ? (v['id'] ?? v.toString())
-                                  : v.toString();
-                              final name = v is Map
-                                  ? (v['name'] ?? id)
-                                  : id;
-                              return DropdownMenuItem(
-                                  value: id.toString(), child: Text(name));
-                            }).toList(),
-                            onChanged: (val) => setState(() {
-                              _s.voice = val ?? '';
-                              _update();
-                            }),
-                          )
-                        : Text(T('loading')),
-                  ),
-                ],
-              ),
             ],
           ),
         ),

@@ -11,8 +11,15 @@ import 'services/tts_audio_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  AppAppearance.nightMode.value =
-      ReadingSettings.fromJson(await AppStorage().loadSettings()).themeIndex == 2;
+  final storage = AppStorage();
+  final startupSettings = AppAppearance.initialize(
+    ReadingSettings.fromJson(await storage.loadSettings()),
+    WidgetsBinding.instance.platformDispatcher.platformBrightness,
+  );
+  // Persist before the bookshelf can reopen its last book: ReaderScreen reads
+  // this same setting and must not restore last session's opposite appearance.
+  await storage.saveSettings(startupSettings.toJson());
+  AppAppearance.nightMode.value = startupSettings.themeIndex == AppAppearance.nightThemeIndex;
   // 注册用户自选字体（FontLoader 仅进程内有效，每次启动需重新注册）
   await FontManager.registerAll();
   AppI18n.current = AppLang.detect(
@@ -38,8 +45,31 @@ Future<void> main() async {
   runApp(const DuoduoLangduApp());
 }
 
-class DuoduoLangduApp extends StatelessWidget {
+class DuoduoLangduApp extends StatefulWidget {
   const DuoduoLangduApp({super.key});
+
+  @override
+  State<DuoduoLangduApp> createState() => _DuoduoLangduAppState();
+}
+
+class _DuoduoLangduAppState extends State<DuoduoLangduApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    AppAppearance.updateSystemBrightness(WidgetsBinding.instance.platformDispatcher.platformBrightness);
+  }
+
+  @override
+  void didChangePlatformBrightness() {
+    AppAppearance.updateSystemBrightness(WidgetsBinding.instance.platformDispatcher.platformBrightness);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

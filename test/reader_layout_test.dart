@@ -17,6 +17,11 @@ import 'package:duoduo_langdu/services/app_appearance.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
 import 'package:duoduo_langdu/services/tts_audio_handler.dart';
 import 'package:duoduo_langdu/services/playback_notifications.dart';
+import 'package:duoduo_langdu/services/display_cutout.dart';
+import 'package:duoduo_langdu/services/network_connectivity.dart';
+import 'package:duoduo_langdu/services/reading_text.dart';
+import 'package:duoduo_langdu/services/book_cache_task.dart';
+import 'package:duoduo_langdu/services/tts_cache_store.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
 import 'package:duoduo_langdu/services/annotation_store.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -28,7 +33,8 @@ void main() {
   final platformCalls = <MethodCall>[];
   setUp(() {
     SharedPreferences.setMockInitialValues({'duoduo.settings.v1': jsonEncode({'brightness': 1.0, 'autoPageSeconds': 2})});
-    AppAppearance.nightMode.value = false;
+    AppAppearance.updateSystemBrightness(Brightness.light);
+    AppAppearance.setThemeMode('system');
     volumeCalls.clear(); platformCalls.clear();
     messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/volume_keys'),
       (call) async { volumeCalls.add(call); return ['getMediaVolume', 'getSystemBrightness'].contains(call.method) ? 0.5 : null; });
@@ -36,6 +42,8 @@ void main() {
     messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/debug_log'), (_) async => null);
     messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (_) async =>
       {'supported': false, 'enabled': false, 'canRequest': false, 'asked': false});
+    messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async => null);
+    messenger.setMockMethodCallHandler(NetworkConnectivity.channel, (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global/events'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers'), (call) async {
@@ -295,7 +303,9 @@ void main() {
     final settingFont = find.byWidgetPredicate((w) => w is Slider && w.max == 64).last;
     expect(tester.getRect(settingFont).width, closeTo(tester.getRect(settingBrightness).width, 0.1));
     expect(tester.getRect(settingFont).left, closeTo(tester.getRect(settingBrightness).left, 0.1));
-    expect(find.byWidgetPredicate((w) => w is DropdownButton<String> && w.value == 'zh-CN-XiaoxiaoNeural'), findsOneWidget);
+    expect(find.byWidgetPredicate((w) => w is DropdownButton<String> && w.value == 'zh-CN-XiaoxiaoNeural'), findsNothing);
+    expect(find.text('缓存在线语音'), findsNothing, reason: 'Online cache belongs to the playback panel');
+    expect(find.text('变速'), findsNothing, reason: 'Speech speed belongs to the playback panel');
     final correction = find.byKey(const ValueKey('text-correction'));
     tester.widget<SwitchListTile>(correction).onChanged!(false);
     await tester.pumpAndSettle();
@@ -930,6 +940,294 @@ void main() {
     });
   }
 
+  testWidgets('playback preloading persists and custom timer accepts only 1 to 120 minutes', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage(), speech = _TestSpeech();
+    final preview = GlobalKey();
+    await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(
+      home: ReaderScreen(book: sample('speech-options'), storage: storage, ttsReader: speech))));
+    await tester.pumpAndSettle();
+    expect(speech.prefetchSentences, 8);
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    expect(tester.getCenter(find.byKey(const ValueKey('reading-cache'))).dx,
+      greaterThan(tester.getCenter(find.byKey(const ValueKey('reading-voice'))).dx));
+    await _captureReaderPreview(tester, preview, 'reader-speech-controls');
+    await tester.tap(find.byKey(const ValueKey('reading-prefetch'))); await tester.pumpAndSettle();
+    final prefetch = find.byKey(const ValueKey('prefetch-number'));
+    await tester.enterText(prefetch, '101'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
+    expect(prefetch, findsOneWidget, reason: 'Prefetch values above 100 must be rejected');
+    await tester.enterText(prefetch, '100'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
+    expect(speech.prefetchSentences, 100); expect((await storage.loadSettings())['prefetchSentences'], 100);
+    await tester.tap(find.byKey(const ValueKey('reading-prefetch'))); await tester.pumpAndSettle();
+    await tester.enterText(prefetch, '0'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
+    expect(speech.prefetchSentences, 0); expect((await storage.loadSettings())['prefetchSentences'], 0);
+    await tester.tap(find.byKey(const ValueKey('reading-sleep'))); await tester.pumpAndSettle();
+    for (final minutes in [0, 15, 30, 60, 90]) {
+      expect(find.byKey(ValueKey('sleep-preset-$minutes')), findsOneWidget);
+    }
+    await tester.ensureVisible(find.byKey(const ValueKey('sleep-custom')));
+    await tester.tap(find.byKey(const ValueKey('sleep-custom'))); await tester.pumpAndSettle();
+    final custom = find.byKey(const ValueKey('sleep-custom-minutes'));
+    await tester.enterText(custom, '121'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
+    expect(custom, findsOneWidget, reason: 'The custom timer must enforce the 120 minute maximum');
+    await tester.enterText(custom, '120'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
+    expect(find.descendant(of: find.byKey(const ValueKey('reading-sleep')), matching: find.text('120 分')), findsOneWidget);
+    tester.view.physicalSize = const Size(844, 390); await tester.pumpAndSettle();
+    expect(tester.getRect(find.byKey(const ValueKey('reading-panel'))).top, greaterThanOrEqualTo(0));
+    await _captureReaderPreview(tester, preview, 'reader-speech-controls-landscape');
+    await tester.tap(find.byKey(const ValueKey('reading-sleep'))); await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('sleep-custom')));
+    await tester.tap(find.byKey(const ValueKey('sleep-custom'))); await tester.pumpAndSettle();
+    await tester.enterText(custom, '1'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(422, 80)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.playing);
+    await tester.pump(const Duration(minutes: 1)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused, reason: 'The custom minute timer must actually pause playback');
+    expect(find.descendant(of: find.byKey(const ValueKey('reading-sleep')), matching: find.text('定时')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    final restored = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('prefetch-restored'), storage: storage, ttsReader: restored)));
+    await tester.pumpAndSettle(); expect(restored.prefetchSentences, 0);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('cache controls identify and clear only the selected online voice and speed', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage(), speech = _TestSpeech();
+    final settings = ReadingSettings()..voice = TtsReader.defaultVoice..speechRate = 1.8;
+    await storage.saveSettings(settings.toJson());
+    final book = sample('cache-selected-voice');
+    final formatted = ReadingText.format(book, merge: true, indent: true);
+    final fingerprint = 'words1-${ReadingText.fingerprint(formatted)}';
+    String key(String voice) => '${book.id}/$fingerprint/$voice/1.80';
+    final first = _TestBookCacheTask(book: formatted,
+      store: TtsCacheStore(book.id, TtsReader.defaultVoice, 1.8, textFingerprint: fingerprint));
+    final second = _TestBookCacheTask(book: formatted,
+      store: TtsCacheStore(book.id, 'zh-CN-YunxiNeural', 1.8, textFingerprint: fingerprint));
+    activeBookCaches[key(TtsReader.defaultVoice)] = first; activeBookCaches[key('zh-CN-YunxiNeural')] = second;
+    addTearDown(() {
+      activeBookCaches.remove(key(TtsReader.defaultVoice)); activeBookCaches.remove(key('zh-CN-YunxiNeural'));
+      first.statusNotifier.dispose(); second.statusNotifier.dispose();
+    });
+    final preview = GlobalKey();
+    await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(
+      home: ReaderScreen(book: book, storage: storage, ttsReader: speech))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-cache'))); await tester.pumpAndSettle();
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 晓晓（女·温暖） · 语速 1.8x');
+    await _captureReaderPreview(tester, preview, 'reader-selected-voice-cache');
+    await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    await tester.tap(find.text('云希（男·阳光）')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-cache'))); await tester.pumpAndSettle();
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.8x');
+    await tester.tap(find.text('清除缓存')); await tester.pumpAndSettle();
+    expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('云希（男·阳光）')), findsOneWidget);
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('确定'))); await tester.pumpAndSettle();
+    expect(second.cancelCalls, 1); expect(first.cancelCalls, 0);
+    expect(activeBookCaches.containsKey(key('zh-CN-YunxiNeural')), isFalse);
+    expect(activeBookCaches[key(TtsReader.defaultVoice)], same(first));
+    ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
+    await tester.pumpAndSettle(); await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    await tester.tap(find.text('使用系统文本转语音能力')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    expect(tester.widget<GestureDetector>(find.byKey(const ValueKey('reading-cache'))).onTap, isNull);
+    expect(find.text('当前使用系统语音；请切换在线音源后缓存在线语音'), findsOneWidget);
+    await _captureReaderPreview(tester, preview, 'reader-system-cache-disabled');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('temporary system fallback persists without changing the online cache voice', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..voice = TtsReader.defaultVoice..systemFallbackActive = true).toJson());
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('fallback-restored'), storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle(); expect(speech.usingSystemFallback, isTrue); expect(speech.voice, TtsReader.defaultVoice);
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('tts-offline-fallback')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const ValueKey('reading-cache')), matching: find.text('晓晓（女·温暖）')), findsOneWidget);
+    expect(tester.widget<GestureDetector>(find.byKey(const ValueKey('reading-cache'))).onTap, isNotNull);
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    await tester.tap(find.text('晓晓（女·温暖）')); await tester.pumpAndSettle();
+    expect(speech.usingSystemFallback, isFalse); expect(speech.voice, TtsReader.defaultVoice);
+    expect((await storage.loadSettings())['systemFallbackActive'], isFalse);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  for (final scenario in [
+    ('plain', const Size(390, 844), null, false),
+    ('center-cutout', const Size(390, 844), const Rect.fromLTWH(175, 0, 40, 40), false),
+    ('left-cutout', const Size(390, 844), const Rect.fromLTWH(18, 4, 28, 32), true),
+    ('right-cutout', const Size(390, 844), const Rect.fromLTWH(344, 4, 28, 32), true),
+    ('landscape', const Size(844, 390), null, false),
+  ]) {
+    testWidgets('compact chapter header fits ${scenario.$1} without moving text under overlays', (tester) async {
+      final size = scenario.$2, cutout = scenario.$3;
+      tester.view.devicePixelRatio = 1; tester.view.physicalSize = size;
+      tester.view.viewPadding = FakeViewPadding(top: cutout != null ? 40 : size.width > size.height ? 0 : 24);
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetViewPadding);
+      var statusVisible = false;
+      messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async => {
+        'width': size.width, 'height': size.height,
+        'safeInsets': {'top': cutout != null ? 40 : 0, 'left': 0, 'right': 0, 'bottom': 0},
+        'cutouts': [if (cutout != null) {
+          'left': scenario.$4 ? 175.0 : cutout.left, 'top': scenario.$4 ? 0.0 : cutout.top,
+          'right': scenario.$4 ? 215.0 : cutout.right, 'bottom': 40.0,
+        }], 'topLeftRadius': 16, 'topRightRadius': 16,
+        'statusBarVisible': statusVisible, 'statusBarTop': statusVisible ? 40 : 0,
+      });
+      final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..fontSize = 64).toJson());
+      final book = scenario.$1 == 'center-cutout' ? Book(id: 'header-center-cutout', title: '长句进度',
+        filePath: '', format: BookFormat.txt, addedAt: DateTime(2026), chapters: [Chapter(title: '第一章',
+          paragraphs: List.generate(30, (p) => Paragraph(display: '第${p + 1}段' + List.filled(30, '清晨风吹树林').join() + '。',
+            tts: '', sentences: const [], sentenceStartTts: const [])))]) : sample('header-${scenario.$1}');
+      if (scenario.$1 == 'center-cutout') {
+        await storage.saveProgress(BookProgress(bookId: book.id, paragraphIndex: 12, offsetInParagraph: 100,
+          chapterAnchor: ReadingText.anchor(book, 0, 12, 100), layoutSignature: 'typography3/legacy',
+          viewportItem: 1, viewportAlignment: 0, atChapterTitle: false));
+      }
+      final preview = GlobalKey();
+      await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(displayFeatures: [
+          if (scenario.$4 && cutout != null) ui.DisplayFeature(bounds: cutout,
+            type: ui.DisplayFeatureType.cutout, state: ui.DisplayFeatureState.unknown),
+        ]), child: child!), home: ReaderScreen(book: book, storage: storage))));
+      await tester.pumpAndSettle();
+      final header = find.byKey(const ValueKey('reader-chapter-header'));
+      final body = find.byKey(const ValueKey('reader-body'));
+      if (scenario.$1 == 'center-cutout') {
+        final positions = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value;
+        expect(positions.any((p) => p.index == 13 && p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0), isTrue,
+          reason: 'Legacy viewport geometry must restore by source anchor under the compact header');
+        final formatted = ReadingText.format(book, merge: true, indent: true);
+        final location = ReadingText.locate(formatted, 0, ReadingText.anchor(book, 0, 12, 100));
+        final source = formatted.chapters[0].paragraphs[12].display;
+        final paragraph = find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify &&
+          (w.textSpan?.toPlainText().contains('第13段') ?? false));
+        final render = tester.renderObject<RenderParagraph>(paragraph);
+        final offset = ReaderTypography.layoutOffset(source, location.$2);
+        final glyph = render.getBoxesForSelection(TextSelection(baseOffset: offset, extentOffset: offset + 1)).first;
+        final origin = render.localToGlobal(Offset.zero);
+        expect(origin.dy, lessThan(tester.getRect(body).top), reason: 'A long-sentence restore must not return to paragraph start');
+        expect(origin.dy + glyph.top, greaterThanOrEqualTo(tester.getRect(body).top - 1));
+        expect(origin.dy + glyph.bottom, lessThanOrEqualTo(tester.getRect(body).bottom + 1),
+          reason: 'The saved middle-of-sentence character must be visible');
+      }
+      final expectedTop = cutout != null ? 40.0 : size.width > size.height ? 24.0 : 48.0;
+      expect(tester.getRect(header).height, 24, reason: 'Chapter chrome must stay compact at body font size 64');
+      expect(tester.getRect(body).top, expectedTop);
+      final headerText = tester.widget<Text>(find.descendant(of: header, matching: find.byType(Text)));
+      expect(headerText.style!.fontSize, 12); expect(headerText.textScaler, TextScaler.noScaling);
+      if (cutout != null) expect(tester.getRect(header).overlaps(cutout), isFalse);
+      if (scenario.$1 == 'left-cutout') expect(tester.getCenter(header).dx, greaterThan(size.width / 2));
+      if (scenario.$1 == 'right-cutout' || scenario.$1 == 'center-cutout') {
+        expect(tester.getCenter(header).dx, lessThan(size.width / 2));
+      }
+      final before = tester.getRect(body), titleBefore = tester.getRect(header);
+      await tester.tapAt(Offset(size.width / 2, size.height * 0.45)); await tester.pumpAndSettle();
+      expect(tester.getRect(body), before); expect(tester.getRect(header), titleBefore);
+      await _captureReaderPreview(tester, preview, 'reader-header-${scenario.$1}');
+      statusVisible = true;
+      tester.view.viewPadding = const FakeViewPadding(); await tester.pumpAndSettle();
+      expect(tester.getRect(body), before, reason: 'Transient system bars must not push the text');
+      expect(tester.getRect(header), titleBefore);
+      expect(tester.getRect(header).bottom, lessThanOrEqualTo(tester.getRect(body).top),
+        reason: 'A revealed system bar must not move the header over the first text line');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    });
+  }
+
+  testWidgets('sleep timer pauses an in-flight loading resume and ignores its late completion', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('timer-loading'), storage: AppStorage(), ttsReader: speech)));
+    await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-sleep'))); await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('sleep-custom')));
+    await tester.tap(find.byKey(const ValueKey('sleep-custom'))); await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('sleep-custom-minutes')), '1');
+    await tester.tap(find.text('确定')); await tester.pumpAndSettle();
+    final pending = Completer<bool>(); speech.resumeResult = pending;
+    await tester.tapAt(const Offset(195, 360)); await tester.pump(const Duration(milliseconds: 16));
+    expect(find.text('正在加载语音…'), findsOneWidget);
+    await tester.pump(const Duration(minutes: 1)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused); expect(find.byKey(const ValueKey('reading-panel')), findsOneWidget);
+    pending.complete(true); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused);
+    expect(find.byKey(const ValueKey('reading-panel')), findsOneWidget,
+      reason: 'A late loading result must not revive playback after the timer pauses it');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('theme mode follows system live and explicit choices preserve current reader preferences', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    final initial = AppAppearance.initialize(ReadingSettings()..fontSize = 37..speechRate = 2.4
+      ..themeIndex = 1..dayThemeIndex = 1..themeMode = 'system', Brightness.light);
+    await storage.saveSettings(initial.toJson());
+    final book = sample('theme-modes');
+    await tester.pumpWidget(ValueListenableBuilder<bool>(valueListenable: AppAppearance.nightMode,
+      builder: (_, night, child) => MaterialApp(theme: AppAppearance.theme(night),
+        home: ReaderScreen(book: book, storage: storage))));
+    await tester.pumpAndSettle();
+    Color? background() => tester.widget<Scaffold>(find.byType(Scaffold).first).backgroundColor;
+    expect(background(), const Color(0xFFC7EDCC));
+    AppAppearance.updateSystemBrightness(Brightness.dark); await tester.pumpAndSettle();
+    expect(background(), const Color(0xFF1A1A1A), reason: 'The reader body must follow the global theme immediately');
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    final mode = find.byKey(const ValueKey('theme-mode'));
+    expect(tester.widget<DropdownButton<String>>(mode).value, 'system');
+    await tester.tap(mode); await tester.pumpAndSettle();
+    await tester.tap(find.text('浅色').last); await tester.pumpAndSettle();
+    expect(background(), const Color(0xFFC7EDCC));
+    expect((await storage.loadSettings())['themeMode'], 'light');
+    expect((await storage.loadSettings())['fontSize'], 37); expect((await storage.loadSettings())['speechRate'], 2.4);
+    AppAppearance.updateSystemBrightness(Brightness.dark); await tester.pumpAndSettle();
+    expect(background(), const Color(0xFFC7EDCC), reason: 'Explicit light mode must ignore system darkness');
+    await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('night-mode'))); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['themeMode'], 'dark'); expect(background(), const Color(0xFF1A1A1A));
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    expect(tester.widget<DropdownButton<String>>(mode).value, 'dark');
+    await tester.tap(mode); await tester.pumpAndSettle();
+    await tester.tap(find.text('跟随系统').last); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['themeMode'], 'system');
+    AppAppearance.updateSystemBrightness(Brightness.light); await tester.pumpAndSettle();
+    expect(background(), const Color(0xFFC7EDCC));
+    await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    // This settings sheet captured the light palette before the OS changes.
+    AppAppearance.updateSystemBrightness(Brightness.dark); await tester.pumpAndSettle();
+    expect(background(), const Color(0xFF1A1A1A));
+    final font = find.byWidgetPredicate((w) => w is Slider && w.max == 64).last;
+    tester.widget<Slider>(font).onChanged!(45); await tester.pumpAndSettle();
+    expect(background(), const Color(0xFF1A1A1A), reason: 'Editing an old settings copy must resolve the current system theme');
+    expect((await storage.loadSettings())['fontSize'], 45); expect((await storage.loadSettings())['speechRate'], 2.4);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
@@ -1124,6 +1422,28 @@ void main() {
     expect(firstLine().$1, before.$1); expect(firstLine().$2, closeTo(before.$2, 1));
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
+}
+
+Future<void> _captureReaderPreview(WidgetTester tester, GlobalKey key, String name) async {
+  expect(tester.takeException(), isNull);
+  if (!Platform.isLinux) return;
+  await tester.runAsync(() async {
+    final boundary = key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage(pixelRatio: 2);
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    await Directory('build/ui-previews').create(recursive: true);
+    await File('build/ui-previews/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
+class _TestBookCacheTask extends BookCacheTask {
+  int cancelCalls = 0;
+  _TestBookCacheTask({required Book book, required TtsCacheStore store}) : super(book: book, store: store, bookId: book.id);
+  @override
+  Future<void> restoreFromDisk() async {}
+  @override
+  void cancel() { cancelCalls++; }
 }
 
 class _TestSpeech extends TtsReader {

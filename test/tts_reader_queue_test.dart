@@ -54,8 +54,35 @@ class _ResumePlayer extends _Player {
   Future<void> dispose() async { await super.dispose(); await positions.close(); }
 }
 
+class _BrokenPlayer extends _ResumePlayer {
+  @override
+  Future<void> play(Source source, {double? volume, double? balance, AudioContext? ctx,
+    Duration? position, PlayerMode? mode}) async {
+    throw TimeoutException('native player did not start');
+  }
+}
+
+class _SlowCache extends TtsCacheStore {
+  final reading = Completer<void>();
+  final result = Completer<Uint8List?>();
+  _SlowCache() : super('slow-cache', 'voice', .5);
+  @override
+  Future<Uint8List?> read(int ci, int off) {
+    if (!reading.isCompleted) reading.complete();
+    return result.future;
+  }
+  @override
+  Future<List<SpeechWord>> readWords(int ci, int off) async => [];
+}
+
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  Future<void> waitFor(bool Function() ready, String reason) async {
+    for (var attempt = 0; attempt < 400 && !ready(); attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(ready(), isTrue, reason: reason);
+  }
   setUp(() {
     final messenger = binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global'), (_) async => null);
@@ -109,6 +136,376 @@ void main() {
     await jump.timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('jump did not use its fresh audio request'));
     expect(player.played, [1, 2, 3]);
     await reader.dispose().timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('mock player disposal did not finish'));
+  });
+
+  test('dynamic prefetch windows preserve useful audio, cancel excess requests and never interrupt the current sentence', () async {
+    final player = _ResumePlayer();
+    final calls = <(int, Completer<Uint8List>, EdgeSynthCancelToken)>[];
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) {
+      onWords([]);
+      final pending = Completer<Uint8List>();
+      calls.add((int.parse(text), pending, cancelToken));
+      return pending.future;
+    }
+    Future<void> waitCount(int count) async {
+      for (var attempt = 0; attempt < 300 && calls.length < count; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(calls.length, count);
+    }
+    final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(2);
+    addTearDown(reader.dispose);
+    final starting = reader.start([for (var i = 0; i < 8; i++) '$i']);
+    await waitCount(1);
+    reader.setPrefetchSentences(3);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(calls.map((call) => call.$1), [0], reason: 'Changing the window while loading must not compete with first sound.');
+    calls[0].$2.complete(Uint8List.fromList([0]));
+    await starting;
+    await waitCount(2); calls[1].$2.complete(Uint8List.fromList([1]));
+    await waitCount(3);
+    expect(calls[2].$1, 2);
+    reader.setPrefetchSentences(1);
+    expect(calls[2].$3.cancelled, isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(calls.length, 3);
+    expect(player.played, [0]); expect(reader.currentIndex, 0);
+    reader.setPrefetchSentences(3);
+    await waitCount(4);
+    expect(calls[3].$1, 2, reason: 'The enlarged window must not wait for a cancelled transport to resolve.');
+    calls[2].$2.complete(Uint8List.fromList([99]));
+    await Future<void>.delayed(Duration.zero);
+    calls[3].$2.complete(Uint8List.fromList([2]));
+    await waitCount(5); expect(calls[4].$1, 3);
+    calls[4].$2.complete(Uint8List.fromList([3]));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(calls.map((call) => call.$1), [0, 1, 2, 2, 3],
+      reason: 'Valid sentence 1 remains cached when shrinking and growing the window.');
+    reader.setPrefetchSentences(2);
+    reader.setPrefetchSentences(3);
+    await waitCount(6);
+    expect(calls[5].$1, 3, reason: 'Shrinking must evict the audio beyond the new bounded window.');
+    calls[5].$2.complete(Uint8List.fromList([3]));
+    reader.setPrefetchSentences(0);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(calls.length, 6); expect(player.played, [0]);
+    player.clock = const Duration(milliseconds: 1234);
+    await reader.pause(); expect(await reader.resume(), isTrue);
+    expect(player.starts.last, const Duration(milliseconds: 1234));
+    expect(calls.length, 6, reason: 'Turning off prefetch must retain the current offline-resumable audio.');
+    player.completed.add(null);
+    await waitCount(7);
+    expect(calls[6].$1, 1);
+    calls[6].$2.complete(Uint8List.fromList([1]));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(calls.length, 7, reason: 'With prefetch disabled, only the now-current sentence is fetched.');
+    expect(player.played, [0, 0, 1]);
+  });
+
+  test('zero disables prefetch and changes made while paused take effect only after audio resumes', () async {
+    final player = _ResumePlayer();
+    final requested = <String>[];
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      requested.add(text); onWords([]); return Uint8List.fromList([int.parse(text)]);
+    }
+    final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(-1);
+    addTearDown(reader.dispose);
+    expect(reader.prefetchSentences, 0);
+    await reader.start(['0', '1', '2', '3']);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(requested, ['0']);
+    await reader.pause();
+    reader.setPrefetchSentences(2);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(requested, ['0']);
+    expect(await reader.resume(), isTrue);
+    for (var attempt = 0; attempt < 100 && requested.length < 3; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(requested, ['0', '1', '2']);
+    reader.setPrefetchSentences(900); expect(reader.prefetchSentences, 100);
+    reader.setPrefetchSentences(0); expect(reader.prefetchSentences, 0);
+    expect(reader.state, TtsState.playing); expect(reader.currentIndex, 0);
+    expect(player.played, [0, 0]);
+  });
+
+  test('system voice never starts online prefetch even at the maximum count', () async {
+    final messenger = binding.defaultBinaryMessenger;
+    const systemChannel = MethodChannel('com.ddnovelreader/system_tts');
+    messenger.setMockMethodCallHandler(systemChannel, (call) async {
+      if (call.method == 'speak') {
+        final delivered = Completer<void>();
+        messenger.handlePlatformMessage(systemChannel.name,
+          const StandardMethodCodec().encodeMethodCall(MethodCall('start', {'id': (call.arguments as Map)['id']})),
+          (_) => delivered.complete());
+        await delivered.future;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(systemChannel, null));
+    var onlineCalls = 0;
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onlineCalls++; return Uint8List.fromList([1]);
+    }
+    final reader = TtsReader(player: _Player(), synthesize: synth)..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    await reader.start(['第一句。', '第二句。']);
+    reader.setPrefetchSentences(100);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await reader.pause(); expect(await reader.resume(), isTrue);
+    expect(onlineCalls, 0);
+  });
+
+  for (final knownOffline in [true, false]) {
+    test('${knownOffline ? 'OS disconnect' : 'actual connection failure'} consumes prefetch and disk audio before sticky system fallback', () async {
+      final messenger = binding.defaultBinaryMessenger;
+      const systemChannel = MethodChannel('com.ddnovelreader/system_tts');
+      final spoken = <Map>[];
+      Future<void> systemEvent(String event, Object? id) async {
+        final done = Completer<void>();
+        messenger.handlePlatformMessage(systemChannel.name,
+          const StandardMethodCodec().encodeMethodCall(MethodCall(event, {'id': id})), (_) => done.complete());
+        await done.future;
+      }
+      messenger.setMockMethodCallHandler(systemChannel, (call) async {
+        if (call.method == 'speak') {
+          spoken.add(call.arguments as Map);
+          await systemEvent('start', spoken.last['id']);
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(systemChannel, null));
+      final directory = await Directory.systemTemp.createTemp('tts-fallback-cache-');
+      const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+      messenger.setMockMethodCallHandler(pathChannel, (_) async => directory.path);
+      addTearDown(() async {
+        messenger.setMockMethodCallHandler(pathChannel, null); await directory.delete(recursive: true);
+      });
+      final cache = TtsCacheStore('fallback', TtsReader.defaultVoice, .5);
+      await cache.write(0, 20, Uint8List.fromList([2]), words: []);
+      final requested = <String>[];
+      Future<Uint8List> synth(String text, {required String voice, required String rate,
+        required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+        requested.add(text);
+        if (text == '3') throw const EdgeTtsException('connection');
+        onWords([]); return Uint8List.fromList([int.parse(text)]);
+      }
+      final player = _ResumePlayer();
+      final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(1)..setCache(cache);
+      addTearDown(reader.dispose);
+      final modes = <bool>[];
+      var errors = 0;
+      reader.onVoiceModeChanged = modes.add; reader.onError = () => errors++;
+      await reader.start(['0', '1', '2', '3', '4'], offsets: [0, 10, 20, 30, 40]);
+      await waitFor(() => requested.contains('1'), 'Sentence 1 must be preloaded.');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      if (knownOffline) reader.setNetworkAvailable(false);
+      expect(reader.usingSystemFallback, isFalse);
+      player.completed.add(null);
+      await waitFor(() => player.played.length == 2, 'The completed memory preload must survive disconnection.');
+      expect(player.played, [0, 1]); expect(spoken, isEmpty);
+      player.completed.add(null);
+      await waitFor(() => player.played.length == 3, 'Existing disk audio must play even when offline.');
+      expect(player.played, [0, 1, 2]);
+      if (!knownOffline) await waitFor(() => requested.contains('3'), 'A real failed prefetch supplies connection failure evidence.');
+      expect(reader.usingSystemFallback, isFalse, reason: 'A background failure cannot skip usable foreground audio.');
+      expect(spoken, isEmpty);
+      player.completed.add(null);
+      await waitFor(() => spoken.length == 1, 'Only the first uncached current sentence switches to system speech.');
+      expect(spoken.single['text'], '3');
+      expect(reader.usingSystemFallback, isTrue); expect(reader.usesSystemVoice, isTrue);
+      expect(reader.voice, TtsReader.defaultVoice); expect(modes, [true]); expect(errors, 0);
+      expect(requested, knownOffline ? ['0', '1'] : ['0', '1', '3']);
+      final beforeRecovery = requested.length;
+      reader.setNetworkAvailable(true);
+      await systemEvent('done', spoken.last['id']);
+      await waitFor(() => spoken.length == 2, 'System speech remains selected after network recovery.');
+      expect(spoken.last['text'], '4'); expect(requested.length, beforeRecovery);
+      expect(reader.usingSystemFallback, isTrue);
+      reader.setVoice(TtsReader.defaultVoice);
+      expect(reader.usingSystemFallback, isFalse); expect(modes, [true, false]);
+      await reader.jumpTo(4);
+      await waitFor(() => player.played.length == 4, 'Manually selecting the same online source must allow returning online.');
+      expect(requested.last, '4'); expect(player.played.last, 4);
+      expect(errors, 0);
+    });
+  }
+
+  for (final error in <Object>[
+    const EdgeTtsException('timeout'),
+    TimeoutException('transport deadline'),
+    const SocketException('connection lost'),
+    const EdgeTtsException('service', status: 403),
+    const EdgeTtsException('service', status: 429),
+    const EdgeTtsException('no_audio'),
+  ]) {
+    test('only network synthesis failures can trigger fallback: $error', () async {
+      final messenger = binding.defaultBinaryMessenger;
+      const channel = MethodChannel('com.ddnovelreader/system_tts');
+      var systemStarts = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'speak') {
+          systemStarts++;
+          final delivered = Completer<void>();
+          messenger.handlePlatformMessage(channel.name,
+            const StandardMethodCodec().encodeMethodCall(MethodCall('start', {'id': (call.arguments as Map)['id']})),
+            (_) => delivered.complete());
+          await delivered.future;
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      Future<Uint8List> synth(String text, {required String voice, required String rate,
+        required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async => throw error;
+      final reader = TtsReader(player: _ResumePlayer(), synthesize: synth);
+      addTearDown(reader.dispose);
+      var errors = 0; reader.onError = () => errors++;
+      await reader.start(['正文。']);
+      final networkError = error is TimeoutException || error is SocketException || error is EdgeTtsException && error.kind == 'timeout';
+      expect(reader.usingSystemFallback, networkError);
+      expect(systemStarts, networkError ? 1 : 0);
+      expect(errors, networkError ? 0 : 1);
+    });
+  }
+
+  test('a native player timeout is not misclassified as a network failure', () async {
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onWords([]); return Uint8List.fromList([1]);
+    }
+    final reader = TtsReader(player: _BrokenPlayer(), synthesize: synth);
+    addTearDown(reader.dispose);
+    var errors = 0; reader.onError = () => errors++;
+    await reader.start(['正文。']);
+    expect(reader.usingSystemFallback, isFalse); expect(errors, 1);
+    expect(reader.lastFailure, isA<TimeoutException>());
+  });
+
+  test('an unavailable system engine reports one real failure without online retries', () async {
+    final messenger = binding.defaultBinaryMessenger;
+    const channel = MethodChannel('com.ddnovelreader/system_tts');
+    var initializationCalls = 0;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'initialize') { initializationCalls++; throw PlatformException(code: 'engine_unavailable'); }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    var onlineCalls = 0;
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onlineCalls++; return Uint8List.fromList([1]);
+    }
+    final reader = TtsReader(player: _ResumePlayer(), synthesize: synth)..setNetworkAvailable(false);
+    addTearDown(reader.dispose);
+    var errors = 0; reader.onError = () => errors++;
+    await reader.start(['正文。']);
+    expect(onlineCalls, 0); expect(initializationCalls, 1); expect(errors, 1);
+    expect(reader.state, TtsState.stopped); expect(reader.lastFailure, isA<PlatformException>());
+    reader.setNetworkAvailable(true);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(onlineCalls, 0); expect(initializationCalls, 1);
+    reader.setVoice(TtsReader.systemVoice);
+    expect(reader.usingSystemFallback, isFalse); expect(reader.usesSystemVoice, isTrue);
+  });
+
+  test('disconnect preserves an in-progress cache read instead of prematurely falling back', () async {
+    final cache = _SlowCache();
+    var onlineCalls = 0;
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onlineCalls++; return Uint8List.fromList([99]);
+    }
+    final player = _ResumePlayer();
+    final reader = TtsReader(player: player, synthesize: synth)..setCache(cache)..setPrefetchSentences(0);
+    addTearDown(reader.dispose);
+    final starting = reader.start(['已有音频。'], offsets: [0]);
+    await cache.reading.future;
+    reader.setNetworkAvailable(false);
+    cache.result.complete(Uint8List.fromList([7]));
+    await starting.timeout(const Duration(seconds: 1));
+    expect(player.played, [7]); expect(reader.usingSystemFallback, isFalse);
+    expect(onlineCalls, 0);
+  });
+
+  for (final stoppedBeforeDisconnect in [false, true]) {
+    test('disconnect promptly cancels a loading transport without reviving ${stoppedBeforeDisconnect ? 'stopped' : 'old'} audio', () async {
+      final messenger = binding.defaultBinaryMessenger;
+      const channel = MethodChannel('com.ddnovelreader/system_tts');
+      var systemStarts = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'speak') {
+          systemStarts++;
+          final delivered = Completer<void>();
+          messenger.handlePlatformMessage(channel.name,
+            const StandardMethodCodec().encodeMethodCall(MethodCall('start', {'id': (call.arguments as Map)['id']})),
+            (_) => delivered.complete());
+          await delivered.future;
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final pending = Completer<Uint8List>();
+      EdgeSynthCancelToken? token;
+      Future<Uint8List> synth(String text, {required String voice, required String rate,
+        required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) {
+        token = cancelToken; return pending.future;
+      }
+      final player = _ResumePlayer();
+      final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(0);
+      addTearDown(reader.dispose);
+      var errors = 0; reader.onError = () => errors++;
+      final starting = reader.start(['正在连接。']);
+      await waitFor(() => token != null, 'The actual current-sentence transport must have started.');
+      if (stoppedBeforeDisconnect) await reader.stop();
+      reader.setNetworkAvailable(false);
+      await starting.timeout(const Duration(seconds: 1));
+      expect(token!.cancelled, isTrue);
+      expect(systemStarts, stoppedBeforeDisconnect ? 0 : 1);
+      expect(reader.usingSystemFallback, !stoppedBeforeDisconnect);
+      pending.complete(Uint8List.fromList([99]));
+      await Future<void>.delayed(Duration.zero);
+      expect(player.played, isEmpty); expect(errors, 0);
+      expect(reader.currentIndex, stoppedBeforeDisconnect ? -1 : 0);
+    });
+  }
+
+  test('restoring sticky fallback bypasses online synthesis even after network recovery or another chapter', () async {
+    final messenger = binding.defaultBinaryMessenger;
+    const channel = MethodChannel('com.ddnovelreader/system_tts');
+    final spoken = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'speak') {
+        spoken.add((call.arguments as Map)['text'] as String);
+        final delivered = Completer<void>();
+        messenger.handlePlatformMessage(channel.name,
+          const StandardMethodCodec().encodeMethodCall(MethodCall('start', {'id': (call.arguments as Map)['id']})),
+          (_) => delivered.complete());
+        await delivered.future;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    var onlineCalls = 0;
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onlineCalls++; onWords([]); return Uint8List.fromList([1]);
+    }
+    final reader = TtsReader(player: _ResumePlayer(), synthesize: synth)
+      ..setVoice(TtsReader.defaultVoice)..restoreSystemFallback(true);
+    addTearDown(reader.dispose);
+    reader.setNetworkAvailable(false); reader.setNetworkAvailable(true);
+    await reader.start(['重启后。']);
+    await reader.start(['下一章。'], chapterIndex: 1);
+    expect(spoken, ['重启后。', '下一章。']); expect(onlineCalls, 0);
+    expect(reader.voice, TtsReader.defaultVoice); expect(reader.usingSystemFallback, isTrue);
+    reader.setVoice(TtsReader.defaultVoice);
+    await reader.start(['手动恢复。']);
+    expect(onlineCalls, 1); expect(reader.usingSystemFallback, isFalse);
+    reader.setVoice(TtsReader.systemVoice); reader.restoreSystemFallback(true);
+    expect(reader.usesSystemVoice, isTrue); expect(reader.usingSystemFallback, isFalse);
   });
 
   test('repeated pause reloads the retained audio at the exact position offline and then completes the next sentence', () async {
