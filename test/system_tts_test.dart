@@ -62,15 +62,49 @@ void main() {
   });
   test('stopping during engine initialization cannot start delayed speech', () async {
     final initialized = Completer<void>();
+    final initializing = Completer<void>();
     messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
-      if (call.method == 'initialize') { await initialized.future; return 'engine'; }
+      if (call.method == 'initialize') { initializing.complete(); await initialized.future; return 'engine'; }
       calls.add(call); return null;
     });
     final client = SystemTtsClient();
     final speaking = client.speak('不要延迟播放', 1, onDone: () {}, onRange: (_,__) {}, onError: (_) {});
     final expected = expectLater(speaking, throwsA(isA<SystemSpeechCancelled>()));
+    await initializing.future;
     await client.stop(); initialized.complete(); await expected;
     expect(calls.where((c) => c.method == 'speak'), isEmpty);
+    await client.dispose();
+  });
+  test('native rejection returns promptly instead of waiting for the start timeout', () async {
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+      if (call.method == 'initialize') return 'engine';
+      if (call.method == 'speak') throw PlatformException(code: 'speak_failed');
+      if (call.method == 'stop') throw PlatformException(code: 'engine_disappeared');
+      return null;
+    });
+    final client = SystemTtsClient();
+    await expectLater(client.speak('立即报告错误', 1, onDone: () {}, onRange: (_,__) {}, onError: (_) {})
+      .timeout(const Duration(seconds: 1)), throwsA(isA<PlatformException>().having((e) => e.code, 'code', 'speak_failed')));
+    await client.dispose();
+  });
+  test('replacement speech cancels its predecessor and ignores stale ranges', () async {
+    final client = SystemTtsClient();
+    var rangeCalls = 0;
+    queued = Completer<void>(); final firstQueued = queued!.future;
+    final first = client.speak('旧请求', 1, onDone: () {}, onRange: (_,__) {}, onError: (_) {});
+    final cancelled = expectLater(first, throwsA(isA<SystemSpeechCancelled>()));
+    await firstQueued; final oldId = spoken.last['id'];
+    queued = Completer<void>(); final secondQueued = queued!.future;
+    final second = client.speak('新请求', 1, onDone: () {}, onRange: (_,__) => rangeCalls++, onError: (_) {});
+    await secondQueued; await cancelled;
+    final id = spoken.last['id'];
+    await emit('range', {'id': oldId, 'start': 0, 'end': 1});
+    await emit('range', {'id': id, 'start': -1, 'end': 1});
+    expect(rangeCalls, 0);
+    // Some engines provide a range callback before onStart. The range itself
+    // is evidence that audio has begun and must release the loading state.
+    await emit('range', {'id': id, 'start': 0, 'end': 1}); await second;
+    expect(rangeCalls, 1);
     await client.dispose();
   });
   test('unconfigured system engine reports engine failure without skipping text', () async {

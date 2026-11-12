@@ -9,6 +9,8 @@ class SystemTtsClient {
   String? _request;
   int _serial = 0;
   int _epoch = 0;
+  int _textLength = 0;
+  bool _disposed = false;
   Completer<void>? _started;
   void Function()? _done;
   void Function(int, int)? _range;
@@ -27,17 +29,24 @@ class SystemTtsClient {
 
   Future<void> speak(String text, double rate, {required void Function() onDone,
     required void Function(int, int) onRange, required void Function(Object) onError}) async {
+    if (_disposed || _owner != this) throw const SystemSpeechCancelled();
+    // Claim this operation before awaiting anything. A second speak or a stop
+    // invalidates the earlier operation even while the engine is initializing.
+    final stopping = stop();
     final epoch = _epoch;
+    await stopping;
+    if (_disposed || epoch != _epoch || _owner != this) throw const SystemSpeechCancelled();
     await initialize();
-    if (epoch != _epoch || _owner != this) throw const SystemSpeechCancelled();
+    if (_disposed || epoch != _epoch || _owner != this) throw const SystemSpeechCancelled();
     final id = '${identityHashCode(this)}-${++_serial}';
     _request = id; _done = onDone; _range = onRange; _error = onError;
+    _textLength = text.length;
     final started = Completer<void>(); _started = started;
     try {
       await Future.wait<void>([
         channel.invokeMethod<void>('speak', {'id': id, 'text': text, 'rate': rate}),
         started.future.timeout(const Duration(seconds: 30)),
-      ]);
+      ], eagerError: true);
     } catch (_) {
       if (_request == id) await stop();
       rethrow;
@@ -46,20 +55,27 @@ class SystemTtsClient {
 
   Future<dynamic> _onEvent(MethodCall call) async {
     final data = call.arguments;
-    if (data is! Map || data['id'] != _request) return;
+    if (_disposed || _request == null || data is! Map || data['id'] != _request) return;
     switch (call.method) {
       case 'start':
         if (!(_started?.isCompleted ?? true)) _started!.complete();
       case 'range':
-        _range?.call(data['start'] as int, data['end'] as int);
+        final start = data['start'], end = data['end'];
+        if (start is! int || end is! int || start < 0 || end <= start || end > _textLength) return;
+        if (!(_started?.isCompleted ?? true)) _started!.complete();
+        _range?.call(start, end);
       case 'done':
         if (!(_started?.isCompleted ?? true)) _started!.complete();
-        _request = null; _done?.call();
+        final done = _done;
+        _request = null; _done = null; _range = null; _error = null;
+        done?.call();
       case 'error':
         final error = PlatformException(code: 'system_speech_${data['code']}', message: 'System speech failed');
+        final onError = _error;
         _request = null;
+        _done = null; _range = null; _error = null;
         if (!(_started?.isCompleted ?? true)) { _started!.completeError(error); }
-        else { _error?.call(error); }
+        else { onError?.call(error); }
     }
   }
 
@@ -69,10 +85,17 @@ class SystemTtsClient {
     _request = null; _done = null; _range = null; _error = null;
     if (!(_started?.isCompleted ?? true)) _started!.completeError(const SystemSpeechCancelled());
     _started = null;
-    if (hadRequest && _owner == this) await channel.invokeMethod('stop');
+    if (hadRequest && _owner == this) {
+      // Logical cancellation is already complete; activity teardown or a
+      // disappearing engine must not prevent audio-player cleanup by callers.
+      try { await channel.invokeMethod('stop'); }
+      on PlatformException { /* Native engine is no longer available. */ }
+      on MissingPluginException { /* Activity or Flutter engine was detached. */ }
+    }
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     await stop();
     if (_owner == this) { _owner = null; channel.setMethodCallHandler(null); }
   }

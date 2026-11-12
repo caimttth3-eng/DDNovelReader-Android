@@ -556,7 +556,7 @@ Future<Uint8List?> _synthOnce(String text,
   Completer<Uint8List?>? waiting;
   token._abort = () {
     client.close(force: true);
-    if (ws != null) unawaited(ws!.close());
+    if (ws != null) unawaited(ws!.close().then<void>((_) {}, onError: (Object _) {}));
     if (waiting != null && !waiting!.isCompleted) waiting!.completeError(const EdgeTtsException('cancelled'));
   };
   try {
@@ -583,7 +583,8 @@ Future<Uint8List?> _synthOnce(String text,
     token.check();
     throw const EdgeTtsException('connection');
   } finally {
-    client.close();
+    client.close(force: ws == null);
+    if (ws == null) token._abort = null;
   }
 
   final socket = ws!;

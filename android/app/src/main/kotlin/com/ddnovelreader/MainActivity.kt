@@ -7,11 +7,12 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : AudioServiceActivity() {
     private val CHANNEL = "com.ddnovelreader/volume_keys"
     private var channel: MethodChannel? = null
-    private var systemSpeech: SystemSpeech? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        systemSpeech = SystemSpeech(this, flutterEngine.dartExecutor.binaryMessenger)
+        if (!flutterEngine.plugins.has(SystemSpeechPlugin::class.java)) {
+            flutterEngine.plugins.add(SystemSpeechPlugin())
+        }
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         val logChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.ddnovelreader/debug_log")
         logChannel.setMethodCallHandler { call, _ ->
@@ -73,9 +74,4 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
-    override fun onDestroy() {
-        systemSpeech?.close()
-        systemSpeech = null
-        super.onDestroy()
-    }
 }

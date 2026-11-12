@@ -9,6 +9,20 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.embedding.engine.plugins.FlutterPlugin
+
+/** AudioServiceActivity reuses a FlutterEngine, so speech must have the same
+ * lifetime as that engine rather than whichever Activity currently hosts it. */
+class SystemSpeechPlugin : FlutterPlugin {
+    private var speech: SystemSpeech? = null
+    override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        speech = SystemSpeech(binding.applicationContext, binding.binaryMessenger)
+    }
+    override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        speech?.close()
+        speech = null
+    }
+}
 
 /** Uses the engine and voice selected in Android's text-to-speech settings. */
 class SystemSpeech(context: Context, messenger: BinaryMessenger) {
@@ -48,8 +62,11 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
                         chunks = parts
                         chunkIndex = 0
                         started = false
-                        engine!!.setSpeechRate((call.argument<Number>("rate")?.toFloat() ?: 1f).coerceIn(0.1f, 3f))
-                        if (speakChunk()) result.success(null)
+                        val rate = call.argument<Number>("rate")?.toFloat() ?: 1f
+                        if (!rate.isFinite() || engine!!.setSpeechRate(rate.coerceIn(0.1f, 3f)) != TextToSpeech.SUCCESS) {
+                            requestId = null
+                            result.error("speak_failed", "System engine rejected speech rate", null)
+                        } else if (speakChunk()) result.success(null)
                         else { requestId = null; result.error("speak_failed", "System engine rejected speech", null) }
                     }
                 }
@@ -64,7 +81,8 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
         if (ready) { result.success(engine?.defaultEngine); return }
         initializers.add(result)
         if (engine != null) return
-        engine = TextToSpeech(appContext) { status ->
+        try {
+            engine = TextToSpeech(appContext) { status ->
             main.post {
                 if (closed) return@post
                 ready = status == TextToSpeech.SUCCESS
@@ -82,13 +100,22 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
                 }
                 if (!ready) { engine?.shutdown(); engine = null }
             }
+            }
+        } catch (error: RuntimeException) {
+            ready = false
+            engine?.shutdown(); engine = null
+            val pending = initializers.toList()
+            initializers.clear()
+            for (item in pending) item.error("no_engine", "System text-to-speech initialization failed", null)
         }
     }
 
     private fun speakChunk(): Boolean {
         val id = requestId ?: return false
         val part = chunks.getOrNull(chunkIndex) ?: return false
-        return engine?.speak(part.second, TextToSpeech.QUEUE_FLUSH, Bundle(), "$id:${part.first}") == TextToSpeech.SUCCESS
+        return try {
+            engine?.speak(part.second, TextToSpeech.QUEUE_FLUSH, Bundle(), "$id:${part.first}") == TextToSpeech.SUCCESS
+        } catch (error: RuntimeException) { false }
     }
 
     private fun event(name: String, id: String, extra: Map<String, Any> = emptyMap()) {
@@ -127,7 +154,10 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
         })
     }
 
-    private fun stop() { requestId = null; chunks = emptyList(); engine?.stop() }
+    private fun stop() {
+        requestId = null; chunks = emptyList()
+        try { engine?.stop() } catch (error: RuntimeException) { /* Engine process may have exited. */ }
+    }
 
     fun close() {
         closed = true

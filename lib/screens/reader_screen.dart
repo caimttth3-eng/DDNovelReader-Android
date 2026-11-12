@@ -1865,7 +1865,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final message = failure is PlatformException ? T('systemTtsUnavailable')
       : failure is TimeoutException || failure is EdgeTtsException && failure.kind == 'timeout'
         ? T(_tts.usesSystemVoice ? 'systemTtsTimeout' : 'onlineTtsTimeout')
-      : failure is EdgeTtsException ? (failure.status != null ? T('onlineTtsRejected', {'status': '${failure.status}'}) : T('onlineTtsUnavailable'))
+      : failure is EdgeTtsException ? (failure.status != null ? T('onlineTtsRejected', {'err': '${failure.status}'}) : T('onlineTtsUnavailable'))
       : T('voicePlaybackFailed');
     _exitReadingMode();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -3039,10 +3039,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                     onChanged: (value) {
                       setState(() => _settings.fontSize = value); widget.storage.saveSettings(_settings.toJson());
                     })),
-                  TextButton(key: const ValueKey('font-fine-tune'), onPressed: () {
+                  SizedBox(width: 44, height: 44, child: TextButton(key: const ValueKey('font-fine-tune'), onPressed: () {
                     setState(() => _showQuickMenu = false); _openFontFineTune();
                   }, style: TextButton.styleFrom(minimumSize: const Size(44, 44), padding: EdgeInsets.zero),
-                    child: const Text('T±', style: TextStyle(fontSize: 20, color: Colors.white70))),
+                    child: const Text('T±', style: TextStyle(fontSize: 20, color: Colors.white70)))),
                 ]),
                 Row(children: [
                   _quickAction(ReaderSymbol.note, T('highlight'), _openHighlights),
