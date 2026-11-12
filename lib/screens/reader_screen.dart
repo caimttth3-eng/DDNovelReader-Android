@@ -394,6 +394,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (_settings.voice.isNotEmpty) _tts.setVoice(_settings.voice);
     final p = await widget.storage.loadProgress(_book.id) ?? widget.initialProgress;
     if (!mounted) return;
+    final atTitle = p == null || p.atChapterTitle ||
+      (p.layoutSignature.isEmpty && p.paragraphIndex == 0 && p.offsetInParagraph == 0);
     _lastProgress = p;
     _chapter = (p?.chapterIndex ?? 0).clamp(0, max(0, _book.chapters.length - 1));
     final location = p == null ? (0, 0) : ReadingText.locate(_book, _chapter,
@@ -406,9 +408,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (!mounted) return;
       final exact = p != null && p.layoutSignature == _layoutSignature && p.viewportItem != null;
       final index = exact ? p.viewportItem!.clamp(0, _items.length - 1) :
-        p == null || p.atChapterTitle ? _chapterItem(_chapter) : _itemIndexOf(_chapter, _para);
+        atTitle ? _chapterItem(_chapter) : _itemIndexOf(_chapter, _para);
       await _positionViewport(index, exact ? p.viewportAlignment : 0);
-      if (mounted && !exact && p != null && !p.atChapterTitle) {
+      if (mounted && !exact && p != null && !atTitle) {
         await _followSentence(_chapter, _para, max(0, _ttsSentence));
       }
       if (mounted) { _restoringProgress = false; _scheduleSave(); }

@@ -354,6 +354,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
     final a = sample('book-a'), b = sample('book-b');
+    await storage.saveProgress(BookProgress(bookId: a.id));
     Future<void> open(Book book) async {
       await tester.pumpWidget(MaterialApp(home: ReaderScreen(key: ValueKey(book.id), book: book, storage: storage)));
       await tester.pumpAndSettle();
@@ -368,7 +369,7 @@ void main() {
       expect(tester.takeException(), isNull);
     }
     await open(a);
-    expect(visible().first.index, 0, reason: 'New books open on their chapter heading');
+    expect(visible().first.index, 0, reason: 'New and migrated chapter-start positions include their heading');
     final progressSlider = find.byWidgetPredicate((w) => w is Slider && w.max == 1 && w.min == 0);
     tester.widget<Slider>(progressSlider).onChanged!(0.82);
     await tester.pumpAndSettle();
