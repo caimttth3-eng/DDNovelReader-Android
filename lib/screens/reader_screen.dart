@@ -2090,7 +2090,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: const Color(0xEE333333), borderRadius: BorderRadius.circular(8)),
-          child: Text(T('volHint'), textAlign: TextAlign.center,
+          child: Text(T(_settings.pageTurnMode == 'tap' ? 'readTapHint' :
+            _settings.pageTurnMode == 'swipe' ? 'volHint' : 'readSentenceHint'), textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.white, fontSize: 13)),
         ),
       )),

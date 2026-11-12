@@ -422,7 +422,8 @@ void main() {
     final speech = _TestSpeech();
     final wordPreviewKey = GlobalKey();
     await tester.pumpWidget(RepaintBoundary(key: wordPreviewKey,
-      child: MaterialApp(home: ReaderScreen(book: sample('scroll'), storage: storage, ttsReader: speech))));
+      child: MaterialApp(debugShowCheckedModeBanner: false,
+        home: ReaderScreen(book: sample('scroll'), storage: storage, ttsReader: speech))));
     await tester.pumpAndSettle();
     expect(tester.widget<ScrollablePositionedList>(list).physics, isA<ClampingScrollPhysics>());
     for (var i = 0; i < 40; i++) { await tester.drag(list, const Offset(0, -700)); await tester.pumpAndSettle(); }
@@ -440,6 +441,7 @@ void main() {
     expect(tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
       .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1), isNotEmpty);
     expect(before, isNotEmpty); expect(tester.takeException(), isNull);
+    expect(find.text('上滑上一句 · 下滑下一句'), findsOneWidget);
     expect(speech.startedAt, greaterThan(0), reason: 'Speech must start at the visible sentence rather than the chapter start');
     speech.onWordChanged?.call(0, 2);
     await tester.pump();
