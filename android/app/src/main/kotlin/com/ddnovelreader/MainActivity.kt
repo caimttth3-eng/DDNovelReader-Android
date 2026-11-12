@@ -61,6 +61,11 @@ class MainActivity : AudioServiceActivity() {
                     }
                     result.success(null)
                 }
+                "getSystemBrightness" -> {
+                    val value = android.provider.Settings.System.getInt(
+                        contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, 128)
+                    result.success((value / 255.0).coerceIn(0.0, 1.0))
+                }
                 else -> result.notImplemented()
             }
         }

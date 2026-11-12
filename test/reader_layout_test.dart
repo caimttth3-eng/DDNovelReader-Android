@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -20,11 +21,11 @@ void main() {
   final volumeCalls = <MethodCall>[];
   final platformCalls = <MethodCall>[];
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'duoduo.settings.v1': jsonEncode({'brightness': 1.0, 'autoPageSeconds': 2})});
     AppAppearance.nightMode.value = false;
     volumeCalls.clear(); platformCalls.clear();
     messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/volume_keys'),
-      (call) async { volumeCalls.add(call); return call.method == 'getMediaVolume' ? 0.5 : null; });
+      (call) async { volumeCalls.add(call); return ['getMediaVolume', 'getSystemBrightness'].contains(call.method) ? 0.5 : null; });
     messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async { platformCalls.add(call); return null; });
     messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/debug_log'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global'), (_) async => null);
@@ -93,8 +94,10 @@ void main() {
       )));
     await tester.pumpWidget(app(ReaderScreen(book: book, storage: AppStorage())));
     await tester.pumpAndSettle();
+    expect(volumeCalls.where((c) => c.method == 'setScreenBrightness'), isEmpty,
+      reason: 'Opening a book must not force maximum brightness');
     await capture('reader-controls');
-    final list = find.byType(ScrollablePositionedList);
+    final list = find.byKey(const ValueKey('reader-body'));
     final text = find.text('清晨，阳光照进窗前。').first;
     final before = tester.getTopLeft(text);
     final listSize = tester.getSize(list);
@@ -130,6 +133,16 @@ void main() {
     }
     final firstPage = topIndex();
     await tester.drag(list, const Offset(-220, 0));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 60));
+    final incoming = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-incoming-transform')));
+    final outgoing = tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-outgoing-transform')));
+    expect(incoming.translation.dx, greaterThan(0));
+    expect(outgoing.translation.dx, lessThanOrEqualTo(0));
+    expect(incoming.translation.dy, 0);
+    expect(outgoing.translation.dy, 0);
+    await capture('horizontal-page-transition');
     await tester.pumpAndSettle();
     final nextPage = topIndex();
     expect(nextPage, greaterThan(firstPage));
@@ -138,10 +151,17 @@ void main() {
     expect(topIndex(), lessThan(nextPage));
     await tester.tap(find.byKey(const ValueKey('next-chapter')));
     await tester.pumpAndSettle();
-    expect(find.text('第 2 章 山间来信'), findsWidgets);
+    expect(find.text('第 2/20 章'), findsOneWidget);
+    expect(topIndex(), greaterThanOrEqualTo(31));
+    await tester.tap(find.byKey(const ValueKey('next-chapter')));
+    await tester.pumpAndSettle();
+    expect(find.text('第 3/20 章'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('previous-chapter')));
     await tester.pumpAndSettle();
-    expect(find.text('第 1 章 山间来信'), findsWidgets);
+    expect(find.text('第 2/20 章'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('previous-chapter')));
+    await tester.pumpAndSettle();
+    expect(find.text('第 1/20 章'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reader-menu')));
     await tester.pumpAndSettle();
     await capture('reader-menu');
@@ -150,6 +170,62 @@ void main() {
     await tester.tapAt(Offset(slider.right - 12, slider.center.dy));
     await tester.pumpAndSettle();
     expect(volumeCalls.where((c) => c.method == 'setScreenBrightness').last.arguments, 1.0);
+    await tester.tapAt(Offset(slider.left + 12 + (slider.width - 24) * 0.125, slider.center.dy));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reader-dim-mask')), findsOneWidget);
+    expect(volumeCalls.where((c) => c.method == 'setScreenBrightness').last.arguments, 0.01);
+    await capture('extra-dim-brightness');
+    await tester.tap(find.byKey(const ValueKey('brightness-auto')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reader-dim-mask')), findsNothing);
+    expect(volumeCalls.lastWhere((c) => ['setScreenBrightness','resetScreenBrightness'].contains(c.method)).method,
+      'resetScreenBrightness');
+    expect((await AppStorage().loadSettings())['automaticBrightness'], isTrue);
+    await tester.tap(find.byKey(const ValueKey('font-fine-tune')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('font-increase')));
+    await tester.pumpAndSettle();
+    expect((await AppStorage().loadSettings())['fontSize'], 21);
+    await tester.tap(find.byKey(const ValueKey('font-decrease')));
+    await tester.pumpAndSettle();
+    expect((await AppStorage().loadSettings())['fontSize'], 20);
+    await tester.tapAt(const Offset(20, 120));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reader-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('自动翻页'));
+    await tester.pumpAndSettle();
+    expect(find.text('每 2 秒翻一页'), findsOneWidget);
+    final autoStartPage = topIndex();
+    await tester.tap(find.byKey(const ValueKey('auto-page-start')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    final guide = find.byKey(const ValueKey('auto-reading-guide'));
+    final guideTop = tester.getTopLeft(guide).dy;
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(tester.getTopLeft(guide).dy, greaterThan(guideTop));
+    await capture('auto-reading-guide');
+    await tester.pump(const Duration(milliseconds: 1400));
+    for (var frame = 0; frame < 8; frame++) { await tester.pump(const Duration(milliseconds: 60)); }
+    expect(topIndex(), greaterThan(autoStartPage));
+    await tester.tapAt(const Offset(300, 360));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('auto-page-pause')));
+    await tester.pumpAndSettle();
+    final pausedY = tester.getTopLeft(guide).dy;
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(tester.getTopLeft(guide).dy, pausedY);
+    await capture('auto-reading-paused');
+    await tester.tap(find.byKey(const ValueKey('auto-page-pause')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tapAt(const Offset(300, 360));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('auto-page-stop')));
+    await tester.pumpAndSettle();
+    expect(guide, findsNothing);
+    await tester.tap(find.byKey(const ValueKey('reader-menu')));
+    await tester.pumpAndSettle();
     await tester.tapAt(const Offset(20, 400));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('night-mode')));
@@ -170,6 +246,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(Theme.of(tester.element(find.byType(Slider).last)).brightness, Brightness.dark);
     await capture('reader-settings-night');
+    expect(tester.widget<DropdownButton<String>>(find.byType(DropdownButton<String>)).value, 'zh-CN-XiaoxiaoNeural');
     await tester.tapAt(const Offset(20, 120));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu')));

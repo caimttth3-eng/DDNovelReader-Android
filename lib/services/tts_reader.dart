@@ -15,6 +15,7 @@ enum TtsState { idle, playing, paused, stopped }
 /// 音频获取优先级：内存预取 → 磁盘缓存（TtsCacheStore）→ 在线合成（并异步落盘）。
 /// 缓存坐标 = (章节索引, 章内 tts 字符偏移)，与 BookCacheTask 共用，命中零网络。
 class TtsReader {
+  static const defaultVoice = 'zh-CN-XiaoxiaoNeural';
   final AudioPlayer _player = AudioPlayer();
   final List<String> _sentences = [];
   int _index = -1;
@@ -27,7 +28,7 @@ class TtsReader {
   bool _prefetching = false;
   int _prefetchCompletes = 0; // 连续合成失败计数（用于判定离线）
 
-  String _voice = 'zh-CN-XiaoxiaoNeural';
+  String _voice = defaultVoice;
   double _speechRate = 0.5;
 
   // 磁盘缓存：坐标 (章节索引, 章内 tts 偏移)

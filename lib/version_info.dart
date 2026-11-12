@@ -6,12 +6,13 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.2.5';
-  static const String build = '10';
+  static const String version = '1.2.6';
+  static const String build = '11';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.2.6：默认跟随系统亮度，增加四分之一分界点、遮罩调暗及 A 重置；T± 字号微调；真正的水平翻页动画；修复章节按钮；增加带时间指示横线的自动翻页，明确显示音源，修复在线语音缓存的深色样式。',
     'v1.2.5：阅读横向翻页、边缘目录手柄、截图样式图标菜单、全局夜间配色、横竖屏切换；修复上下栏弹跳、亮度上限及章节按钮。',
     'v1.2.4：音量键恢复系统音量；朗读模式上滑上一句、下滑下一句、左右翻页；参考截图调整书架、阅读页和目录配色排版。',
     'v1.2.3：新增全书语音缓存增强与新版本推送。'

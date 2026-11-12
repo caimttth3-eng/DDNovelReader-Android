@@ -108,7 +108,9 @@ class AppStorage {
 
 /// 阅读偏好（含默认值）
 class ReadingSettings {
-  double brightness = 1.0;
+  double brightness = 0.25;
+  bool automaticBrightness = true;
+  int autoPageSeconds = 20;
   double fontSize = 20.0;
   double lineHeight = 1.6;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
@@ -119,6 +121,9 @@ class ReadingSettings {
 
   Map<String, dynamic> toJson() => {
         'brightness': brightness,
+        'brightnessControlVersion': 2,
+        'automaticBrightness': automaticBrightness,
+        'autoPageSeconds': autoPageSeconds,
         'fontSize': fontSize,
         'lineHeight': lineHeight,
         'speechRate': speechRate,
@@ -131,7 +136,12 @@ class ReadingSettings {
   static ReadingSettings fromJson(Map<String, dynamic>? json) {
     final s = ReadingSettings();
     if (json == null) return s;
-    s.brightness = (json['brightness'] as num?)?.toDouble() ?? s.brightness;
+    // Old versions defaulted to full brightness. Migrate them to system control.
+    if (json['brightnessControlVersion'] == 2) {
+      s.brightness = ((json['brightness'] as num?)?.toDouble() ?? 0.25).clamp(0, 1);
+      s.automaticBrightness = json['automaticBrightness'] as bool? ?? true;
+    }
+    s.autoPageSeconds = ((json['autoPageSeconds'] as num?)?.toInt() ?? 20).clamp(1, 120);
     s.fontSize = (json['fontSize'] as num?)?.toDouble() ?? s.fontSize;
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
     s.speechRate = (json['speechRate'] as num?)?.toDouble() ?? s.speechRate;

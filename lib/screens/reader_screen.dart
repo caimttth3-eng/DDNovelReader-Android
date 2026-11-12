@@ -10,6 +10,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../i18n.dart';
 import '../services/app_appearance.dart';
 import '../widgets/reader_icon.dart';
+import '../widgets/reader_brightness_control.dart';
 import '../widgets/reader_gestures.dart';
 import '../models/annotation.dart';
 import '../models/book.dart';
@@ -97,12 +98,20 @@ class _Item {
         title = '';
 }
 
-class _ReaderScreenState extends State<ReaderScreen> {
+class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   late final TtsReader _tts;
   late final List<_Item> _items;
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ScrollOffsetController _pageScrollController = ScrollOffsetController();
   bool _paging = false;
+  late final AnimationController _pageAnimation;
+  late final AnimationController _autoClock;
+  Widget? _outgoingPage;
+  bool _pageReady = false;
+  int _pageDirection = 1;
+  bool _autoActive = false;
+  bool _autoPaused = false;
+  bool _showAutoPanel = false;
   final ItemPositionsListener _itemPositionsListener =
       ItemPositionsListener.create();
 
@@ -184,6 +193,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _pageAnimation = AnimationController(vsync: this, duration: const Duration(milliseconds: 240));
+    _autoClock = AnimationController(vsync: this, duration: const Duration(seconds: 20))
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed && _autoActive && !_autoPaused) _advanceAutoPage();
+      });
     _tts = TtsReader();
     _tts.onSentenceChanged = _onTtsSentenceChanged;
     _tts.onCompleted = _onTtsCompleted;
@@ -252,6 +267,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pageAnimation.dispose(); _autoClock.dispose();
     _saveDebounce?.cancel();
     // 退出前确保最后一次进度写入（防抖可能未触发）
     _saveProgress();
@@ -325,6 +342,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _settings = ReadingSettings.fromJson(raw);
     AppAppearance.nightMode.value = _isNight;
     _applyReaderBrightness();
+    if (_settings.automaticBrightness) _syncSystemBrightness();
     _applySystemUi();
     await _tts.setSpeechRate(_settings.speechRate);
     if (_settings.voice.isNotEmpty) _tts.setVoice(_settings.voice);
@@ -856,32 +874,68 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   void _pageDown() => _turnPage(1);
 
-  Future<void> _turnPage(int direction) async {
-    if (_ttsLoading || _paging || _items.isEmpty) return;
-    if (!_itemScrollController.isAttached) return;
-    _paging = true;
-    _pendingScrollIndex = null;
+  Future<bool> _turnPage(int direction, {bool automatic = false}) async {
+    if (_ttsLoading || _paging || _items.isEmpty || !_itemScrollController.isAttached) return false;
+    final old = _visibleItems();
+    if (old.isEmpty) return false;
+    if (!automatic && _autoActive) _autoClock.stop();
+    setState(() {
+      _paging = true; _pendingScrollIndex = null;
+      _pageDirection = direction; _pageReady = false;
+      _outgoingPage = _buildBody(snapshot: (old.first.index, old.first.itemLeadingEdge));
+    });
+    var moved = false;
     try {
-      // Move a viewport, including within sentences taller than the screen.
-      final height = MediaQuery.of(context).size.height - _chapterTopArea() - _readerInsets.bottom - 32;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return false;
+      final height = MediaQuery.sizeOf(context).height - _chapterTopArea() - _readerInsets.bottom - 32;
+      // This positional update is hidden behind the old page; only the horizontal
+      // animation below is visible to the reader.
       await _pageScrollController.animateScroll(
         offset: direction * max(1.0, height - _fontSize * _lineHeight),
-        duration: const Duration(milliseconds: 180), curve: Curves.easeOut,
+        duration: const Duration(milliseconds: 1),
       );
-      if (!mounted) return;
-      final visible = _itemPositionsListener.itemPositions.value
-        .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1)
-        .toList()
-      ..sort((a, b) => a.index.compareTo(b.index));
-      if (visible.isEmpty) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return false;
+      final visible = _visibleItems();
+      if (visible.isEmpty) return false;
+      moved = visible.first.index != old.first.index ||
+          (visible.first.itemLeadingEdge - old.first.itemLeadingEdge).abs() > 0.002;
+      if (!moved) return false;
       var target = visible.first.index;
       while (target < _items.length - 1 && _items[target].isTitle) { target++; }
       _updatePositionFromItem(target);
-      if (_inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
+      _pageAnimation.value = 0;
+      setState(() => _pageReady = true);
+      await _pageAnimation.forward().orCancel;
+      if (mounted && _inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
+      return true;
+    } on TickerCanceled {
+      return false;
     } finally {
-      _paging = false;
+      if (mounted) {
+        setState(() { _outgoingPage = null; _pageReady = false; _paging = false; });
+        if (!automatic && _autoActive && !_autoPaused) _autoClock.forward(from: 0);
+      }
     }
   }
+
+  List<ItemPosition> _visibleItems() => _itemPositionsListener.itemPositions.value
+      .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1).toList()
+        ..sort((a,b) => a.index.compareTo(b.index));
+
+  Widget _buildPageCanvas() => AnimatedBuilder(animation: _pageAnimation,
+    child: _buildTapZones(child: _buildBody()),
+    builder: (context, child) {
+      final v = _pageReady ? Curves.easeInOut.transform(_pageAnimation.value) : 0.0;
+      return ClipRect(child: IgnorePointer(ignoring: _paging, child: Stack(fit: StackFit.expand, children: [
+        FractionalTranslation(key: const ValueKey('page-incoming-transform'),
+          translation: Offset(_pageReady ? _pageDirection * (1-v) : 0, 0), child: child),
+        if (_outgoingPage != null) FractionalTranslation(key: const ValueKey('page-outgoing-transform'),
+          translation: Offset(-_pageDirection * v, 0),
+          child: ColoredBox(color: _theme.bg, child: _outgoingPage!)),
+      ])));
+    });
 
   // Skip chapter headings and empty sentences, including at chapter boundaries.
   void _moveSentence(int direction) {
@@ -934,7 +988,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // 拖动 seek 期间由拖动逻辑控制位置。
     // TTS 朗读期间位置由 TTS 句子主导（_onTtsSentenceChanged），
     // 禁止 onScroll 覆盖，否则高亮会错位到视口顶部 item。
-    if (_suppressScrollTrack || _paging || _isPlaying) return;
+    if (_pendingScrollIndex != null || _suppressScrollTrack || _paging || _isPlaying) return;
     if (_scrollThrottle) return;
     _scrollThrottle = true;
     Timer(const Duration(milliseconds: 60), () => _scrollThrottle = false);
@@ -1003,7 +1057,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   /// 当前朗读音色（空=默认），与缓存目录的 voice 段保持一致
   String get _effectiveVoice =>
-      _settings.voice.isEmpty ? 'zh-CN-XiaoxiaoNeural' : _settings.voice;
+      _settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice;
 
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
   TtsCacheStore _currentCacheStore() =>
@@ -1067,6 +1121,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// 进入朗读模式：全屏隐藏UI，开始TTS播放
   Future<void> _play() async {
     if (_inReadingMode) return;
+    if (_autoActive) _stopAutoPage();
     final vp = _captureViewport();
     final delta = _chapterBarTop(); // 进入朗读后顶栏偏移归 0
     // 朗读起点 = 视口当前显示的位置（进度 = 滑到哪读到哪）
@@ -1216,7 +1271,139 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _applyReaderBrightness() {
-    _volumeChannel.invokeMethod('setScreenBrightness', _settings.brightness.clamp(0.01, 1.0));
+    if (_settings.automaticBrightness) {
+      _volumeChannel.invokeMethod('resetScreenBrightness');
+    } else {
+      final value = ((_settings.brightness - ReaderBrightnessControl.split) /
+          (1 - ReaderBrightnessControl.split)).clamp(0.0, 1.0);
+      _volumeChannel.invokeMethod('setScreenBrightness', max(0.01, value));
+    }
+  }
+
+  Future<void> _syncSystemBrightness() async {
+    try {
+      final value = await _volumeChannel.invokeMethod<double>('getSystemBrightness');
+      if (!mounted || !_settings.automaticBrightness) return;
+      if (value != null) setState(() => _settings.brightness = ReaderBrightnessControl.split +
+          value.clamp(0.0, 1.0) * (1 - ReaderBrightnessControl.split));
+      await widget.storage.saveSettings(_settings.toJson());
+    } catch (_) {}
+  }
+
+  void _setBrightness(double value) {
+    setState(() { _settings.brightness = value; _settings.automaticBrightness = false; });
+    _applyReaderBrightness(); widget.storage.saveSettings(_settings.toJson());
+  }
+
+  void _resetBrightness() {
+    setState(() => _settings.automaticBrightness = true);
+    _applyReaderBrightness(); widget.storage.saveSettings(_settings.toJson());
+    _syncSystemBrightness();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed && _autoActive && !_autoPaused) _pauseAutoPage();
+  }
+
+  Future<void> _openAutoPage() async {
+    if (_autoActive) {
+      setState(() => _showAutoPanel = true);
+      return;
+    }
+    if (_inReadingMode) await _exitReadingMode();
+    if (!mounted) return;
+    var seconds = _settings.autoPageSeconds;
+    final selected = await showDialog<int>(context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, update) => AlertDialog(
+        title: Text(T('autoPage')),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(T('autoPageInterval', {'n': '$seconds'})),
+          Slider(key: const ValueKey('auto-page-interval'), value: seconds.toDouble(),
+            min: 1, max: 120, divisions: 119,
+            onChanged: (value) => update(() => seconds = value.round())),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(T('cancel'))),
+          FilledButton(key: const ValueKey('auto-page-start'), onPressed: () => Navigator.pop(ctx, seconds),
+            child: Text(T('autoPageStart'))),
+        ],
+      )));
+    if (selected == null || !mounted) return;
+    setState(() {
+      _settings.autoPageSeconds = selected;
+      _autoActive = true; _autoPaused = false; _showAutoPanel = false;
+      _showControls = false; _showQuickMenu = false;
+    });
+    widget.storage.saveSettings(_settings.toJson());
+    _autoClock.duration = Duration(seconds: selected);
+    _autoClock.forward(from: 0);
+  }
+
+  Future<void> _advanceAutoPage() async {
+    final moved = await _turnPage(1, automatic: true);
+    if (!mounted || !_autoActive) return;
+    if (!moved) { _stopAutoPage(); return; }
+    if (!_autoPaused) _autoClock.forward(from: 0);
+  }
+
+  void _pauseAutoPage() {
+    _autoClock.stop();
+    if (mounted) setState(() { _autoPaused = true; _showAutoPanel = true; });
+  }
+
+  void _resumeAutoPage() {
+    setState(() { _autoPaused = false; _showAutoPanel = false; _showControls = false; });
+    if (_autoClock.value >= 1) { _autoClock.forward(from: 0); } else { _autoClock.forward(); }
+  }
+
+  void _stopAutoPage() {
+    _autoClock.stop(); _autoClock.value = 0;
+    if (mounted) setState(() { _autoActive = false; _autoPaused = false; _showAutoPanel = false; _showControls = true; });
+  }
+
+  Widget _buildAutoGuide() => AnimatedBuilder(animation: _autoClock, builder: (context, child) {
+    final top = _chapterTopArea();
+    final height = max(1.0, MediaQuery.sizeOf(context).height - top - _readerInsets.bottom - 32);
+    return Positioned(left: 16, right: 16, top: top + (height - 2) * _autoClock.value,
+      child: IgnorePointer(child: Container(key: const ValueKey('auto-reading-guide'), height: 1.5,
+        color: const Color(0xAA6498B5))));
+  });
+
+  Widget _buildAutoPanel() => Positioned(left: 0, right: 0, bottom: 0,
+    child: Material(color: _menuColor, child: Padding(
+      padding: EdgeInsets.fromLTRB(12, 8, 12, _readerInsets.bottom + 8),
+      child: Wrap(alignment: WrapAlignment.center, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text(T('autoPageInterval', {'n': '${_settings.autoPageSeconds}'}), style: const TextStyle(color: Colors.white70)),
+        TextButton(key: const ValueKey('auto-page-pause'), onPressed: _autoPaused ? _resumeAutoPage : _pauseAutoPage,
+          style: TextButton.styleFrom(foregroundColor: const Color(0xFF9BC5DD)),
+          child: Text(T(_autoPaused ? 'autoPageResume' : 'autoPagePause'))),
+        TextButton(key: const ValueKey('auto-page-stop'), onPressed: _stopAutoPage,
+          style: TextButton.styleFrom(foregroundColor: const Color(0xFF9BC5DD)), child: Text(T('autoPageStop'))),
+      ]),
+    )),
+  );
+
+  Widget _buildDimMask() {
+    final value = _settings.brightness;
+    if (_settings.automaticBrightness || value >= ReaderBrightnessControl.split) return const SizedBox.shrink();
+    return Positioned.fill(child: IgnorePointer(child: ColoredBox(key: const ValueKey('reader-dim-mask'),
+      color: Colors.black.withValues(alpha: (1 - value / ReaderBrightnessControl.split) * 0.85))));
+  }
+
+  Future<void> _openFontFineTune() async {
+    await showModalBottomSheet<void>(context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, update) => SafeArea(child: Padding(
+        padding: const EdgeInsets.all(16), child: Row(children: [
+          IconButton(key: const ValueKey('font-decrease'), tooltip: T('fontDecrease'),
+            icon: const Icon(Icons.remove), onPressed: () { setState(() => _settings.fontSize = max(14, _fontSize - 1));
+              update(() {}); widget.storage.saveSettings(_settings.toJson()); }),
+          Expanded(child: Text('${T('fontSize')} ${_fontSize.toStringAsFixed(0)}', textAlign: TextAlign.center)),
+          IconButton(key: const ValueKey('font-increase'), tooltip: T('fontIncrease'),
+            icon: const Icon(Icons.add), onPressed: () { setState(() => _settings.fontSize = min(32, _fontSize + 1));
+              update(() {}); widget.storage.saveSettings(_settings.toJson()); }),
+        ]),
+      ))));
   }
 
   void _setTheme(int index) {
@@ -1239,11 +1426,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _changeChapter(int direction) {
-    if (_ttsLoading) return;
+    if (_ttsLoading || _paging) return;
     final chapter = _chapter + direction;
     if (chapter < 0 || chapter >= widget.book.chapters.length) return;
     setState(() { _chapter = chapter; _para = 0; _ttsSentence = 0; });
-    _jumpToItem(_itemIndexOf(chapter, 0));
+    _jumpToItem(_itemIndexOf(chapter, 0), animate: false);
     if (_inReadingMode) _ttsFollowSeek(chapter, 0, 0);
     _scheduleSave();
   }
@@ -1608,7 +1795,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               top: _chapterBarTop() + _chapterTopArea(),
               bottom: _readerInsets.bottom + 32,
             ),
-            child: _buildTapZones(child: _buildBody()),
+            child: _buildPageCanvas(),
           ),
           // 固定章节标题：位于顶部两行半空白之后，正文滚动时保持不动
           Positioned(
@@ -1636,6 +1823,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
           if (_inReadingMode && _ttsLoading) _buildTtsLoadingOverlay(),
             // 亮度遮罩
             if (_showControls && _showQuickMenu) _buildQuickMenu(),
+            if (_autoActive) _buildAutoGuide(),
+            if (_autoActive && _showAutoPanel) _buildAutoPanel(),
+            _buildDimMask(),
             // 假锁屏（最顶层，覆盖一切；长按 2 秒解锁）
             if (_fakeLock) _buildFakeLock(),
           ],
@@ -1793,13 +1983,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildBody({(int, double)? snapshot}) {
     return ScrollablePositionedList.builder(
-      itemScrollController: _itemScrollController,
-      scrollOffsetController: _pageScrollController,
-      itemPositionsListener: _itemPositionsListener,
+      key: snapshot == null ? const ValueKey('reader-body') : const ValueKey('page-snapshot'),
+      itemScrollController: snapshot == null ? _itemScrollController : null,
+      scrollOffsetController: snapshot == null ? _pageScrollController : null,
+      itemPositionsListener: snapshot == null ? _itemPositionsListener : null,
+      initialScrollIndex: snapshot?.$1 ?? 0,
+      initialAlignment: snapshot?.$2 ?? 0,
       // Only reading mode replaces free scrolling with sentence/page gestures.
-      physics: _inReadingMode ? const NeverScrollableScrollPhysics() : null,
+      physics: snapshot != null || _inReadingMode ? const NeverScrollableScrollPhysics() : null,
       // 增大缓存区：跳转后能渲染更多 item，加速精确定位
       minCacheExtent: 1500,
       // 顶部留白由 Column 的标题栏承担；底部留 120 给进度条/朗读面板
@@ -1843,6 +2036,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
           );
         }
+        if (snapshot != null) return child;
         return _HeightReporter(
           onHeight: (h) => _recordHeight(i, h),
           child: child,
@@ -2231,7 +2425,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Colors.black45,
+              color: Theme.of(ctx).colorScheme.onSurfaceVariant,
             ),
           ),
         ));
@@ -2366,7 +2560,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                               size: 18,
                               color: st.isDone
                                   ? const Color(0xFF4C8C4A)
-                                  : Colors.black45,
+                                  : Theme.of(ctx).colorScheme.onSurfaceVariant,
                             ),
                           const SizedBox(width: 10),
                           Expanded(
@@ -2380,8 +2574,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       const SizedBox(height: 12),
                       Text(
                         T('cacheSize', {'size': fmtSize(sizeBytes)}),
-                        style: const TextStyle(
-                            fontSize: 13, color: Colors.black54),
+                        style: TextStyle(
+                            fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant),
                       ),
                       const SizedBox(height: 14),
                       Row(
@@ -2514,7 +2708,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
         onNextSentence: _nextSentence,
         onPreviousPage: _pageUp,
         onNextPage: _pageDown,
-        onTapUp: inReading
+        onTapUp: _autoActive
+            ? (_) => setState(() { _showAutoPanel = !_showAutoPanel; _showControls = _showAutoPanel; })
+            : inReading
             ? (_) {
                 if (_ttsLoading) return; // 加载中忽略点击，防误触
                 if (_isPlaying) {
@@ -2587,29 +2783,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
           child: ConstrainedBox(constraints: BoxConstraints(maxHeight: maxHeight),
             child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(8),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
+                ReaderBrightnessControl(value: _settings.brightness, automatic: _settings.automaticBrightness,
+                  sliderKey: const ValueKey('quick-brightness'), onChanged: _setBrightness, onAutomatic: _resetBrightness),
                 Row(children: [
-                  const ReaderIcon(ReaderSymbol.bulb, color: Colors.white54),
-                  Expanded(child: Slider(key: const ValueKey('quick-brightness'),
-                    value: _settings.brightness.clamp(0.01, 1.0), min: 0.01, max: 1,
-                    onChanged: (value) {
-                      setState(() => _settings.brightness = value);
-                      _applyReaderBrightness(); widget.storage.saveSettings(_settings.toJson());
-                    })),
-                  const ReaderIcon(ReaderSymbol.bulb, color: Colors.white),
-                ]),
-                Row(children: [
-                  const ReaderIcon(ReaderSymbol.smallText, color: Colors.white70),
                   Expanded(child: Slider(value: _settings.fontSize.clamp(14, 32), min: 14, max: 32, divisions: 18,
                     onChanged: (value) {
                       setState(() => _settings.fontSize = value); widget.storage.saveSettings(_settings.toJson());
                     })),
-                  const ReaderIcon(ReaderSymbol.largeText, color: Colors.white70),
+                  TextButton(key: const ValueKey('font-fine-tune'), onPressed: () {
+                    setState(() => _showQuickMenu = false); _openFontFineTune();
+                  }, style: TextButton.styleFrom(minimumSize: const Size(44, 44), padding: EdgeInsets.zero),
+                    child: const Text('T±', style: TextStyle(fontSize: 20, color: Colors.white70))),
                 ]),
                 Row(children: [
                   _quickAction(ReaderSymbol.note, T('highlight'), _openHighlights),
                   _quickAction(ReaderSymbol.search, T('searchTitle'), _openSearch),
                   _quickAction(ReaderSymbol.theme, T('pageTheme'), _openThemePanel),
-                  _quickAction(ReaderSymbol.play, T('read'), _play),
+                  _quickAction(ReaderSymbol.play, T('autoPage'), _openAutoPage),
                 ]),
                 Row(children: [
                   const Expanded(child: SizedBox()),
@@ -2807,6 +2997,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       builder: (ctx) => _SettingsSheet(
         settings: _settings,
         onCache: _openBookCache,
+        onFontTune: _openFontFineTune,
         onChanged: (s) {
           setState(() => _settings = s);
           _tts.setSpeechRate(s.speechRate);
@@ -2909,11 +3100,13 @@ class _ChapterSheetState extends State<_ChapterSheet> {
 class _SettingsSheet extends StatefulWidget {
   final ReadingSettings settings;
   final VoidCallback onCache;
+  final VoidCallback onFontTune;
   final ValueChanged<ReadingSettings> onChanged;
   final Future<List<dynamic>> Function() onVoiceLoad;
   const _SettingsSheet({
     required this.settings,
     required this.onCache,
+    required this.onFontTune,
     required this.onChanged,
     required this.onVoiceLoad,
   });
@@ -3070,26 +3263,23 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ListTile(leading: const Icon(Icons.storage_outlined), title: Text(T('cacheBook')),
                 onTap: () { Navigator.pop(context); widget.onCache(); }),
               // 亮度
-              _row(T('brightness'), Icons.brightness_6, Slider(
-                value: _s.brightness.clamp(0.01, 1.0),
-                min: 0.01,
-                max: 1.0,
-                onChanged: (v) => setState(() {
-                  _s.brightness = v;
-                  _update();
+              ReaderBrightnessControl(value: _s.brightness, automatic: _s.automaticBrightness,
+                onChanged: (value) => setState(() { _s.brightness = value; _s.automaticBrightness = false; _update(); }),
+                onAutomatic: () async {
+                  setState(() => _s.automaticBrightness = true); _update();
+                  final value = await _ReaderScreenState._volumeChannel.invokeMethod<double>('getSystemBrightness');
+                  if (mounted && _s.automaticBrightness && value != null) {
+                    setState(() => _s.brightness = ReaderBrightnessControl.split + value.clamp(0.0, 1.0) * (1 - ReaderBrightnessControl.split));
+                    _update();
+                  }
                 }),
-              )),
               // 字体大小
-              _row(T('fontSize'), Icons.text_fields, Slider(
-                value: _s.fontSize,
-                min: 14,
-                max: 32,
-                divisions: 18,
-                onChanged: (v) => setState(() {
-                  _s.fontSize = v;
-                  _update();
-                }),
-              )),
+              Row(children: [
+                Expanded(child: Slider(value: _s.fontSize.clamp(14, 32), min: 14, max: 32, divisions: 18,
+                  onChanged: (value) => setState(() { _s.fontSize = value; _update(); }))),
+                TextButton(onPressed: () { Navigator.pop(context); widget.onFontTune(); },
+                  child: const Text('T±', style: TextStyle(fontSize: 20))),
+              ]),
               // 字体更换
               InkWell(
                 onTap: _openFontPicker,
@@ -3149,7 +3339,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   Expanded(
                     child: _voicesLoaded && _voices.isNotEmpty
                         ? DropdownButton<String>(
-                            value: _s.voice.isEmpty ? null : _s.voice,
+                            value: _s.voice.isEmpty ? TtsReader.defaultVoice : _s.voice,
                             isExpanded: true,
                             hint: Text(T('default')),
                             items: _voices.map((v) {
