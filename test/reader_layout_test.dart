@@ -15,6 +15,7 @@ import 'package:duoduo_langdu/screens/shelf_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
+import 'package:duoduo_langdu/services/tts_audio_handler.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
 import 'package:duoduo_langdu/services/annotation_store.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -680,6 +681,131 @@ void main() {
     });
   }
 
+  testWidgets('paused cursor survives layout drift and foreground return never restarts speech', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..fontSize = 20..mergeNonSentenceBreaks = false..firstLineIndent = false).toJson());
+    String sentence(int p, int s) => (s == 0 ? '第${p}段第一句' : '第${p}段第二句') +
+      List.filled(7, s == 0 ? '清晨山间的风吹过树林，' : '远方朋友带来温暖的问候，').join() + '。';
+    final book = Book(id: 'speech-lock-position', title: '锁屏进度', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: List.generate(12, (p) => Paragraph(
+        display: sentence(p, 0) + sentence(p, 1), tts: '', sentences: const [], sentenceStartTts: const [])))]);
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    void emit(int idx) { speech.emitSentence(idx); speech.onWordChanged?.call(0, 2); }
+    void assertCursor(int idx) {
+      final blue = <String>[], yellow = <String>[];
+      String? paragraph;
+      void visit(Text text, InlineSpan span) {
+        if (span is! TextSpan) return;
+        final content = span.toPlainText().replaceAll('\u200B', '');
+        if (span.style?.backgroundColor == const Color(0xFF9BC5DD)) {
+          blue.add(content); paragraph = text.textSpan!.toPlainText().replaceAll('\u200B', '');
+        }
+        if (span.style?.backgroundColor == const Color(0x44FFC107)) yellow.add(content);
+        for (final child in span.children ?? <InlineSpan>[]) { visit(text, child); }
+      }
+      for (final text in tester.widgetList<Text>(find.byType(Text))) {
+        if (text.textSpan != null) visit(text, text.textSpan!);
+      }
+      final expected = sentence(idx ~/ 2, idx % 2);
+      expect(blue, [expected.substring(0, 2)]);
+      expect(yellow.join(), expected.substring(2));
+      expect(paragraph, contains(expected));
+    }
+    emit(5); await tester.pumpAndSettle(); assertCursor(5);
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused);
+    // Simulate position notifications caused by showing controls or relayout,
+    // rather than an explicit sentence/page navigation action.
+    final list = tester.widget<ScrollablePositionedList>(find.byKey(const ValueKey('reader-body')));
+    final drift = list.scrollOffsetController!.animateScroll(offset: -40, duration: const Duration(milliseconds: 1));
+    await tester.pumpAndSettle(); await drift;
+    assertCursor(5);
+    await tester.pump(const Duration(milliseconds: 500));
+    expect((await storage.loadProgress(book.id))!.offsetInParagraph, sentence(2, 0).length,
+      reason: 'Saving while paused must preserve the speech sentence, not the viewport first line');
+    final starts = speech.startCalls, resumes = speech.resumeCalls;
+    expect(find.text('锁屏'), findsNothing, reason: 'Playback controls use the system lock screen');
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    expect(speech.startCalls, starts); expect(speech.resumeCalls, resumes + 1);
+    assertCursor(5);
+    emit(7); await tester.pumpAndSettle();
+    emit(8); await tester.pumpAndSettle();
+    expect(speech.currentIndex, 8); assertCursor(8);
+    expect(speech.state, TtsState.playing);
+    expect(speech.startCalls, starts); expect(speech.resumeCalls, resumes + 1,
+      reason: 'Sentence callbacks must follow the existing stream without restarting');
+    // System background/foreground changes also never issue audio commands.
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.paused); emit(10); emit(11);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+    expect(speech.currentIndex, 11); assertCursor(11);
+    expect(speech.startCalls, starts); expect(speech.resumeCalls, resumes + 1);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('word highlight after a silent dash maps to its own display segment', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..firstLineIndent = false).toJson());
+    final book = Book(id: 'dash-word-offset', title: '破折号光标', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: const [Chapter(title: '第一章', paragraphs: [Paragraph(
+        display: '你好——世界', tts: '', sentences: [], sentenceStartTts: [])])]);
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    expect(speech.lastSentences, ['你好', '世界']);
+    expect(speech.lastPauses, [300, 0]);
+    speech.emitSentence(1); speech.onWordChanged?.call(0, 2); await tester.pumpAndSettle();
+    final paragraph = tester.widget<Text>(find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify &&
+      (w.textSpan?.toPlainText().replaceAll('\u200B', '') == '你好——世界')));
+    final words = <String>[];
+    void visit(InlineSpan span) {
+      if (span is! TextSpan) return;
+      if (span.style?.backgroundColor == const Color(0xFF9BC5DD)) words.add(span.toPlainText().replaceAll('\u200B', ''));
+      for (final child in span.children ?? <InlineSpan>[]) { visit(child); }
+    }
+    visit(paragraph.textSpan!);
+    expect(words, ['世界'], reason: 'Skipped speech dashes must not shift the word cursor to the dash');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('media stop cancels a pending screen resume without restoring playback UI', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final handler = TtsAudioHandler(), previousHandler = globalAudioHandler;
+    globalAudioHandler = handler;
+    addTearDown(() { globalAudioHandler = previousHandler; });
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('stop-during-resume'),
+      storage: AppStorage(), ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused);
+    final pending = Completer<bool>(); speech.resumeResult = pending;
+    final resume = handler.play(); await tester.pump();
+    expect(speech.resumeCalls, 1);
+    await handler.stop(); await tester.pumpAndSettle();
+    expect(handler.playbackState.value.playing, isFalse);
+    pending.complete(true); await resume; await tester.pumpAndSettle();
+    expect(handler.playbackState.value.playing, isFalse,
+      reason: 'Late resume completion must not overwrite the explicit stop state');
+    expect(find.byTooltip('朗读'), findsOneWidget);
+    expect(find.byKey(const ValueKey('reading-volume-slider')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    await handler.playbackState.close(); await handler.mediaItem.close();
+  });
+
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
@@ -880,17 +1006,29 @@ class _TestSpeech extends TtsReader {
   Duration delay = Duration.zero;
   TtsState _status = TtsState.idle;
   int startedAt = -1;
+  int startCalls = 0, resumeCalls = 0, _sentenceIndex = -1;
+  List<String> lastSentences = const [];
+  List<int>? lastPauses;
+  Completer<bool>? resumeResult;
+  void emitSentence(int idx) { _sentenceIndex = idx; onSentenceChanged?.call(idx); }
+  @override
+  int get currentIndex => _sentenceIndex;
   @override
   TtsState get state => _status;
   @override
-  Future<void> start(List<String> sentences, {List<int>? offsets, int chapterIndex = 0, int from = 0}) async {
-    startedAt = from; _status = TtsState.playing; onSentenceChanged?.call(from);
+  Future<void> start(List<String> sentences, {List<int>? offsets, List<int>? pauseAfterMilliseconds,
+    int chapterIndex = 0, int from = 0}) async {
+    lastSentences = List.of(sentences); lastPauses = pauseAfterMilliseconds == null ? null : List.of(pauseAfterMilliseconds);
+    startCalls++; startedAt = from; _status = TtsState.playing; emitSentence(from);
     if (delay > Duration.zero) await Future<void>.delayed(delay);
   }
   @override
   Future<void> pause() async { _status = TtsState.paused; }
   @override
-  Future<bool> resume() async { _status = TtsState.playing; return true; }
+  Future<bool> resume() async {
+    resumeCalls++; _status = TtsState.playing; onSentenceChanged?.call(_sentenceIndex);
+    return resumeResult == null ? true : await resumeResult!.future;
+  }
   @override
   Future<void> stop() async { _status = TtsState.stopped; }
 }

@@ -189,8 +189,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   CleanedText? _wordMap;
   bool _followingWord = false;
   bool _isPlaying = false;
+  int _playbackGeneration = 0;
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
   int _ttsChapter = 0;
+  int? _mediaChapter;
   // TTS 合成加载中（点击播放/恢复后等待首句出声；期间防误触）
   bool _ttsLoading = false;
 
@@ -201,12 +203,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   bool _volumeDragging = false;
   bool _volumeForeground = true;
   int _volumeRevision = 0, _volumePollEpoch = 0, _volumeWrites = 0;
-  bool get _volumePanelVisible => _inReadingMode && _showReadingPanel && !_fakeLock && _volumeForeground;
-
-  // 假锁屏（保持 app 前台，蓝牙耳机键可控；长按 2 秒解锁）
-  bool _fakeLock = false;
-  Timer? _lockTimer;
-  bool _lockPressing = false;
+  bool get _volumePanelVisible => _inReadingMode && _showReadingPanel && _volumeForeground;
 
   // 跳转逼近计数（防震荡死循环）
   int _approaches = 0;
@@ -263,7 +260,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     globalAudioHandler?.onPlayRequested = _onHeadsetPlay;
     globalAudioHandler?.onPauseRequested = _onHeadsetPause;
     globalAudioHandler?.onStopRequested = _onHeadsetStop;
-    globalAudioHandler?.onCustomResumeRequested = _onCustomResume;
+    globalAudioHandler?.onPreviousRequested = () async { _prevSentence(); };
+    globalAudioHandler?.onNextRequested = () async { _nextSentence(); };
     _loadSettings();
     // 记录最后阅读的书籍，下次启动直接恢复
     widget.storage.saveLastBookId(_book.id);
@@ -276,45 +274,37 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   static const _volumeChannel =
       MethodChannel('com.ddnovelreader/volume_keys');
 
-  /// 耳机播放键：未进入→开始，播放中→暂停，暂停中→恢复
-  void _onHeadsetPlay() {
+  /// A MediaSession play request is idempotent; pause has its own callback.
+  Future<void> _onHeadsetPlay() async {
     print('SCREEN onHeadsetPlay ttsState=${_tts.state} reading=$_inReadingMode loading=$_ttsLoading');
     _debugLog('SCREEN onHeadsetPlay state=${_tts.state} reading=$_inReadingMode');
     if (!mounted) return;
     if (!_inReadingMode) {
-      _play();
+      await _play();
     } else if (_tts.state == TtsState.playing) {
-      _pauseReading();
+      globalAudioHandler?.notifyPlaying();
     } else {
       // paused / stopped / idle 一律尝试恢复（_resumeReading 内部处理）
-      _resumeReading();
+      await _resumeReading();
     }
   }
 
-  /// 自定义"继续播放"按钮（通知栏），绕开系统 play 路由问题
-  void _onCustomResume() {
-    _debugLog('SCREEN onCustomResume state=${_tts.state}');
-    if (!mounted) return;
-    if (_tts.state == TtsState.playing) return;
-    _resumeReading();
-  }
-
-  void _onHeadsetPause() {
+  Future<void> _onHeadsetPause() async {
     print('SCREEN onHeadsetPause ttsState=${_tts.state}');
     _debugLog('SCREEN onHeadsetPause state=${_tts.state}');
     if (!mounted) return;
     if (_tts.state == TtsState.playing) {
-      _pauseReading();
-    } else {
-      // 状态已非播放但 MediaSession 可能仍显示暂停按钮：
-      // 同步状态，避免用户点"暂停"（实际想继续）时按钮图标错乱无反应
+      await _pauseReading();
+    } else if (_tts.state == TtsState.paused) {
       globalAudioHandler?.notifyPaused();
+    } else {
+      globalAudioHandler?.notifyStopped();
     }
   }
 
-  void _onHeadsetStop() {
+  Future<void> _onHeadsetStop() async {
     if (!mounted) return;
-    _exitReadingMode();
+    await _exitReadingMode();
   }
 
   @override
@@ -332,7 +322,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     // 退出前确保最后一次进度写入（防抖可能未触发）
     _saveProgress();
     _sleepTimer?.cancel();
-    _lockTimer?.cancel();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     _volumeChannel.invokeMethod('resetScreenBrightness');
     // 恢复系统默认系统栏样式（书架页浅色背景使用深色图标）
@@ -350,8 +339,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     globalAudioHandler?.onPlayRequested = null;
     globalAudioHandler?.onPauseRequested = null;
     globalAudioHandler?.onStopRequested = null;
-    globalAudioHandler?.onCustomResumeRequested = null;
-    globalAudioHandler?.stop();
+    globalAudioHandler?.onPreviousRequested = null;
+    globalAudioHandler?.onNextRequested = null;
+    globalAudioHandler?.notifyStopped();
     super.dispose();
   }
   // ---------- 数据 ----------
@@ -456,10 +446,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final visible = mounted ? _visibleItems() : <ItemPosition>[];
     final first = visible.isEmpty ? null : visible.first;
     final it = first == null ? null : _items[first.index];
-    final c = _isPlaying ? _chapter : it?.chapterIndex ?? _chapter;
-    final paraIndex = _isPlaying ? _para : it == null || it.isTitle ? 0 : it.paragraphIndex;
+    final c = _inReadingMode ? _chapter : it?.chapterIndex ?? _chapter;
+    final paraIndex = _inReadingMode ? _para : it == null || it.isTitle ? 0 : it.paragraphIndex;
     final para = _book.chapters[c].paragraphs[paraIndex];
-    final offset = _isPlaying && _ttsSentence >= 0 && _ttsSentence < para.sentences.length
+    final offset = _inReadingMode && _ttsSentence >= 0 && _ttsSentence < para.sentences.length
       ? para.sentences[_ttsSentence].displayStart : first != null && !(it?.isTitle ?? true)
         ? _visibleOffset(first) : 0;
     final p = BookProgress(bookId: _book.id, chapterIndex: c, paragraphIndex: paraIndex,
@@ -1227,7 +1217,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     // 拖动 seek 期间由拖动逻辑控制位置。
     // TTS 朗读期间位置由 TTS 句子主导（_onTtsSentenceChanged），
     // 禁止 onScroll 覆盖，否则高亮会错位到视口顶部 item。
-    if (_pendingScrollIndex != null || _suppressScrollTrack || _paging || _isPlaying) return;
+    if (_pendingScrollIndex != null || _suppressScrollTrack || _paging || _inReadingMode) return;
     if (_restoringProgress || _restoringViewport) return;
     _scheduleSave();
     if (_scrollThrottle) return;
@@ -1358,6 +1348,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 进入朗读模式：全屏隐藏UI，开始TTS播放
   Future<void> _play() async {
     if (_inReadingMode) return;
+    final generation = ++_playbackGeneration;
     if (_autoActive) _stopAutoPage();
     _clearTtsPageBoundary();
     // 朗读起点 = 视口当前显示的位置（进度 = 滑到哪读到哪）
@@ -1382,6 +1373,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     // 从视口当前句子开始朗读（合成首句期间显示 loading）
     _startTtsLoading();
     await _startTtsFrom(startC, startP, startS);
+    if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
     _stopTtsLoading();
   }
 
@@ -1399,29 +1391,34 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _pauseReading() async {
     if (_ttsLoading) return; // 加载中忽略暂停，防误触
     if (_tts.state != TtsState.playing) return;
+    final generation = _playbackGeneration;
     await _tts.pause();
+    if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
     await _loadMediaVolume();
+    if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
     globalAudioHandler?.notifyPaused();
-    if (!mounted) return;
     setState(() {
       _isPlaying = false;
       _showReadingPanel = true;
     });
+    _scheduleSave();
   }
 
   /// 从暂停恢复播放，隐藏底部面板
   /// - 暂停中滑动跨章：重新加载目标章，从当前句开始播放
-  /// - 同章恢复：TtsReader 直接重播当前句；彻底失败时 onError 已触发退出
+  /// - 同章恢复：TtsReader 恢复暂停处；彻底失败时 onError 已触发退出
   Future<void> _resumeReading() async {
     print('SCREEN resumeReading state=${_tts.state} loading=$_ttsLoading');
     _debugLog('SCREEN resumeReading state=${_tts.state}');
     if (_ttsLoading) return; // 加载中忽略恢复，防误触
+    final generation = _playbackGeneration;
     if (_tts.state != TtsState.paused) {
       // 状态丢失（stopped/idle，如章节播完/曾失败）：从当前阅读位置重新加载
       if (_tts.state == TtsState.stopped || _tts.state == TtsState.idle) {
         _startTtsLoading();
         await _startTtsFrom(
             _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+        if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
         _stopTtsLoading();
         globalAudioHandler?.notifyPlaying();
         if (!mounted) return;
@@ -1433,10 +1430,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       return;
     }
     _startTtsLoading();
+    // Protect the speech cursor before resume can synchronously emit sentence,
+    // word or scroll callbacks, including resume through the in-app lock.
+    setState(() { _isPlaying = true; _showReadingPanel = false; });
     if (_ttsChapter != _chapter) {
       // 暂停期间滑到了其他章节：TtsReader 内部仍是旧章句子，需重新加载
       await _startTtsFrom(
           _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+      if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
       _stopTtsLoading();
       globalAudioHandler?.notifyPlaying();
       if (!mounted) return;
@@ -1447,10 +1448,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       return;
     }
     final ok = await _tts.resume();
+    if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
     _stopTtsLoading();
     if (!ok || !mounted) {
       // 失败且未触发退出：同步 MediaSession 为停止，避免假 playing 状态
       globalAudioHandler?.notifyStopped();
+      if (mounted && _inReadingMode) setState(() { _isPlaying = false; _showReadingPanel = true; });
       return;
     }
     globalAudioHandler?.notifyPlaying();
@@ -1462,6 +1465,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 彻底退出朗读模式：停止TTS，恢复正常阅读页UI
   Future<void> _exitReadingMode() async {
+    final generation = ++_playbackGeneration;
     _sleepTimer?.cancel();
     _sleepTimer = null;
     _sleepMinutes = 0;
@@ -1469,10 +1473,17 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _gestureTipTimer = null;
     _gestureTipVisible = false;
     _ttsLoading = false;
-    await _tts.stop();
+    _saveDebounce?.cancel(); _saveProgress();
+    if (mounted) setState(() {
+      _inReadingMode = false;
+      _showControls = true;
+      _isPlaying = false;
+      _showReadingPanel = false;
+    });
     globalAudioHandler?.notifyStopped();
     _exitFullscreen();
-    if (!mounted) return;
+    await _tts.stop();
+    if (!mounted || generation != _playbackGeneration) return;
     setState(() {
       _inReadingMode = false;
       _showControls = true;
@@ -1538,6 +1549,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (state != AppLifecycleState.resumed) {
       _saveDebounce?.cancel(); _saveProgress();
       if (_autoActive && !_autoPaused) _pauseAutoPage();
+    } else if (_inReadingMode && _tts.state == TtsState.playing) {
+      // Audio keeps playing in the background. Only refresh its cursor; never
+      // restart audio or restore the viewport's older reading position.
+      if (!_isPlaying || _showReadingPanel) setState(() { _isPlaying = true; _showReadingPanel = false; });
+      _onTtsSentenceChanged(_tts.currentIndex);
     }
   }
 
@@ -1688,6 +1704,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 不变，恢复播放时由 _resumeReading 检测到不一致而重新加载
   void _ttsFollowSeek(int c, int p, int s) {
     if (c < 0 || c >= _book.chapters.length) return;
+    _updateMediaChapter(c);
     if (_tts.state == TtsState.paused || !_isPlaying) {
       if (c == _ttsChapter) {
         _tts.jumpTo(_chapterSentenceStart(c, p) + s); // 同章：更新待播索引
@@ -1741,6 +1758,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         _showReadingPanel = false;
       }
     });
+    _updateMediaChapter(c);
     if (_inReadingMode) globalAudioHandler?.notifyPlaying();
     _followSentence(c, p, s);
     _scheduleSave();
@@ -1748,13 +1766,22 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     await _tts.start(
       sentences,
       offsets: chapterTtsSentenceOffsets(_book.chapters[c]),
+      pauseAfterMilliseconds: [for (final para in _book.chapters[c].paragraphs)
+        for (final sentence in para.sentences) sentence.pauseAfterMilliseconds],
       chapterIndex: c,
       from: from,
     );
   }
 
+  void _updateMediaChapter(int chapter) {
+    if (_mediaChapter == chapter || chapter < 0 || chapter >= _book.chapters.length) return;
+    _mediaChapter = chapter;
+    globalAudioHandler?.updateBookChapter(bookId: _book.id, bookTitle: _book.title,
+      chapterTitle: _book.chapters[chapter].title, chapterIndex: chapter);
+  }
+
   void _onTtsSentenceChanged(int idx) {
-    if (!mounted) return;
+    if (!mounted || !_inReadingMode) return;
     if (idx < 0) return;
     if (_paging) {
       _pendingTtsSentence = (_ttsChapter, idx);
@@ -1779,6 +1806,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       remain -= n;
     }
     if (!found) return;
+    _updateMediaChapter(c);
     final changed = (_chapter != c || _para != p || _ttsSentence != s);
     if (changed) {
       setState(() {
@@ -1806,12 +1834,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       return;
     }
     final para = _book.chapters[_chapter].paragraphs[_para];
-    if (_ttsSentence < 0 || _ttsSentence >= para.sentenceStartTts.length) return;
-    final key = '$_textSignature/$_chapter/$_para';
-    if (_wordMapKey != key) { _wordMapKey = key; _wordMap = const TextCleaner().clean(para.display); }
-    final base = para.sentenceStartTts[_ttsSentence];
-    var left = _wordMap!.displayOffsetOfTts(base + start).clamp(0, para.display.length);
-    final right = _wordMap!.displayOffsetOfTts(base + end).clamp(left, para.display.length);
+    if (_ttsSentence < 0 || _ttsSentence >= para.sentences.length) return;
+    final sentence = para.sentences[_ttsSentence];
+    final key = '$_textSignature/$_chapter/$_para/$_ttsSentence';
+    if (_wordMapKey != key) { _wordMapKey = key; _wordMap = const TextCleaner().clean(sentence.display); }
+    // Speech-only separators (such as a silent dash) are absent from the
+    // paragraph TTS offsets. Map inside this displayed segment instead.
+    final base = sentence.displayStart;
+    var left = (base + _wordMap!.displayOffsetOfTts(start)).clamp(base, sentence.displayEnd);
+    final right = (base + _wordMap!.displayOffsetOfTts(end)).clamp(left, sentence.displayEnd);
     while (left < right && para.display[left].trim().isEmpty) { left++; }
     setState(() { _wordStart = left; _wordEnd = right; });
     _ensureWordVisible(left);
@@ -1902,7 +1933,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onTtsCompleted() {
-    if (!mounted) return;
+    if (!mounted || !_inReadingMode) return;
     // 本章读完：自动进入下一章继续朗读
     final next = _ttsChapter + 1;
     if (next < _book.chapters.length) {
@@ -1920,7 +1951,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onTtsError() {
-    if (!mounted) return;
+    if (!mounted || !_inReadingMode) return;
     final failure = _tts.lastFailure;
     final message = failure is PlatformException ? T(_tts.usesSystemVoice ? 'systemTtsUnavailable' : 'voicePlaybackFailed')
       : failure is TimeoutException || failure is EdgeTtsException && failure.kind == 'timeout'
@@ -2154,7 +2185,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           body: Center(child: CircularProgressIndicator()));
     }
     return PopScope(
-      canPop: !_fakeLock,
       child: Scaffold(
         backgroundColor: _theme.bg,
         body: Stack(
@@ -2198,7 +2228,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             if (_autoActive && _showAutoPanel) _buildAutoPanel(),
             _buildDimMask(),
             // 假锁屏（最顶层，覆盖一切；长按 2 秒解锁）
-            if (_fakeLock) _buildFakeLock(),
           ],
         ),
       ),
@@ -2442,11 +2471,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                     onTap: _openVoiceSelector,
                   ),
                   _panelButton(
-                    icon: Icons.lock_outline,
-                    label: T('lock'),
-                    onTap: _enterFakeLock,
-                  ),
-                  _panelButton(
                     icon: Icons.power_settings_new,
                     label: T('exit'),
                     onTap: _exitReadingMode,
@@ -2526,85 +2550,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _refreshTtsCache();
     widget.storage.saveSettings(_settings.toJson());
     setState(() {});
-  }
-
-  /// 进入假锁屏：全黑 + 长按解锁；保持 app 前台使蓝牙耳机键可控，
-  /// 屏幕常亮 + 亮度压到最低，防止系统真锁屏/灭屏抢走媒体键。
-  /// 锁屏即听书：进入时若未在播放，自动恢复朗读。
-  Future<void> _enterFakeLock() async {
-    if (_fakeLock) return;
-    setState(() => _fakeLock = true);
-    _volumeChannel.invokeMethod('setKeepScreenOn', true);
-    _volumeChannel.invokeMethod('setScreenBrightness', 0.03);
-    if (_tts.state != TtsState.playing) {
-      _resumeReading();
-    }
-  }
-
-  /// 退出假锁屏：恢复亮度与屏幕常亮
-  Future<void> _exitFakeLock() async {
-    _lockTimer?.cancel();
-    _lockTimer = null;
-    if (mounted) {
-      setState(() {
-        _fakeLock = false;
-        _lockPressing = false;
-      });
-    }
-    _volumeChannel.invokeMethod('setKeepScreenOn', false);
-    _applyReaderBrightness();
-  }
-
-  /// 假锁屏界面：全黑，仅中央一个锁图标 + 长按 2 秒解锁（防误触）
-  Widget _buildFakeLock() {
-    return Positioned.fill(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: (_) {
-          setState(() => _lockPressing = true);
-          _lockTimer?.cancel();
-          _lockTimer = Timer(const Duration(seconds: 2), _exitFakeLock);
-        },
-        onTapUp: (_) {
-          _lockTimer?.cancel();
-          _lockTimer = null;
-          setState(() => _lockPressing = false);
-        },
-        onTapCancel: () {
-          _lockTimer?.cancel();
-          _lockTimer = null;
-          setState(() => _lockPressing = false);
-        },
-        child: Container(
-          color: Colors.black,
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.lock,
-                  size: 44,
-                  color: _lockPressing
-                      ? const Color(0xFF8A8A8A)
-                      : const Color(0xFF4E4E4E),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  _lockPressing ? T('keepHolding') : T('holdToUnlock'),
-                  style: TextStyle(
-                    color: _lockPressing
-                        ? const Color(0xFF9A9A9A)
-                        : const Color(0xFF5C5C5C),
-                    fontSize: 13,
-                    letterSpacing: 2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   /// 定时播放：到时间自动暂停

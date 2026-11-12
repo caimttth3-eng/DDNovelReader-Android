@@ -1,128 +1,105 @@
 import 'package:audio_service/audio_service.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 
-import '../i18n.dart';
+typedef MediaPlaybackRequest = Future<void> Function();
 
-/// 打原生日志（release 下 debugPrint 不输出，走 MethodChannel 到 logcat）
-void _log(String msg) {
-  try {
-    const MethodChannel('com.ddnovelreader/debug_log')
-        .invokeMethod('log', msg);
-  } catch (_) {}
-}
-
-/// 把 audio_service 的 MediaSession 回调（耳机播放键、系统媒体按钮）
-/// 转发给阅读页的播放/暂停/停止逻辑。
-///
-/// 实际音频播放由 TtsReader（Edge TTS 逐句合成）负责，这里只做控制转发
-/// 并维护 MediaSession 状态，让有线/无线耳机的播放键能控制朗读。
-///
-/// 两类入口：
-/// - [play]/[pause]/[stop]：耳机/系统媒体按钮触发 → 调用 onXxxRequested 回调
-/// - [notifyPlaying]/[notifyPaused]/[notifyStopped]：屏幕操作同步状态，不触发回调
+/// Bridges standard Android notification, lock-screen and headset commands to
+/// the reader. Only the reader reports actual playback state via notify methods;
+/// a requested play that fails must never make the MediaSession look playing.
 class TtsAudioHandler extends BaseAudioHandler {
-  /// 阅读页注入：请求开始/恢复播放
-  VoidCallback? onPlayRequested;
+  MediaPlaybackRequest? onPlayRequested;
+  MediaPlaybackRequest? onPauseRequested;
+  MediaPlaybackRequest? onStopRequested;
+  MediaPlaybackRequest? onPreviousRequested;
+  MediaPlaybackRequest? onNextRequested;
 
-  /// 阅读页注入：请求暂停
-  VoidCallback? onPauseRequested;
-
-  /// 阅读页注入：请求停止并退出全屏
-  VoidCallback? onStopRequested;
-
-  /// 阅读页注入：自定义"继续播放"按钮（绕开系统 play 路由问题）
-  VoidCallback? onCustomResumeRequested;
+  Future<void> _commands = Future<void>.value();
+  Future<void>? _lastRequest;
+  String? _lastCommand;
+  int _requestSerial = 0;
+  int _commandEpoch = 0;
+  Future<void>? _stopRequest;
 
   TtsAudioHandler() {
-    mediaItem.add(const MediaItem(
-      id: 'duoduo_langdu',
-      title: '多多朗读',
-      album: '本地书籍朗读',
-    ));    playbackState.add(PlaybackState(
-      playing: false,
-      controls: [
-        MediaControl.custom(
-            androidIcon: 'mipmap/ic_launcher',
-            label: T('continuePlay'),
-            name: '继续播放'),
-        MediaControl.stop,
-      ],
-      systemActions: const {MediaAction.play, MediaAction.stop},
-      processingState: AudioProcessingState.ready,
-    ));
+    mediaItem.add(const MediaItem(id: 'duoduo_langdu', title: '多多朗读'));
+    _broadcast(playing: false, processingState: AudioProcessingState.idle);
   }
 
-  // ---- 耳机/系统媒体按钮触发（会调用回调） ----
-
-  @override
-  Future<void> play() async {
-    print('AUDIO_H play called');
-    _log('HANDLER play called');
-    onPlayRequested?.call();
-    _setPlaying(true);
+  /// Updates the media card without changing playback or reopening the book.
+  void updateBookChapter({required String bookId, required String bookTitle,
+    required String chapterTitle, int? chapterIndex}) {
+    mediaItem.add(MediaItem(id: '$bookId:${chapterIndex ?? chapterTitle}',
+      title: bookTitle, album: bookTitle, artist: chapterTitle,
+      extras: {'bookId': bookId, if (chapterIndex != null) 'chapterIndex': chapterIndex}));
   }
 
-  @override
-  Future<void> pause() async {
-    print('AUDIO_H pause called');
-    _log('HANDLER pause called');
-    onPauseRequested?.call();
-    _setPlaying(false);
+  /// Commands are ordered, and identical consecutive in-flight requests share
+  /// one operation. An error is returned to its caller without poisoning later
+  /// media commands.
+  Future<void> _enqueue(String name, Future<void> Function() operation) {
+    if (_lastCommand == name && _lastRequest != null) return _lastRequest!;
+    final serial = ++_requestSerial;
+    final epoch = _commandEpoch;
+    _lastCommand = name;
+    final request = _commands.then((_) async {
+      try { if (epoch == _commandEpoch) await operation(); }
+      finally {
+        if (_requestSerial == serial) { _lastCommand = null; _lastRequest = null; }
+      }
+    });
+    _lastRequest = request;
+    _commands = request.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return request;
   }
 
   @override
-  Future<void> stop() async {
-    _log('HANDLER stop called');
-    onStopRequested?.call();
-    _setStopped();
+  Future<void> play() => _enqueue('play', () async {
+    if (!playbackState.value.playing) await onPlayRequested?.call();
+  });
+
+  @override
+  Future<void> pause() => _enqueue('pause', () async {
+    if (playbackState.value.playing) await onPauseRequested?.call();
+  });
+
+  @override
+  Future<void> stop() {
+    if (_stopRequest != null) return _stopRequest!;
+    final hadPendingCommand = _lastRequest != null;
+    _commandEpoch++; _requestSerial++;
+    _lastCommand = null; _lastRequest = null;
+    // Stop must cancel a pending synthesis immediately, rather than wait behind
+    // a play callback whose network request may take many seconds to finish.
+    final request = Future<void>.sync(() async {
+      if (hadPendingCommand || playbackState.value.processingState != AudioProcessingState.idle || playbackState.value.playing) {
+        await onStopRequested?.call();
+      }
+    });
+    _stopRequest = request;
+    _commands = request.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _commands.then<void>((_) { if (identical(_stopRequest, request)) _stopRequest = null; });
+    return request;
   }
 
   @override
-  Future<dynamic> customAction(String name,
-      [Map<String, dynamic>? extras]) async {
-    _log('HANDLER customAction: $name');
-    if (name == '继续播放') {
-      onCustomResumeRequested?.call();
-    }
-  }
+  Future<void> skipToPrevious() => _enqueue('previous', () async { await onPreviousRequested?.call(); });
 
-  // ---- 屏幕操作同步状态（不触发回调，避免递归） ----
+  @override
+  Future<void> skipToNext() => _enqueue('next', () async { await onNextRequested?.call(); });
 
-  void notifyPlaying() => _setPlaying(true);
-  void notifyPaused() => _setPlaying(false);
-  void notifyStopped() => _setStopped();
+  void notifyPlaying() => _broadcast(playing: true, processingState: AudioProcessingState.ready);
+  void notifyPaused() => _broadcast(playing: false, processingState: AudioProcessingState.ready);
+  void notifyStopped() => _broadcast(playing: false, processingState: AudioProcessingState.idle);
 
-  // ---- 内部状态更新 ----
-
-  void _setPlaying(bool playing) {
+  void _broadcast({required bool playing, required AudioProcessingState processingState}) {
     playbackState.add(playbackState.value.copyWith(
-      playing: playing,
-      controls: playing
-          ? const [MediaControl.pause, MediaControl.stop]
-          : [
-              MediaControl.custom(
-                  androidIcon: 'mipmap/ic_launcher',
-                  label: T('continuePlay'),
-                  name: '继续播放'),
-              MediaControl.stop,
-            ],
-      systemActions: playing
-          ? const {MediaAction.pause, MediaAction.stop}
-          : const {MediaAction.play, MediaAction.stop},
-      processingState: AudioProcessingState.ready,
-    ));
-  }
-
-  void _setStopped() {
-    playbackState.add(playbackState.value.copyWith(
-      playing: false,
-      controls: const [MediaControl.play],
-      systemActions: const {MediaAction.play},
-      processingState: AudioProcessingState.idle,
+      playing: playing, processingState: processingState,
+      controls: [MediaControl.skipToPrevious, playing ? MediaControl.pause : MediaControl.play,
+        MediaControl.skipToNext, MediaControl.stop],
+      androidCompactActionIndices: const [0, 1, 2],
+      systemActions: const {MediaAction.playPause},
     ));
   }
 }
 
-/// 全局音频处理器实例（在 main() 中初始化，阅读页绑定回调）。
+/// Shared MediaSession handler, initialized before the application starts.
 TtsAudioHandler? globalAudioHandler;

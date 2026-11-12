@@ -24,6 +24,7 @@ Future<void> main() async {
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.ddnovelreader.tts',
         androidNotificationChannelName: '多多朗读',
+        androidNotificationIcon: 'drawable/ic_stat_reading',
         // 关键：暂停时保持前台服务。
         // 默认 true 会在暂停时停止前台服务，Android 12+ 后台重启前台服务
         // 会被系统拦截(ForegroundServiceStartNotAllowedException)，
