@@ -588,13 +588,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _removeHighlightOf(_Item it, Paragraph para) async {
     if (it.sentenceIndex >= para.sentences.length) return;
-    final s = para.sentences[it.sentenceIndex];
+    final ids = _highlightOf(it, para).map((h) => h.id).toSet();
     setState(() {
-      _highlights.removeWhere((h) =>
-          h.chapterIndex == it.chapterIndex &&
-          h.paragraphIndex == it.paragraphIndex &&
-          h.charEnd > s.displayStart &&
-          h.charStart < s.displayEnd);
+      _highlights.removeWhere((h) => ids.contains(h.id));
       _rebuildHlIndex();
     });
     await _persistAnnotations();

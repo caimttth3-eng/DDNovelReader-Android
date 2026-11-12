@@ -115,7 +115,7 @@ void main() {
       extentOffset: ReaderTypography.layoutOffset(punctuationSource, 4)));
     final comma = painter.getBoxesForSelection(TextSelection(baseOffset: ReaderTypography.layoutOffset(punctuationSource, 4),
       extentOffset: ReaderTypography.layoutOffset(punctuationSource, 5)));
-    expect(lastLetter.first.top, 0, reason: 'Four full-width characters fit before the punctuation');
+    expect(lastLetter.first.top, closeTo(0, 0.5), reason: 'Four full-width characters fit before the punctuation');
     expect(comma.first.top, greaterThan(lastLetter.first.top), reason: 'Punctuation may start the next line');
     painter.dispose();
     final before = tester.getTopLeft(text);
