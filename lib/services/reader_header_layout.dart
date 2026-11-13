@@ -82,7 +82,7 @@ class ReaderHeaderLayout {
 
   static ReaderHeaderLayout compute({required Size viewport, required EdgeInsets safeInsets,
     List<Rect> cutouts = const [], double topLeftRadius = 0, double topRightRadius = 0,
-    bool statusBarVisible = false, double statusBarTop = 0}) {
+    bool statusBarVisible = false, double statusBarTop = 0, double extraTop = 24}) {
     const line = 24.0, clearance = 4.0;
     final width = math.max(0.0, viewport.width);
     final left = math.max(8.0, math.max(safeInsets.left, topLeftRadius)).clamp(0.0, width).toDouble();
@@ -95,7 +95,7 @@ class ReaderHeaderLayout {
       if (nearestTop) band = math.max(band, r.bottom);
     }
     ReaderHeaderLayout below(double top) => ReaderHeaderLayout._(
-      Rect.fromLTWH(left, top, right - left, line), top + line, false);
+      Rect.fromLTWH(left, top + extraTop, right - left, line), top + line + extraTop, false);
     if (statusBarVisible) return below(math.max(band, statusBarTop));
     final obstacles = valid.where((r) => r.top < band && r.bottom > 0).toList()
       ..sort((a, b) => a.left.compareTo(b.left));
@@ -106,13 +106,13 @@ class ReaderHeaderLayout {
     for (final r in obstacles) {
       final start = (r.left - clearance).clamp(left, right).toDouble();
       final end = (r.right + clearance).clamp(left, right).toDouble();
-      if (start > cursor) slots.add(Rect.fromLTWH(cursor, (band - line) / 2, start - cursor, line));
+      if (start > cursor) slots.add(Rect.fromLTWH(cursor, (band - line) / 2 + extraTop, start - cursor, line));
       if (start - cursor > bestRight - bestLeft) { bestLeft = cursor; bestRight = start; }
       cursor = math.max(cursor, end);
     }
-    if (right > cursor) slots.add(Rect.fromLTWH(cursor, (band - line) / 2, right - cursor, line));
+    if (right > cursor) slots.add(Rect.fromLTWH(cursor, (band - line) / 2 + extraTop, right - cursor, line));
     if (right - cursor > bestRight - bestLeft) { bestLeft = cursor; bestRight = right; }
     if (bestRight <= bestLeft) return below(band);
-    return ReaderHeaderLayout._(Rect.fromLTWH(bestLeft, (band - line) / 2, bestRight - bestLeft, line), band, true, List.unmodifiable(slots));
+    return ReaderHeaderLayout._(Rect.fromLTWH(bestLeft, (band - line) / 2 + extraTop, bestRight - bestLeft, line), band + extraTop, true, List.unmodifiable(slots));
   }
 }

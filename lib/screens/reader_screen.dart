@@ -974,7 +974,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       for (var j = 0; j + 1 < sorted.length; j++) {
         final left = sorted[j], right = sorted[j + 1];
         final marked = marks.where((h) => h.charStart < right && h.charEnd > left);
-        final word = current && _wordStart < right && _wordEnd > left && _wordStart >= 0;
+        final word = _settings.wordHighlightEnabled && current && _wordStart < right && _wordEnd > left && _wordStart >= 0;
         spans.add(TextSpan(text: _layoutSegment(it, para.display.substring(left, right), left), recognizer: recognizer,
           style: TextStyle(color: word ? const Color(0xFF102A3A) : null,
             backgroundColor: word ? const Color(0xFF9BC5DD) : current ? const Color(0x44FFC107) : marked.isEmpty ? null : Color(marked.last.color),
@@ -2697,6 +2697,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   onPressed: () => _adjustRate(0.1))),
               ]),
               const SizedBox(height: 4),
+              Material(color: Colors.transparent, child: SwitchListTile(key: const ValueKey('word-highlight'), dense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+                title: Text(T('wordHighlight'), style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 13)),
+                value: _settings.wordHighlightEnabled, onChanged: (enabled) {
+                  setState(() => _settings.wordHighlightEnabled = enabled);
+                  widget.storage.saveSettings(_settings.toJson());
+                })),
               if (_tts.usingSystemFallback) Padding(key: const ValueKey('tts-offline-fallback'),
                 padding: const EdgeInsets.only(bottom: 4), child: Text(T('offlineSystemVoice'),
                   style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 12))),
@@ -3445,15 +3451,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Widget _buildFloatingChapter() => Positioned(
-    left: 0, top: MediaQuery.sizeOf(context).height / 2 - 24,
-    child: Material(color: const Color(0xDD333333),
-      borderRadius: const BorderRadius.horizontal(right: Radius.circular(14)),
-      child: InkWell(key: const ValueKey('contents-handle'), onTap: _openChapterList,
-        borderRadius: const BorderRadius.horizontal(right: Radius.circular(14)),
-        child: Tooltip(message: T('toc'), child: const SizedBox(width: 16, height: 48,
-          child: Center(child: ReaderIcon(ReaderSymbol.contents, size: 12, color: Colors.white70)))),
-      ),
-    ),
+    left: 0, top: MediaQuery.sizeOf(context).height / 2 - 32,
+    child: GestureDetector(key: const ValueKey('contents-touch'), behavior: HitTestBehavior.translucent, onTap: _openChapterList,
+      child: SizedBox(width: 48, height: 64, child: Align(alignment: Alignment.centerLeft,
+        child: Material(key: const ValueKey('contents-handle'), color: const Color(0xDD333333),
+          borderRadius: const BorderRadius.horizontal(right: Radius.circular(14)),
+          child: Tooltip(message: T('toc'), child: const SizedBox(width: 16, height: 64,
+            child: ClipRect(child: OverflowBox(maxWidth: 28, child: ReaderIcon(ReaderSymbol.contents, size: 28, color: Colors.white70))))))))),
   );
 
   Future<void> _openChapterList() async {
@@ -3731,8 +3735,12 @@ class _ChapterSheetState extends State<_ChapterSheet> {
   @override
   Widget build(BuildContext context) => Column(children: [
     Row(children: [
-      Expanded(child: Padding(padding: const EdgeInsets.all(16), child: Text(T('toc'), textAlign: TextAlign.center))),
-      Expanded(child: TextButton(onPressed: () => Navigator.pop(context, -1), child: Text(T('bookmark')))),
+      Expanded(child: TextButton(key: const ValueKey('contents-tab'), onPressed: () {},
+        style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.primary,
+          backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12)),
+        child: Text(T('toc'), style: const TextStyle(fontWeight: FontWeight.bold)))),
+      Expanded(child: TextButton(key: const ValueKey('bookmarks-tab'), onPressed: () => Navigator.pop(context, -1),
+        style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant), child: Text(T('bookmark')))),
     ]),
     const Divider(height: 1),
     Expanded(child: ListView.builder(

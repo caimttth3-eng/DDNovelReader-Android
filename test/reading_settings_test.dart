@@ -81,6 +81,24 @@ void main() {
       expect(restored.voice, 'saved-voice'); expect(restored.fontSize, 28);
     }
   });
+  test('word highlighting defaults off and persists without changing speech preferences', () async {
+    SharedPreferences.setMockInitialValues({});
+    expect(ReadingSettings().wordHighlightEnabled, isFalse);
+    expect(ReadingSettings.fromJson(null).wordHighlightEnabled, isFalse);
+    expect(ReadingSettings.fromJson({'voice': 'saved-voice'}).wordHighlightEnabled, isFalse);
+    for (final invalid in <Object?>[null, '', 'true', 0, 1]) {
+      expect(ReadingSettings.fromJson({'wordHighlightEnabled': invalid}).wordHighlightEnabled, isFalse);
+    }
+    for (final enabled in [true, false]) {
+      final settings = ReadingSettings()..wordHighlightEnabled = enabled
+        ..voice = 'saved-voice'..speechRate = 1.5..systemFallbackActive = true;
+      await AppStorage().saveSettings(settings.toJson());
+      final restored = ReadingSettings.fromJson(await AppStorage().loadSettings());
+      expect(restored.wordHighlightEnabled, enabled);
+      expect(restored.voice, 'saved-voice'); expect(restored.speechRate, 1.5);
+      expect(restored.systemFallbackActive, isTrue);
+    }
+  });
   test('old full-brightness defaults migrate to system brightness', () {
     final settings = ReadingSettings.fromJson({'brightness': 1.0});
     expect(settings.automaticBrightness, isTrue);

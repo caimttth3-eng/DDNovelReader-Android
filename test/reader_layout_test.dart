@@ -32,7 +32,7 @@ void main() {
   final volumeCalls = <MethodCall>[];
   final platformCalls = <MethodCall>[];
   setUp(() {
-    SharedPreferences.setMockInitialValues({'duoduo.settings.v1': jsonEncode({'brightness': 1.0, 'autoPageSeconds': 2})});
+    SharedPreferences.setMockInitialValues({'duoduo.settings.v1': jsonEncode({'brightness': 1.0, 'autoPageSeconds': 2, 'wordHighlightEnabled': true})});
     AppAppearance.updateSystemBrightness(Brightness.light);
     AppAppearance.setThemeMode('system');
     volumeCalls.clear(); platformCalls.clear();
@@ -426,7 +426,7 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    final settings = ReadingSettings()..pageTurnMode = 'swipe'..fontSize = 64;
+    final settings = ReadingSettings()..wordHighlightEnabled = true..pageTurnMode = 'swipe'..fontSize = 64;
     await storage.saveSettings(settings.toJson());
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('modes'), storage: storage)));
     await tester.pumpAndSettle();
@@ -508,7 +508,7 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    final settings = ReadingSettings()..fontSize = 20..mergeNonSentenceBreaks = false..firstLineIndent = false;
+    final settings = ReadingSettings()..wordHighlightEnabled = true..fontSize = 20..mergeNonSentenceBreaks = false..firstLineIndent = false;
     await storage.saveSettings(settings.toJson());
     String sentence(int paragraph, int sentence) => sentence == 0
       ? '第${paragraph.toString().padLeft(2, '0')}段清晨风吹过树林。' : '朋友在第${paragraph.toString().padLeft(2, '0')}段带来问候。';
@@ -577,7 +577,7 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    await storage.saveSettings((ReadingSettings()..fontSize = 20..mergeNonSentenceBreaks = false
+    await storage.saveSettings((ReadingSettings()..wordHighlightEnabled = true..fontSize = 20..mergeNonSentenceBreaks = false
       ..firstLineIndent = false).toJson());
     String sentence(int paragraph, int sentence) => sentence == 0
       ? '第${paragraph.toString().padLeft(2, '0')}段清晨风吹过树林。' : '朋友在第${paragraph.toString().padLeft(2, '0')}段带来问候。';
@@ -645,7 +645,7 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
       final speech = _TestSpeech();
       final storage = AppStorage();
-      await storage.saveSettings((ReadingSettings()..fontSize = 20..voice = TtsReader.defaultVoice).toJson());
+      await storage.saveSettings((ReadingSettings()..wordHighlightEnabled = true..fontSize = 20..voice = TtsReader.defaultVoice).toJson());
       await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('voice-follow-${target.$1}'),
         storage: storage, ttsReader: speech)));
       await tester.pumpAndSettle();
@@ -698,7 +698,7 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    await storage.saveSettings((ReadingSettings()..fontSize = 20..mergeNonSentenceBreaks = false..firstLineIndent = false).toJson());
+    await storage.saveSettings((ReadingSettings()..wordHighlightEnabled = true..fontSize = 20..mergeNonSentenceBreaks = false..firstLineIndent = false).toJson());
     String sentence(int p, int s) => (s == 0 ? '第${p}段第一句' : '第${p}段第二句') +
       List.filled(7, s == 0 ? '清晨山间的风吹过树林，' : '远方朋友带来温暖的问候，').join() + '。';
     final book = Book(id: 'speech-lock-position', title: '锁屏进度', filePath: '', format: BookFormat.txt,
@@ -766,7 +766,7 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    await storage.saveSettings((ReadingSettings()..firstLineIndent = false).toJson());
+    await storage.saveSettings((ReadingSettings()..wordHighlightEnabled = true..firstLineIndent = false).toJson());
     final book = Book(id: 'dash-word-offset', title: '破折号光标', filePath: '', format: BookFormat.txt,
       addedAt: DateTime(2026), chapters: const [Chapter(title: '第一章', paragraphs: [Paragraph(
         display: '你好——世界', tts: '', sentences: [], sentenceStartTts: [])])]);
@@ -1154,7 +1154,7 @@ void main() {
         expect(rows.first.top, closeTo(bodyRect.top, 0.5),
           reason: 'Normal reading restores at a complete line boundary, without a half row above the target');
       }
-      final expectedTop = cutout != null ? 40.0 : size.width > size.height ? 24.0 : 48.0;
+      final expectedTop = 24 + (cutout != null ? 40.0 : size.width > size.height ? 24.0 : 48.0);
       expect(tester.getRect(header).height, 24, reason: 'Chapter chrome must stay compact at body font size 64');
       expect(tester.getRect(body).top, expectedTop);
       final headerText = tester.widget<Text>(find.descendant(of: header, matching: find.byType(Text)));
@@ -1354,7 +1354,7 @@ void main() {
       await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(home: ReaderScreen(book: book, storage: AppStorage()))));
       await tester.pumpAndSettle(); await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
       final name = find.byKey(const ValueKey('reader-chapter-header')), number = find.byKey(const ValueKey('reader-chapter-number'));
-      expect(tester.getRect(find.byKey(const ValueKey('reader-body'))).top, 40);
+      expect(tester.getRect(find.byKey(const ValueKey('reader-body'))).top, 64);
       if (corner) {
         expect(number, findsNothing); expect(find.descendant(of: name, matching: find.text('第十二章 山间来信')), findsOneWidget);
       } else {
@@ -1369,6 +1369,47 @@ void main() {
       await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     });
   }
+
+  testWidgets('word highlighting defaults off while real word position and sidebar selection remain available', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..firstLineIndent = false).toJson());
+    final speech = _TestSpeech();
+    final book = Book(id: 'word-option', title: '高亮设置', filePath: '', format: BookFormat.txt, addedAt: DateTime(2026),
+      chapters: [Chapter(title: '第一章', paragraphs: [ReadingText.paragraph('清晨阳光洒在树上。')])]);
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    List<String> blue() {
+      final result = <String>[];
+      void visit(InlineSpan span) {
+        if (span is! TextSpan) return;
+        if (span.style?.backgroundColor == const Color(0xFF9BC5DD)) result.add(span.toPlainText().replaceAll('\u200B', ''));
+        for (final child in span.children ?? <InlineSpan>[]) { visit(child); }
+      }
+      for (final text in tester.widgetList<Text>(find.byType(Text))) { if (text.textSpan != null) visit(text.textSpan!); }
+      return result;
+    }
+    speech.onWordChanged?.call(0, 2); await tester.pumpAndSettle(); expect(blue(), isEmpty);
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    final toggle = find.byKey(const ValueKey('word-highlight'));
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    tester.widget<SwitchListTile>(toggle).onChanged!(true); await tester.pumpAndSettle(); expect(blue(), ['清晨']);
+    tester.widget<SwitchListTile>(toggle).onChanged!(false); await tester.pumpAndSettle();
+    speech.onWordChanged?.call(3, 5); await tester.pumpAndSettle(); expect(blue(), isEmpty);
+    tester.widget<SwitchListTile>(toggle).onChanged!(true); await tester.pumpAndSettle(); expect(blue(), ['光洒']);
+    expect((await storage.loadSettings())['wordHighlightEnabled'], isTrue);
+    await tester.tap(find.text('退出')); await tester.pumpAndSettle();
+    expect(tester.getSize(find.byKey(const ValueKey('contents-touch'))), const Size(48, 64));
+    expect(tester.getRect(find.byKey(const ValueKey('contents-handle'))).right, 16);
+    await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
+    final active = tester.widget<TextButton>(find.byKey(const ValueKey('contents-tab')));
+    final inactive = tester.widget<TextButton>(find.byKey(const ValueKey('bookmarks-tab')));
+    expect(active.style!.backgroundColor!.resolve({}), isNot(Colors.transparent));
+    expect(inactive.style!.backgroundColor?.resolve({}), isNull);
+    expect(tester.widget<ListTile>(find.byKey(const ValueKey('toc-entry-0'))).selected, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
 
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);

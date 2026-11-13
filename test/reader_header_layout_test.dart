@@ -9,8 +9,8 @@ void main() {
     final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
       cutouts: [const Rect.fromLTRB(188, 8, 212, 32)]);
     expect(layout.sharesCutoutBand, isTrue);
-    expect(layout.topArea, 40);
-    expect(layout.titleRect, const Rect.fromLTWH(8, 8, 176, 24));
+    expect(layout.topArea, 64);
+    expect(layout.titleRect, const Rect.fromLTWH(8, 32, 176, 24));
     expect(layout.titleRect.overlaps(const Rect.fromLTRB(188, 8, 212, 32)), isFalse);
   });
 
@@ -19,7 +19,7 @@ void main() {
       cutouts: [const Rect.fromLTRB(32, 8, 60, 36)]);
     expect(layout.titleRect.left, 64);
     expect(layout.titleRect.right, 392);
-    expect(layout.topArea, 40);
+    expect(layout.topArea, 64);
   });
 
   test('chapter number uses the narrow side while the name stays in the wide side', () {
@@ -31,7 +31,7 @@ void main() {
     expect(title.numberRect!.right, 136);
     expect(title.nameRect.left, 174);
     expect(title.numberRect!.width, lessThan(title.nameRect.width));
-    expect(layout.topArea, 40);
+    expect(layout.topArea, 64);
     expect(title.numberRect!.top, title.nameRect.top);
   });
 
@@ -136,33 +136,33 @@ void main() {
     final layout = ReaderHeaderLayout.compute(viewport: const Size(800, 400),
       safeInsets: const EdgeInsets.only(left: 34),
       cutouts: [const Rect.fromLTRB(0, 180, 34, 220)]);
-    expect(layout.topArea, 24);
+    expect(layout.topArea, 48);
     expect(layout.titleRect.left, 34);
-    expect(layout.titleRect.top, 0);
+    expect(layout.titleRect.top, 24);
     expect(layout.sharesCutoutBand, isFalse);
   });
 
   test('visible system status icons force a safe row below the status band', () {
     final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
       cutouts: [const Rect.fromLTRB(188, 8, 212, 32)], statusBarVisible: true, statusBarTop: 56);
-    expect(layout.titleRect.top, 56);
-    expect(layout.topArea, 80);
+    expect(layout.titleRect.top, 80);
+    expect(layout.topArea, 104);
     expect(layout.sharesCutoutBand, isFalse);
   });
 
   test('missing bounds use a compact safe row and do not guess a hole', () {
     final unknown = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: const EdgeInsets.only(top: 38));
-    expect(unknown.titleRect, const Rect.fromLTWH(8, 38, 384, 24));
-    expect(unknown.topArea, 62);
+    expect(unknown.titleRect, const Rect.fromLTWH(8, 62, 384, 24));
+    expect(unknown.topArea, 86);
     expect(unknown.sharesCutoutBand, isFalse);
-    expect(ReaderHeaderLayout.compute(viewport: portrait, safeInsets: EdgeInsets.zero).topArea, 24);
+    expect(ReaderHeaderLayout.compute(viewport: portrait, safeInsets: EdgeInsets.zero).topArea, 48);
   });
 
   test('a full-width notch uses the safe fallback and rotated snapshots are rejected', () {
     final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
       cutouts: [const Rect.fromLTRB(0, 0, 400, 40)]);
-    expect(layout.titleRect.top, 40);
-    expect(layout.topArea, 64);
+    expect(layout.titleRect.top, 64);
+    expect(layout.topArea, 88);
     expect(layout.sharesCutoutBand, isFalse);
     const snapshot = DisplayCutoutGeometry(viewport: portrait);
     expect(snapshot.matches(portrait), isTrue);

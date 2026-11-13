@@ -119,6 +119,7 @@ class ReadingSettings {
   bool mergeNonSentenceBreaks = true;
   bool firstLineIndent = true;
   bool autoExtractToc = true;
+  bool wordHighlightEnabled = false;
   bool informationFilter = false;
   String informationFilterLevel = 'none';
   double fontSize = 20.0;
@@ -142,6 +143,7 @@ class ReadingSettings {
         'textCorrection': mergeNonSentenceBreaks,
         'firstLineIndent': firstLineIndent,
         'autoExtractToc': autoExtractToc,
+        'wordHighlightEnabled': wordHighlightEnabled,
         'informationFilter': informationFilter,
         'informationFilterLevel': informationFilterLevel,
         'fontSize': fontSize,
@@ -171,6 +173,7 @@ class ReadingSettings {
     s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
     s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;
     s.autoExtractToc = json['autoExtractToc'] is bool ? json['autoExtractToc'] as bool : true;
+    s.wordHighlightEnabled = json['wordHighlightEnabled'] is bool ? json['wordHighlightEnabled'] as bool : false;
     s.informationFilter = json['informationFilter'] as bool? ?? false;
     final level = json['informationFilterLevel'];
     s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'none';
