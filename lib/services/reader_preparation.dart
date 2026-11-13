@@ -1,6 +1,9 @@
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import '../models/book.dart';
+import '../models/progress.dart';
+import 'app_storage.dart';
+import 'reader_header_layout.dart';
 import 'book_parser.dart';
 import 'reading_text.dart';
 
@@ -24,6 +27,16 @@ class PreparedReadingBook {
 }
 
 typedef ReaderPreparationRunner = Future<PreparedReadingBook> Function(ReaderPreparationRequest request);
+
+class ReaderInitialData {
+  final PreparedReadingBook prepared;
+  final ReadingSettings settings;
+  final BookProgress? progress;
+  final DisplayCutoutGeometry? geometry;
+  final double devicePixelRatio;
+  const ReaderInitialData({required this.prepared, required this.settings, this.progress,
+    this.geometry, required this.devicePixelRatio});
+}
 
 class ReaderPreparation {
   @visibleForTesting

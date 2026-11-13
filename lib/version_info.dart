@@ -6,12 +6,13 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.2.18';
-  static const String build = '23';
+  static const String version = '1.2.19';
+  static const String build = '24';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.2.19：合并打开书籍的载入过程，避免标题栏和载入动画闪烁；仅提供 ARM64-v8a 小安装包，沿用固定签名。',
     'v1.2.18：点击书架立即打开书籍页面，整本解析与初始文本处理移至后台，保留阅读进度和稳定边距。',
     'v1.2.17：缩短进入阅读页的等待，刘海布局与系统栏切换并行准备，保留进出阅读页不跳动的修复。',
     'v1.2.16：修复进出阅读页时状态栏显隐导致的边距跳动，保留阅读全屏与刘海标题布局；继续使用固定签名。',

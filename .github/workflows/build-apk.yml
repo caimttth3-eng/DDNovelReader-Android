@@ -63,7 +63,7 @@ jobs:
         id: build
         env:
           DDNOVEL_SIGNING_PROPERTIES: ${{ steps.signing.outputs.properties_path }}
-        run: flutter build apk --release
+        run: flutter build apk --release --target-platform android-arm64
       - name: Check APK signature and checksum
         id: verify
         env:

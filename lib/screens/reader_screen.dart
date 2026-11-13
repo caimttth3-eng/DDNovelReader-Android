@@ -52,6 +52,7 @@ class ReaderScreen extends StatefulWidget {
   final Book book;
   final AppStorage storage;
   final BookProgress? initialProgress;
+  final ReaderInitialData? initialData;
   final Future<void> Function(BookProgress p)? onProgressChanged;
   @visibleForTesting
   final TtsReader? ttsReader;
@@ -61,9 +62,13 @@ class ReaderScreen extends StatefulWidget {
     required this.book,
     required this.storage,
     this.initialProgress,
+    this.initialData,
     this.onProgressChanged,
     this.ttsReader,
   });
+
+  static Color backgroundFor(ReadingSettings settings) =>
+    _bookThemes[settings.themeIndex.clamp(0, _bookThemes.length - 1)].bg;
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
@@ -282,7 +287,21 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     AppAppearance.nightMode.addListener(_onAppearanceChanged);
-    _viewportReady = _prepareReaderViewport();
+    if (widget.initialData case final initial?) {
+      _applySystemUi();
+      final view = WidgetsBinding.instance.platformDispatcher.implicitView;
+      if (view != null) {
+        final key = (view.physicalSize / view.devicePixelRatio, view.devicePixelRatio);
+        _preparedViewportKey = key;
+        final geometry = initial.geometry;
+        if (geometry != null && initial.devicePixelRatio == view.devicePixelRatio && geometry.matches(key.$1)) {
+          _cutoutGeometry[key] = geometry;
+        }
+      }
+      _viewportPrepared = true; _viewportReady = Future<void>.value();
+    } else {
+      _viewportReady = _prepareReaderViewport();
+    }
     _pageAnimation = AnimationController(vsync: this, duration: const Duration(milliseconds: 80));
     _autoClock = AnimationController(vsync: this, duration: const Duration(seconds: 20))
       ..addStatusListener((status) {
@@ -576,6 +595,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Future<void> _loadSettings() async {
+    final initial = widget.initialData;
+    if (initial != null) {
+      _activatePrepared(initial.prepared, initial.settings, initial.progress);
+      return;
+    }
     final raw = await widget.storage.loadSettings();
     if (!mounted || _leavingReader) return;
     _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(raw));
@@ -585,23 +609,25 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       autoExtractToc: _settings.autoExtractToc));
     await _viewportReady;
     if (!mounted || _leavingReader) return;
+    final progress = await widget.storage.loadProgress(widget.book.id) ?? widget.initialProgress;
+    if (!mounted || _leavingReader) return;
+    _activatePrepared(prepared, _settings, progress);
+  }
+
+  void _activatePrepared(PreparedReadingBook prepared, ReadingSettings settings, BookProgress? p) {
+    _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(settings.toJson()));
     prepared.attachSourceMaps();
     _textSignature = _formatSignature(_settings);
     _installFormattedBook(prepared.book, prepared.fingerprint);
     _toc = prepared.toc; _tocAnchors = prepared.tocAnchors; _tocIsChapterTitle = prepared.chapterTitles;
-    _settings = AppAppearance.applyCurrentMode(_settings);
-    AppAppearance.nightMode.value = _isNight;
     _applyReaderBrightness();
     if (_settings.automaticBrightness) _syncSystemBrightness();
     _applySystemUi();
-    await _tts.setSpeechRate(_settings.speechRate);
-    if (!mounted || _leavingReader) return;
+    _tts.setSpeechRate(_settings.speechRate);
     _tts.setPrefetchSentences(_settings.prefetchSentences);
     final restoreFallback = _settings.systemFallbackActive;
     _tts.setVoice(_settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice);
     _tts.restoreSystemFallback(restoreFallback);
-    final p = await widget.storage.loadProgress(_book.id) ?? widget.initialProgress;
-    if (!mounted || _leavingReader) return;
     final atTitle = p == null || p.atChapterTitle ||
       (p.layoutSignature.isEmpty && p.paragraphIndex == 0 && p.offsetInParagraph == 0);
     _lastProgress = p;
@@ -615,6 +641,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _para = location.$1;
     _ttsSentence = ReadingText.sentenceAt(_book.chapters[_chapter].paragraphs[_para], location.$2);
     setState(() => _settingsLoaded = true);
+    _restorePreparedPosition(p, atTitle, location);
+  }
+
+  Future<void> _restorePreparedPosition(BookProgress? p, bool atTitle, (int, int) location) async {
     await _loadAnnotations();
     if (!mounted || _leavingReader) return;
     WidgetsBinding.instance.addPostFrameCallback((_) async {

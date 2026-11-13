@@ -10,6 +10,7 @@ import 'package:duoduo_langdu/screens/reader_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/reading_text.dart';
 import 'package:duoduo_langdu/services/reader_preparation.dart';
+import 'package:duoduo_langdu/services/app_appearance.dart';
 
 class _NavigationLog extends NavigatorObserver {
   final pushed = <Route<dynamic>>[];
@@ -30,6 +31,7 @@ void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   final messenger = binding.defaultBinaryMessenger;
   setUp(() {
+    AppAppearance.updateSystemBrightness(Brightness.light); AppAppearance.setThemeMode('system');
     SharedPreferences.setMockInitialValues({});
     ReaderPreparation.runnerForTesting = (request) async => ReaderPreparation.prepareSynchronously(request);
     for (final name in ['com.ddnovelreader/volume_keys', 'com.ddnovelreader/debug_log',
@@ -58,10 +60,13 @@ void main() {
   }
 
   testWidgets('opening a pending book immediately provides its title, progress and back button', (tester) async {
+    final semantics = tester.ensureSemantics(); addTearDown(semantics.dispose);
     final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
     var loads = 0;
     await open(tester, log, () { loads++; return pending.future; });
-    expect(find.text('测试书籍'), findsOneWidget);
+    expect(find.text('测试书籍'), findsNothing);
+    expect(find.byType(AppBar), findsNothing);
+    expect(find.bySemanticsLabel('测试书籍'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(find.byType(BackButton), findsOneWidget);
     expect(loads, 1);
@@ -152,11 +157,63 @@ void main() {
     await tester.pump(); await tester.pump();
     expect(find.byType(BookOpeningScreen), findsOneWidget);
     expect(find.byType(ReaderScreen), findsOneWidget);
+    expect(find.byKey(const ValueKey('reader-body')), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing, reason: 'Prepared handoff must show text on the first reader frame');
     expect(log.pushed, hasLength(2));
     expect(identical(log.pushed.last, openingRoute), isTrue);
     expect(log.replacements, 0);
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('parser and preparation share one loading view before a spinner-free reader handoff', (tester) async {
+    final log = _NavigationLog(), parsed = Completer<(Book, BookProgress?)>(), prepared = Completer<PreparedReadingBook>();
+    ReaderPreparationRequest? request;
+    var runs = 0;
+    ReaderPreparation.runnerForTesting = (value) { runs++; request = value; return prepared.future; };
+    await open(tester, log, () => parsed.future);
+    expect(find.byType(AppBar), findsNothing); expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    parsed.complete((readableBook(), null)); await tester.pump(); await tester.pump();
+    expect(runs, 1); expect(find.byType(ReaderScreen), findsNothing);
+    expect(find.byType(AppBar), findsNothing); expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    prepared.complete(ReaderPreparation.prepareSynchronously(request!)); await tester.pump(); await tester.pump();
+    expect(runs, 1, reason: 'Reader must reuse prepared data rather than run its own second preparation');
+    expect(find.byKey(const ValueKey('reader-body')), findsOneWidget); expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(log.pushed, hasLength(2)); expect(log.replacements, 0); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pump();
+  });
+
+  testWidgets('format changes during preparation are refreshed and latest appearance is used on handoff', (tester) async {
+    final log = _NavigationLog(), requests = <ReaderPreparationRequest>[], completions = <Completer<PreparedReadingBook>>[];
+    ReaderPreparation.runnerForTesting = (request) { requests.add(request); final pending = Completer<PreparedReadingBook>();
+      completions.add(pending); return pending.future; };
+    await open(tester, log, () async => (readableBook(), null));
+    expect(requests, hasLength(1)); expect(requests.first.merge, isTrue);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..mergeNonSentenceBreaks = false..fontSize = 45..speechRate = 2.3).toJson());
+    completions[0].complete(ReaderPreparation.prepareSynchronously(requests[0])); await tester.pump(); await tester.pump();
+    expect(requests, hasLength(2)); expect(requests.last.merge, isFalse);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget); expect(find.byType(ReaderScreen), findsNothing);
+    AppAppearance.updateSystemBrightness(Brightness.dark);
+    completions[1].complete(ReaderPreparation.prepareSynchronously(requests[1])); await tester.pump(); await tester.pump();
+    final reader = tester.widget<ReaderScreen>(find.byType(ReaderScreen));
+    expect(reader.initialData!.settings.fontSize, 45); expect(reader.initialData!.settings.speechRate, 2.3);
+    expect(tester.widget<Scaffold>(find.descendant(of: find.byType(ReaderScreen), matching: find.byType(Scaffold))).backgroundColor,
+      const Color(0xFF1A1A1A));
+    expect(find.byType(CircularProgressIndicator), findsNothing); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pump();
+  });
+
+  testWidgets('leaving during preparation ignores late success without a second route or reader', (tester) async {
+    final log = _NavigationLog(), prepared = Completer<PreparedReadingBook>();
+    ReaderPreparationRequest? request;
+    ReaderPreparation.runnerForTesting = (value) { request = value; return prepared.future; };
+    await open(tester, log, () async => (readableBook(), null));
+    expect(request, isNotNull);
+    await tester.tap(find.byType(BackButton)); await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    prepared.complete(ReaderPreparation.prepareSynchronously(request!)); await tester.pump(); await tester.pump();
+    expect(find.byType(ReaderScreen), findsNothing); expect(log.pushed, hasLength(2)); expect(log.replacements, 0);
     expect(tester.takeException(), isNull);
   });
 }
