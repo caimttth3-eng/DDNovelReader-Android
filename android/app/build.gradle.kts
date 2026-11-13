@@ -51,6 +51,12 @@ android {
         // Android 15 全面屏沉浸：targetSdk 35 强制 edge-to-edge，
         // 导航条透明、内容延伸到底部，消除系统白条
         targetSdk = 35
+        // Restrict plugin JNI libraries too; Flutter's target-platform flag
+        // alone only selects the Flutter engine and Dart application ABI.
+        ndk {
+            abiFilters.clear()
+            abiFilters.add("arm64-v8a")
+        }
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

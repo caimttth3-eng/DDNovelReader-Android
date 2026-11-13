@@ -63,7 +63,9 @@ jobs:
         id: build
         env:
           DDNOVEL_SIGNING_PROPERTIES: ${{ steps.signing.outputs.properties_path }}
-        run: flutter build apk --release --target-platform android-arm64
+        run: |
+          flutter build apk --release --target-platform android-arm64
+          python3 -c 'import glob,zipfile; p=glob.glob("build/app/outputs/apk/release/*.apk"); assert len(p)==1,p; z=zipfile.ZipFile(p[0]); a={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert a=={"arm64-v8a"},a; print("Verified native ABIs:", sorted(a))'
       - name: Check APK signature and checksum
         id: verify
         env:

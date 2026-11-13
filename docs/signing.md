@@ -12,7 +12,7 @@
 
 ## GitHub 在线构建
 
-在线构建仅生成 ARM64-v8a 安装包 `app-release.apk`。使用 `--target-platform android-arm64`，不使用 ABI 分包版本码偏移；包名和固定签名保持不变，可覆盖使用相同证书的旧通用包。未签名构建增加 `-unsigned` 后缀。
+在线构建仅生成 ARM64-v8a 安装包 `app-release.apk`。Flutter 使用 `--target-platform android-arm64`，Android 的 `ndk.abiFilters` 同时限制插件 JNI 库，构建会核验 ZIP 中的实际架构。不使用 ABI 分包版本码偏移；包名和固定签名保持不变，可覆盖使用相同证书的旧通用包。未签名构建增加 `-unsigned` 后缀。
 
 在仓库 Settings → Secrets and variables → Actions 新建 **Repository secret** `DDNOVEL_SIGNING_JSON`，内容为完整私有 JSON。无需把密钥文件上传到仓库。
 
