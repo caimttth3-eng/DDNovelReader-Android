@@ -28,6 +28,17 @@ class PreparedReadingBook {
 
 typedef ReaderPreparationRunner = Future<PreparedReadingBook> Function(ReaderPreparationRequest request);
 
+bool _samePreparation(ReaderPreparationRequest a, ReaderPreparationRequest b) =>
+  identical(a.source, b.source) && a.merge == b.merge && a.indent == b.indent &&
+  a.filter == b.filter && a.autoExtractToc == b.autoExtractToc;
+
+class _PendingPreparation {
+  final ReaderPreparationRequest request;
+  int latestCall;
+  late final Future<PreparedReadingBook> future;
+  _PendingPreparation(this.request, this.latestCall);
+}
+
 class ReaderInitialData {
   final PreparedReadingBook prepared;
   final ReadingSettings settings;
@@ -39,12 +50,49 @@ class ReaderInitialData {
 }
 
 class ReaderPreparation {
+  static const maxCachedDisplayCharacters = BookParser.maxCachedDisplayCharacters;
   @visibleForTesting
   static ReaderPreparationRunner? runnerForTesting;
+  static (ReaderPreparationRequest, PreparedReadingBook)? _cached;
+  static final List<_PendingPreparation> _pending = [];
+  static int _latestCall = 0;
+
+  static void clearMemoryCache() {
+    ++_latestCall;
+    _cached = null;
+    _pending.clear();
+  }
 
   static Future<PreparedReadingBook> prepare(ReaderPreparationRequest request) {
+    final call = ++_latestCall;
+    final cached = _cached;
+    if (cached != null && _samePreparation(cached.$1, request)) {
+      cached.$2.attachSourceMaps();
+      return Future.value(cached.$2);
+    }
+    for (final pending in _pending) {
+      if (_samePreparation(pending.request, request)) {
+        pending.latestCall = call;
+        return pending.future;
+      }
+    }
     final runner = runnerForTesting;
-    return runner != null ? runner(request) : Isolate.run(() => prepareSynchronously(request));
+    final pending = _PendingPreparation(request, call);
+    _pending.add(pending);
+    pending.future = () async {
+      try {
+        final prepared = await (runner != null ? runner(request) : Isolate.run(() => prepareSynchronously(request)));
+        prepared.attachSourceMaps();
+        if (pending.latestCall == _latestCall && _pending.contains(pending)) {
+          _cached = request.source.totalDisplayLength + prepared.book.totalDisplayLength <= maxCachedDisplayCharacters
+            ? (request, prepared) : null;
+        }
+        return prepared;
+      } finally {
+        _pending.remove(pending);
+      }
+    }();
+    return pending.future;
   }
 
   @visibleForTesting

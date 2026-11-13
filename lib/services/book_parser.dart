@@ -12,6 +12,14 @@ import 'text_cleaner.dart';
 
 typedef _BookParseRequest = ({String id, String filePath, String title,
   BookFormat format, DateTime addedAt, TextCleaner cleaner});
+typedef _BookParseKey = ({String id, String filePath, String title,
+  BookFormat format, DateTime addedAt, int size, DateTime modified, DateTime changed});
+
+class _PendingBookParse {
+  int latestCall;
+  late final Future<Book> future;
+  _PendingBookParse(this.latestCall);
+}
 
 // Keep the worker closure outside BookParser.parse's scope: only this small
 // request crosses isolates, never an accidental caller/UI object graph.
@@ -33,9 +41,36 @@ class BookTocEntry {
 
 /// 书籍解析器：支持 TXT / EPUB / PDF / DOCX，并自动分章。
 class BookParser {
+  // A predictable upper bound rather than retaining an arbitrarily large
+  // novel after the reader is closed. This is not an exact heap-byte estimate.
+  static const maxCachedDisplayCharacters = 4000000;
   final TextCleaner _cleaner;
+  final bool _cacheEnabled;
+  static (_BookParseKey, Book)? _cached;
+  // Only active caller requests live here; completed books are bounded to one.
+  static final Map<_BookParseKey, _PendingBookParse> _pending = {};
+  static int _latestCall = 0;
 
-  BookParser({TextCleaner? cleaner}) : _cleaner = cleaner ?? const TextCleaner();
+  static bool fitsMemoryCache(Book book) => book.totalDisplayLength <= maxCachedDisplayCharacters;
+
+  BookParser({TextCleaner? cleaner}) : _cleaner = cleaner ?? const TextCleaner(),
+    _cacheEnabled = cleaner == null;
+
+  static void clearMemoryCache() {
+    ++_latestCall;
+    _cached = null;
+    _pending.clear();
+  }
+
+  static Future<_BookParseKey> _cacheKey(_BookParseRequest request) async {
+    final stat = await File(request.filePath).stat();
+    if (stat.type != FileSystemEntityType.file) {
+      throw FileSystemException('Book file is unavailable', request.filePath);
+    }
+    return (id: request.id, filePath: request.filePath, title: request.title,
+      format: request.format, addedAt: request.addedAt, size: stat.size,
+      modified: stat.modified, changed: stat.changed);
+  }
 
   /// A view over stable source coordinates. It deliberately does not regroup
   /// chapters or remove headings, preserving progress, annotations and audio.
@@ -116,12 +151,49 @@ class BookParser {
     required BookFormat format,
     required DateTime addedAt,
   }) async {
+    final call = _cacheEnabled ? ++_latestCall : -1;
+    final request = (id: id, filePath: filePath, title: title,
+      format: format, addedAt: addedAt, cleaner: _cleaner);
     try {
       // File decoding, archive/XML extraction, chapter scans and sentence
       // cleaning all run in the worker, including continuations after I/O.
       // Book is a plain Dart graph; Isolate.run transfers its result on exit.
-      return await _parseBookInBackground((id: id, filePath: filePath, title: title,
-        format: format, addedAt: addedAt, cleaner: _cleaner));
+      if (!_cacheEnabled) return await _parseBookInBackground(request);
+      final key = await _cacheKey(request);
+      final cached = _cached;
+      if (cached != null && cached.$1 == key) return cached.$2;
+      final existing = _pending[key];
+      if (existing != null) {
+        if (call > existing.latestCall) existing.latestCall = call;
+        return await existing.future;
+      }
+      final pending = _PendingBookParse(call);
+      _pending[key] = pending;
+      pending.future = () async {
+        try {
+          final book = await _parseBookInBackground(request);
+          if (book.parseOk && pending.latestCall == _latestCall &&
+              identical(_pending[key], pending)) {
+            if (!fitsMemoryCache(book)) {
+              _cached = null;
+              return book;
+            }
+            // An editor/replacement may have changed the file during parsing.
+            // The caller can use its result, but the next open must reparse.
+            try {
+              if (await _cacheKey(request) == key && pending.latestCall == _latestCall &&
+                  identical(_pending[key], pending)) _cached = (key, book);
+            } on FileSystemException {
+              // Successfully read bytes remain usable even if the source was
+              // removed before this final validation. Never retain that book.
+            }
+          }
+          return book;
+        } finally {
+          if (identical(_pending[key], pending)) _pending.remove(key);
+        }
+      }();
+      return await pending.future;
     } catch (e) {
       return Book.failed(id: id, title: title, filePath: filePath,
         format: format, addedAt: addedAt, error: e.toString());

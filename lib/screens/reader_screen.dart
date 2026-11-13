@@ -233,7 +233,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   int _playbackGeneration = 0;
   _SentenceDragSession? _sentenceDrag;
   final PlaybackNotifications _playbackNotifications = PlaybackNotifications();
-  PlaybackNotificationStatus? _notificationStatus;
   bool _notificationSettingsPending = false;
   _PlaybackPermissionGate? _permissionGate;
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
@@ -1830,7 +1829,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (state == AppLifecycleState.resumed) {
       final afterSettings = _notificationSettingsPending;
       _notificationSettingsPending = false;
-      _refreshPlaybackNotifications(afterSettings: afterSettings);
+      if (afterSettings) _refreshPlaybackNotifications(afterSettings: true);
     }
     if (state != AppLifecycleState.resumed) {
       _saveDebounce?.cancel(); _saveProgress();
@@ -1845,7 +1844,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<PlaybackNotificationCheck> _checkPlaybackNotificationPermission() async {
     final result = await _playbackNotifications.checkForPlayback(foregroundUserAction: true);
-    if (mounted) setState(() => _notificationStatus = result.status);
     return result;
   }
 
@@ -1862,7 +1860,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _refreshPlaybackNotifications({bool afterSettings = false}) async {
     final status = await _playbackNotifications.getStatus();
     if (!mounted) return;
-    setState(() => _notificationStatus = status);
     if (afterSettings) _showNotificationStatus(status);
   }
 
@@ -1873,21 +1870,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _notificationSettingsPending = false;
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(T('notificationSettingsFailed'))));
     }
-  }
-
-  Future<void> _openPlaybackNotifications() async {
-    final status = await _playbackNotifications.getStatus();
-    if (!mounted) return;
-    setState(() => _notificationStatus = status);
-    await showDialog<void>(context: context, builder: (ctx) => AlertDialog(
-      title: Text(T('playbackNotifications')),
-      content: Text(T(!status.supported ? 'playbackNotificationsUnavailable' : status.enabled
-        ? 'playbackNotificationsEnabled' : 'playbackNotificationsDisabled')),
-      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(T('cancel'))),
-        if (status.supported) TextButton(onPressed: () {
-          Navigator.pop(ctx); _openNotificationSettings();
-        }, child: Text(T('notificationSettings')))],
-    ));
   }
 
   Future<void> _openAutoPage() async {
@@ -2912,10 +2894,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                     label: T('voiceWithName', {'name': _shortVoiceLabel(_effectiveVoice)}), singleLine: true,
                     onTap: _openVoiceSelector,
                   ),
-                  _panelButton(key: const ValueKey('playback-notifications'),
-                    icon: _notificationStatus?.enabled == true ? Icons.notifications_active_outlined : Icons.notifications_none,
-                    label: T('playbackNotifications'), onTap: _openPlaybackNotifications,
-                    active: _notificationStatus?.enabled == true),
                   _panelButton(
                     icon: Icons.power_settings_new,
                     label: T('exit'),

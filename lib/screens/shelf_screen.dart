@@ -17,6 +17,14 @@ import 'about_screen.dart';
 import 'book_opening_screen.dart';
 
 /// 书架首页：顶部「多多朗读」+ ⋮ 设置(添加书籍)，4 列木纹书架，无限下滑。
+class _BookReaderRoute<T> extends MaterialPageRoute<T> {
+  _BookReaderRoute({required super.builder});
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 80);
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 80);
+}
+
 class ShelfScreen extends StatefulWidget {
   const ShelfScreen({super.key});
 
@@ -257,11 +265,12 @@ class _ShelfScreenState extends State<ShelfScreen> {
       );
       return (book, await progress);
     }
-    final route = MaterialPageRoute<void>(
+    final route = _BookReaderRoute<void>(
         builder: (_) => BookOpeningScreen(
           title: meta.title,
           loadBook: loadBook,
           storage: _storage,
+          sourceMeta: meta,
           onProgressChanged: (p) async {
             // 同步书架腰封进度
             if (mounted) {

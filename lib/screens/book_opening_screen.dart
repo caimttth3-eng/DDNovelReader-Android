@@ -8,6 +8,8 @@ import '../services/app_storage.dart';
 import '../services/app_appearance.dart';
 import '../services/display_cutout.dart';
 import '../services/reader_preparation.dart';
+import '../services/book_snapshot_cache.dart';
+import '../services/book_parser.dart';
 import 'reader_screen.dart';
 
 /// Opens the route immediately; file decoding and preparation run afterwards.
@@ -16,10 +18,13 @@ class BookOpeningScreen extends StatefulWidget {
   final String title;
   final Future<(Book, BookProgress?)> Function() loadBook;
   final AppStorage storage;
+  final BookMeta? sourceMeta;
+  @visibleForTesting
+  final BookSnapshotCache? snapshotCache;
   final Future<void> Function(BookProgress)? onProgressChanged;
 
   const BookOpeningScreen({super.key, required this.title, required this.loadBook,
-    required this.storage, this.onProgressChanged});
+    required this.storage, this.onProgressChanged, this.sourceMeta, this.snapshotCache});
 
   @override
   State<BookOpeningScreen> createState() => _BookOpeningScreenState();
@@ -47,17 +52,27 @@ class _BookOpeningScreenState extends State<BookOpeningScreen> {
     });
     final geometryFuture = DisplayCutoutService.read().catchError((Object _) => null);
     final dpr = WidgetsBinding.instance.platformDispatcher.implicitView?.devicePixelRatio ?? 1.0;
-    final loaded = await Future.wait<Object?>([Future<(Book, BookProgress?)>.sync(widget.loadBook), settingsFuture], eagerError: true);
-    final result = loaded[0] as (Book, BookProgress?);
+    var settings = ReadingSettings.fromJson(await settingsFuture);
+    if (!mounted || _leaving) throw StateError('Book opening cancelled');
+    final meta = widget.sourceMeta;
+    final snapshots = widget.snapshotCache ?? BookSnapshotCache.shared;
+    final lookup = meta == null ? null : await snapshots.lookup(meta, settings);
+    if (!mounted || _leaving) throw StateError('Book opening cancelled');
+    if (lookup?.snapshot != null) {
+      BookParser.clearMemoryCache();
+      ReaderPreparation.clearMemoryCache();
+    }
+    var cached = lookup?.snapshot?.prepared;
+    final result = lookup?.snapshot != null ? (lookup!.snapshot!.source, null as BookProgress?) : await widget.loadBook();
     if (!mounted || _leaving) throw StateError('Book opening cancelled');
     if (!result.$1.parseOk) throw StateError(result.$1.parseError ?? 'Unknown');
-    var settings = ReadingSettings.fromJson(loaded[1] as Map<String, dynamic>);
     while (mounted && !_leaving) {
       setState(() => _loadingSettings = settings);
       final key = (settings.mergeNonSentenceBreaks, settings.firstLineIndent,
         settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc);
-      final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(result.$1,
+      final prepared = cached ?? await ReaderPreparation.prepare(ReaderPreparationRequest(result.$1,
         merge: key.$1, indent: key.$2, filter: key.$3, autoExtractToc: key.$4));
+      cached = null;
       if (!mounted || _leaving) throw StateError('Book opening cancelled');
       final geometry = await geometryFuture;
       if (!mounted || _leaving) throw StateError('Book opening cancelled');
@@ -66,7 +81,14 @@ class _BookOpeningScreenState extends State<BookOpeningScreen> {
       final latestKey = (latest.mergeNonSentenceBreaks, latest.firstLineIndent,
         latest.informationFilter ? latest.informationFilterLevel : 'none', latest.autoExtractToc);
       if (latestKey != key) { settings = latest; continue; }
-      return (result.$1, ReaderInitialData(prepared: prepared, settings: latest, progress: result.$2,
+      final progress = meta == null ? result.$2 : await widget.storage.loadProgress(meta.id);
+      if (!mounted || _leaving) throw StateError('Book opening cancelled');
+      if (lookup != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          unawaited(snapshots.save(lookup, result.$1, prepared, settings: latest));
+        });
+      }
+      return (result.$1, ReaderInitialData(prepared: prepared, settings: latest, progress: progress,
         geometry: geometry, devicePixelRatio: dpr));
     }
     throw StateError('Book opening cancelled');

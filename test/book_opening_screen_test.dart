@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,7 @@ import 'package:duoduo_langdu/screens/reader_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/reading_text.dart';
 import 'package:duoduo_langdu/services/reader_preparation.dart';
+import 'package:duoduo_langdu/services/book_snapshot_cache.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
 
 class _NavigationLog extends NavigatorObserver {
@@ -26,6 +28,15 @@ class _NavigationLog extends NavigatorObserver {
 
 Book readableBook() => Book(id: 'opening-screen-test', title: '测试书籍', filePath: '', format: BookFormat.txt,
   addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [ReadingText.paragraph('正文内容。')])]);
+
+class _ReadySnapshotCache extends BookSnapshotCache {
+  final SnapshotLookup hit;
+  _ReadySnapshotCache(this.hit);
+  @override
+  Future<SnapshotLookup> lookup(BookMeta meta, ReadingSettings settings) async => hit;
+  @override
+  Future<void> save(SnapshotLookup lookup, Book source, PreparedReadingBook prepared, {ReadingSettings? settings}) async {}
+}
 
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
@@ -49,10 +60,11 @@ void main() {
   });
   tearDown(() { ReaderPreparation.runnerForTesting = null; });
 
-  Future<void> open(WidgetTester tester, _NavigationLog log, Future<(Book, BookProgress?)> Function() load) async {
+  Future<void> open(WidgetTester tester, _NavigationLog log, Future<(Book, BookProgress?)> Function() load,
+      {BookMeta? meta, BookSnapshotCache? cache}) async {
     await tester.pumpWidget(MaterialApp(navigatorObservers: [log], home: Builder(builder: (context) => Scaffold(
       body: TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => BookOpeningScreen(title: '测试书籍', loadBook: load, storage: AppStorage()))),
+        builder: (_) => BookOpeningScreen(title: '测试书籍', loadBook: load, storage: AppStorage(), sourceMeta: meta, snapshotCache: cache))),
         child: const Text('open book'))))));
     await tester.tap(find.text('open book'));
     await tester.pump();
@@ -219,5 +231,35 @@ void main() {
     prepared.complete(ReaderPreparation.prepareSynchronously(request!)); await tester.pump(); await tester.pump();
     expect(find.byType(ReaderScreen), findsNothing); expect(log.pushed, hasLength(2)); expect(log.replacements, 0);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a prepared snapshot bypasses parsing and preparation and reads current progress', (tester) async {
+    late Directory directory;
+    late BookMeta meta;
+    late SnapshotLookup hit;
+    await tester.runAsync(() async {
+      directory = await Directory.systemTemp.createTemp('opening-snapshot-');
+      final file = File('${directory.path}/book.txt'); await file.writeAsString('正文内容。');
+      meta = BookMeta(id: 'cached-opening', title: '测试书籍', filePath: file.path, format: 'txt', addedAt: DateTime(2026));
+      final source = Book(id: meta.id, title: meta.title, filePath: meta.filePath, format: BookFormat.txt,
+        addedAt: meta.addedAt, chapters: readableBook().chapters);
+      final prepared = ReaderPreparation.prepareSynchronously(ReaderPreparationRequest(source,
+        merge: true, indent: true, filter: 'none', autoExtractToc: true));
+      final cache = BookSnapshotCache(directoryPath: '${directory.path}/cache');
+      await cache.save(await cache.lookup(meta, ReadingSettings()), source, prepared);
+      hit = await cache.lookup(meta, ReadingSettings());
+    });
+    var loads = 0, preparations = 0;
+    ReaderPreparation.runnerForTesting = (_) async { preparations++; throw StateError('Unexpected preparation'); };
+    await AppStorage().saveProgress(BookProgress(bookId: meta.id, offsetInParagraph: 2, chapterAnchor: 2));
+    await open(tester, _NavigationLog(), () async { loads++; throw StateError('Unexpected parse'); },
+      meta: meta, cache: _ReadySnapshotCache(hit));
+    await tester.pump();
+    expect(loads, 0); expect(preparations, 0);
+    final reader = tester.widget<ReaderScreen>(find.byType(ReaderScreen));
+    expect(reader.initialData!.progress!.offsetInParagraph, 2);
+    expect(identical(reader.initialData!.prepared, hit.snapshot!.prepared), isTrue);
+    await tester.pumpWidget(const SizedBox()); await tester.pump();
+    await tester.runAsync(() async { await directory.delete(recursive: true); });
   });
 }

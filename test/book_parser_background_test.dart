@@ -25,8 +25,14 @@ class _WorkerProbeCleaner extends TextCleaner {
 void main() {
   late Directory directory;
   final addedAt = DateTime.utc(2026, 11, 13);
-  setUp(() async => directory = await Directory.systemTemp.createTemp('book-parser-worker-'));
-  tearDown(() async => directory.delete(recursive: true));
+  setUp(() async {
+    BookParser.clearMemoryCache();
+    directory = await Directory.systemTemp.createTemp('book-parser-worker-');
+  });
+  tearDown(() async {
+    BookParser.clearMemoryCache();
+    await directory.delete(recursive: true);
+  });
 
   Future<Book> parse(File file, {BookParser? parser}) => (parser ?? BookParser()).parse(
     id: 'worker-book', filePath: file.path, title: '后台解析',
@@ -92,5 +98,64 @@ void main() {
     expect(book.parseOk, isFalse);
     expect(book.title, '坏文件');
     expect(book.parseError, isNotEmpty);
+  });
+
+  test('default parsers share one recent book, deduplicate requests and evict older books', () async {
+    final a = await File('${directory.path}/a.txt').writeAsString('甲乙。');
+    final b = await File('${directory.path}/b.txt').writeAsString('丙丁。');
+    final simultaneous = await Future.wait([parse(a), parse(a)]);
+    expect(simultaneous[1], same(simultaneous[0]));
+    expect(await parse(a), same(simultaneous[0]));
+    final other = await parse(b);
+    expect(await parse(b), same(other));
+    expect(await parse(a), isNot(same(simultaneous[0])), reason: 'Only the last successful book stays resident');
+  });
+
+  test('stat changes and missing files cannot reuse stale books, and failures are not retained', () async {
+    final file = await File('${directory.path}/changed.txt').writeAsString('甲乙。');
+    final first = await parse(file);
+    await file.writeAsString('丙丁。');
+    await file.setLastModified(DateTime.utc(2020));
+    final changed = await parse(file);
+    expect(changed, isNot(same(first)));
+    expect(changed.chapters.single.paragraphs.single.display, '丙丁。');
+    await file.delete();
+    final failed = await parse(file);
+    expect(failed.parseOk, isFalse);
+    expect(await parse(file), isNot(same(failed)));
+    await file.writeAsString('重新出现的正文。');
+    final restored = await parse(file);
+    expect(restored.parseOk, isTrue);
+    expect(restored.chapters.single.paragraphs.single.display, '重新出现的正文。');
+    final renamed = await BookParser().parse(id: 'worker-book', filePath: file.path,
+      title: '新书名', format: BookFormat.txt, addedAt: addedAt);
+    expect(renamed, isNot(same(restored)));
+    expect(renamed.title, '新书名');
+  });
+
+  test('clear and newer requests prevent older in-flight results taking over the cache', () async {
+    final a = await File('${directory.path}/old.txt').writeAsString('旧正文。');
+    final b = await File('${directory.path}/new.txt').writeAsString('新正文。');
+    final beforeClear = parse(a);
+    BookParser.clearMemoryCache();
+    final invalidated = await beforeClear;
+    expect(await parse(a), isNot(same(invalidated)));
+    BookParser.clearMemoryCache();
+    final oldRequest = parse(a), newRequest = parse(b);
+    await oldRequest;
+    final newest = await newRequest;
+    expect(await parse(b), same(newest));
+  });
+
+  test('custom cleaners bypass and do not replace the shared default cache', () async {
+    final file = await File('${directory.path}/custom.txt').writeAsString('原文。');
+    final original = await parse(file);
+    final messages = ReceivePort();
+    addTearDown(messages.close);
+    final started = messages.first;
+    final custom = await parse(file, parser: BookParser(cleaner: _WorkerProbeCleaner(messages.sendPort)));
+    expect(await started, 'book-parser');
+    expect(custom, isNot(same(original)));
+    expect(await parse(file), same(original));
   });
 }

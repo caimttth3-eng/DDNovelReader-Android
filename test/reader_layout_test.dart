@@ -320,9 +320,10 @@ void main() {
     expect((await AppStorage().loadSettings())['firstLineIndent'], isFalse);
     tester.widget<SwitchListTile>(indent).onChanged!(true); await tester.pumpAndSettle();
     final filter = find.byKey(const ValueKey('information-filter'));
-    expect(tester.widget<SwitchListTile>(filter).value, isFalse);
+    expect(tester.widget<SwitchListTile>(filter).value, isTrue);
+    tester.widget<SwitchListTile>(filter).onChanged!(false); await tester.pumpAndSettle();
     tester.widget<SwitchListTile>(filter).onChanged!(true); await tester.pumpAndSettle();
-    expect((await AppStorage().loadSettings())['informationFilterLevel'], 'none', reason: 'The user chooses a level');
+    expect((await AppStorage().loadSettings())['informationFilterLevel'], 'links', reason: 'Level one is selected by default');
     final radios = find.byType(RadioListTile<String>);
     expect(radios, findsNWidgets(3));
     tester.widget<RadioListTile<String>>(radios.first).onChanged!('links'); await tester.pumpAndSettle();
@@ -842,22 +843,21 @@ void main() {
       expect(requests, 1); expect(speech.state, TtsState.playing);
       expect(speech.startCalls, 1, reason: 'Denying notification permission must not block reading');
       expect(find.text(grant ? '播放通知已开启' : '播放通知未开启，仍可继续朗读。可在系统设置中开启。'), findsOneWidget);
+      expect(find.byKey(const ValueKey('playback-notifications')), findsNothing);
+      if (!grant) {
+        await tester.tap(find.text('打开设置')); await tester.pumpAndSettle();
+        expect(settingsOpened, 1);
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+        enabled = true;
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+        expect(find.text('播放通知已开启'), findsOneWidget,
+          reason: 'The permission-result settings action still refreshes status after returning');
+      }
       ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
       await tester.pumpAndSettle();
       await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('playback-notifications'))); await tester.pumpAndSettle();
-      final dialog = find.byType(AlertDialog);
-      expect(find.descendant(of: dialog, matching: find.text(grant ? '播放通知已开启' :
-        '播放通知未开启，仍可继续朗读。可在系统设置中开启。')), findsOneWidget);
-      await tester.tap(find.descendant(of: dialog, matching: find.text('打开设置'))); await tester.pumpAndSettle();
-      expect(settingsOpened, 1);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
-      enabled = true;
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
-      final statusIcon = tester.widget<Icon>(find.descendant(
-        of: find.byKey(const ValueKey('playback-notifications')), matching: find.byType(Icon)));
-      expect(statusIcon.icon, Icons.notifications_active_outlined,
-        reason: 'Returning from system settings refreshes the current status');
+      expect(find.byKey(const ValueKey('playback-notifications')), findsNothing);
+      expect(settingsOpened, grant ? 0 : 1);
       expect(requests, 1);
       ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
       await tester.pumpAndSettle();
@@ -1745,7 +1745,7 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    final settings = ReadingSettings()..pageTurnMode = 'scroll'..informationFilterLevel = 'ads';
+    final settings = ReadingSettings()..pageTurnMode = 'scroll'..informationFilter = false..informationFilterLevel = 'ads';
     await storage.saveSettings(settings.toJson());
     final book = Book(id: 'filter-position', title: 'filter', filePath: '', format: BookFormat.txt,
       addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: List.generate(30, (p) => Paragraph(

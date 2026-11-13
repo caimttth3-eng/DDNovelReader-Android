@@ -120,8 +120,8 @@ class ReadingSettings {
   bool firstLineIndent = true;
   bool autoExtractToc = true;
   bool wordHighlightEnabled = false;
-  bool informationFilter = false;
-  String informationFilterLevel = 'none';
+  bool informationFilter = true;
+  String informationFilterLevel = 'links';
   double fontSize = 20.0;
   double lineHeight = 1.6;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
@@ -174,9 +174,12 @@ class ReadingSettings {
     s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;
     s.autoExtractToc = json['autoExtractToc'] is bool ? json['autoExtractToc'] as bool : true;
     s.wordHighlightEnabled = json['wordHighlightEnabled'] is bool ? json['wordHighlightEnabled'] as bool : false;
-    s.informationFilter = json['informationFilter'] as bool? ?? false;
     final level = json['informationFilterLevel'];
-    s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'none';
+    // Older releases persisted false+none for their default. Once migrated,
+    // turning filtering off stores false+links and remains an explicit choice.
+    final legacyDefault = json['informationFilter'] == false && (level == null || level == 'none');
+    s.informationFilter = legacyDefault || (json['informationFilter'] as bool? ?? true);
+    s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'links';
     s.fontSize = ((json['fontSize'] as num?)?.toDouble() ?? s.fontSize).clamp(14, 64);
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
     s.speechRate = ((json['speechRate'] as num?)?.toDouble() ?? s.speechRate).clamp(0.5, 3.0);

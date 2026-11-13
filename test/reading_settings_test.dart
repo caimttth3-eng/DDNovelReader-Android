@@ -4,6 +4,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('level-one filtering defaults migrate old defaults while explicit disables survive', () {
+    for (final json in <Map<String, dynamic>>[{}, {'informationFilter': false, 'informationFilterLevel': 'none'},
+      {'informationFilter': false}, {'informationFilter': true, 'informationFilterLevel': 'none'}]) {
+      final migrated = ReadingSettings.fromJson(json);
+      expect(migrated.informationFilter, isTrue); expect(migrated.informationFilterLevel, 'links');
+    }
+    for (final level in ['links', 'ads', 'extra']) {
+      final disabled = ReadingSettings.fromJson({'informationFilter': false, 'informationFilterLevel': level});
+      expect(disabled.informationFilter, isFalse); expect(disabled.informationFilterLevel, level);
+      expect(ReadingSettings.fromJson(disabled.toJson()).informationFilter, isFalse);
+    }
+    final migrated = ReadingSettings.fromJson({'informationFilter': false, 'informationFilterLevel': 'none'});
+    migrated.informationFilter = false;
+    expect(ReadingSettings.fromJson(migrated.toJson()).informationFilter, isFalse,
+      reason: 'Migration must not repeatedly override a later explicit off choice');
+  });
   test('reading defaults and selected modes survive restart', () {
     final settings = ReadingSettings();
     expect(settings.pageTurnMode, 'tap');
@@ -11,8 +27,8 @@ void main() {
     expect(settings.mergeNonSentenceBreaks, isTrue);
     expect(settings.firstLineIndent, isTrue);
     expect(settings.autoExtractToc, isTrue);
-    expect(settings.informationFilter, isFalse);
-    expect(settings.informationFilterLevel, 'none');
+    expect(settings.informationFilter, isTrue);
+    expect(settings.informationFilterLevel, 'links');
     expect(settings.prefetchSentences, 8);
     expect(settings.systemFallbackActive, isFalse);
     expect(settings.themeMode, 'system');

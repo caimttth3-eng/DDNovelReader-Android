@@ -7,6 +7,9 @@ import 'screens/shelf_screen.dart';
 import 'services/font_manager.dart';
 import 'services/app_appearance.dart';
 import 'services/app_storage.dart';
+import 'services/book_parser.dart';
+import 'services/book_snapshot_cache.dart';
+import 'services/reader_preparation.dart';
 import 'services/tts_audio_handler.dart';
 
 Future<void> main() async {
@@ -63,6 +66,13 @@ class _DuoduoLangduAppState extends State<DuoduoLangduApp> with WidgetsBindingOb
   @override
   void didChangePlatformBrightness() {
     AppAppearance.updateSystemBrightness(WidgetsBinding.instance.platformDispatcher.platformBrightness);
+  }
+
+  @override
+  void didHaveMemoryPressure() {
+    BookParser.clearMemoryCache();
+    ReaderPreparation.clearMemoryCache();
+    BookSnapshotCache.shared.clearMemoryCache();
   }
 
   @override
