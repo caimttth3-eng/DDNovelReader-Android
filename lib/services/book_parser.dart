@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -8,6 +9,18 @@ import 'package:xml/xml.dart';
 import '../models/book.dart';
 import 'chapterizer.dart';
 import 'text_cleaner.dart';
+
+typedef _BookParseRequest = ({String id, String filePath, String title,
+  BookFormat format, DateTime addedAt, TextCleaner cleaner});
+
+// Keep the worker closure outside BookParser.parse's scope: only this small
+// request crosses isolates, never an accidental caller/UI object graph.
+Future<Book> _parseBookInBackground(_BookParseRequest request) => Isolate.run(
+  () => BookParser(cleaner: request.cleaner)._parseFile(
+    id: request.id, filePath: request.filePath, title: request.title,
+    format: request.format, addedAt: request.addedAt),
+  debugName: 'book-parser',
+);
 
 class BookTocEntry {
   final String title;
@@ -97,6 +110,25 @@ class BookParser {
 
   /// 解析文件
   Future<Book> parse({
+    required String id,
+    required String filePath,
+    required String title,
+    required BookFormat format,
+    required DateTime addedAt,
+  }) async {
+    try {
+      // File decoding, archive/XML extraction, chapter scans and sentence
+      // cleaning all run in the worker, including continuations after I/O.
+      // Book is a plain Dart graph; Isolate.run transfers its result on exit.
+      return await _parseBookInBackground((id: id, filePath: filePath, title: title,
+        format: format, addedAt: addedAt, cleaner: _cleaner));
+    } catch (e) {
+      return Book.failed(id: id, title: title, filePath: filePath,
+        format: format, addedAt: addedAt, error: e.toString());
+    }
+  }
+
+  Future<Book> _parseFile({
     required String id,
     required String filePath,
     required String title,

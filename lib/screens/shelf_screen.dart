@@ -14,7 +14,7 @@ import '../services/tts_cache_store.dart';
 import '../services/updater.dart';
 import '../widgets/stable_system_bar_safe_area.dart';
 import 'about_screen.dart';
-import 'reader_screen.dart';
+import 'book_opening_screen.dart';
 
 /// 书架首页：顶部「多多朗读」+ ⋮ 设置(添加书籍)，4 列木纹书架，无限下滑。
 class ShelfScreen extends StatefulWidget {
@@ -242,34 +242,26 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   Future<void> _openBook(BookMeta meta) async {
-    final book = await _parser.parse(
-      id: meta.id,
-      filePath: meta.filePath,
-      title: meta.title,
-      format: BookFormat.values.firstWhere(
-        (f) => f.name == meta.format,
-        orElse: () => BookFormat.txt,
-      ),
-      addedAt: meta.addedAt,
-    );
-    if (!mounted) return;
-    if (!book.parseOk) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            T('parseFail', {'err': book.parseError ?? 'Unknown'}),
-          ),
+    if (_readerRouteOpen) return;
+    Future<(Book, BookProgress?)> loadBook() async {
+      final progress = _storage.loadProgress(meta.id);
+      final book = await _parser.parse(
+        id: meta.id,
+        filePath: meta.filePath,
+        title: meta.title,
+        format: BookFormat.values.firstWhere(
+          (f) => f.name == meta.format,
+          orElse: () => BookFormat.txt,
         ),
+        addedAt: meta.addedAt,
       );
-      return;
+      return (book, await progress);
     }
-    final saved = await _storage.loadProgress(meta.id);
-    if (!mounted) return;
     final route = MaterialPageRoute<void>(
-        builder: (_) => ReaderScreen(
-          book: book,
+        builder: (_) => BookOpeningScreen(
+          title: meta.title,
+          loadBook: loadBook,
           storage: _storage,
-          initialProgress: saved,
           onProgressChanged: (p) async {
             // 同步书架腰封进度
             if (mounted) {

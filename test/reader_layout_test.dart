@@ -20,6 +20,7 @@ import 'package:duoduo_langdu/services/playback_notifications.dart';
 import 'package:duoduo_langdu/services/display_cutout.dart';
 import 'package:duoduo_langdu/services/network_connectivity.dart';
 import 'package:duoduo_langdu/services/reading_text.dart';
+import 'package:duoduo_langdu/services/reader_preparation.dart';
 import 'package:duoduo_langdu/services/book_cache_task.dart';
 import 'package:duoduo_langdu/services/tts_cache_store.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
@@ -32,6 +33,7 @@ void main() {
   final volumeCalls = <MethodCall>[];
   final platformCalls = <MethodCall>[];
   setUp(() {
+    ReaderPreparation.runnerForTesting = (request) async => ReaderPreparation.prepareSynchronously(request);
     SharedPreferences.setMockInitialValues({'duoduo.settings.v1': jsonEncode({'brightness': 1.0, 'autoPageSeconds': 2, 'wordHighlightEnabled': true})});
     AppAppearance.updateSystemBrightness(Brightness.light);
     AppAppearance.setThemeMode('system');
@@ -54,6 +56,7 @@ void main() {
       return null;
     });
   });
+  tearDown(() { ReaderPreparation.runnerForTesting = null; });
 
   testWidgets('reader, contents and shelf fit phone layouts', (tester) async {
     tester.view.devicePixelRatio = 1;
@@ -1586,6 +1589,20 @@ void main() {
     expect(platformCalls.skip(afterPop).where((call) => call.method == 'SystemChrome.setEnabledSystemUIMode' &&
       call.arguments == 'SystemUiMode.immersiveSticky'), isEmpty);
     expect(find.byType(ReaderScreen), findsNothing); expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pending initial preparation leaves loading responsive and late completion cannot reopen disposed reader', (tester) async {
+    final pending = Completer<PreparedReadingBook>();
+    ReaderPreparationRequest? request;
+    ReaderPreparation.runnerForTesting = (value) { request = value; return pending.future; };
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('pending-preparation'), storage: AppStorage(), ttsReader: speech)));
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(request, isNotNull); expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byKey(const ValueKey('reader-body')), findsNothing); expect(speech.startCalls, 0);
+    await tester.pumpWidget(const SizedBox()); await tester.pump();
+    pending.complete(ReaderPreparation.prepareSynchronously(request!)); await tester.pumpAndSettle();
+    expect(find.byType(ReaderScreen), findsNothing); expect(speech.startCalls, 0); expect(tester.takeException(), isNull);
   });
 
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {

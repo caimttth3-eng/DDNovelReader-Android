@@ -10,6 +10,10 @@ import 'chapterizer.dart';
 class ReadingText {
   static final _maps = Expando<List<List<List<int>>>>();
   static final _spaces = RegExp(r'\s');
+  /// Transfer this explicit map with a prepared book across an isolate boundary;
+  /// Expando associations themselves belong to the isolate that created them.
+  static List<List<List<int>>> sourceMapsForTransfer(Book book) => _maps[book]!;
+  static void attachSourceMaps(Book book, List<List<List<int>>> maps) { _maps[book] = maps; }
   static final _end = RegExp(r'''[。！？!?；;.…][”’」』）》）\]"']*$''');
   static final _speechDash = RegExp(r'[\u2014\u2015]+');
   static final _speechSentence = RegExp(r'''[^。！？!?；;\n]+(?:[。！？!?；;]+[”’」』）》）\]"']*)?''');

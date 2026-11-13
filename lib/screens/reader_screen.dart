@@ -12,6 +12,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../i18n.dart';
 import '../services/app_appearance.dart';
 import '../services/reading_text.dart';
+import '../services/reader_preparation.dart';
 import '../services/book_parser.dart';
 import '../services/reader_typography.dart';
 import '../services/text_cleaner.dart';
@@ -303,9 +304,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _tts.onError = _onTtsError;
     _tts.onLoadingChanged = (loading) { if (mounted && _inReadingMode && _ttsLoading != loading) setState(() => _ttsLoading = loading); };
     _book = widget.book;
-    _items = _flatten(_book);
-    _initLocate();
-    _initCharPrefix();
+    _items = [];
     _itemPositionsListener.itemPositions.addListener(_onScroll);
     // 绑定全局 audio_service 回调（耳机播放键）
     globalAudioHandler?.onPlayRequested = _onHeadsetPlay;
@@ -504,10 +503,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   void _formatBook() {
     _textSignature = _formatSignature(_settings);
-    _book = ReadingText.format(widget.book, merge: _settings.mergeNonSentenceBreaks,
+    final book = ReadingText.format(widget.book, merge: _settings.mergeNonSentenceBreaks,
       indent: _settings.firstLineIndent,
       filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none');
-    _cacheFingerprint = 'words1-${ReadingText.fingerprint(_book)}';
+    _installFormattedBook(book, 'words1-${ReadingText.fingerprint(book)}');
+    _rebuildToc();
+  }
+
+  void _installFormattedBook(Book book, String fingerprint) {
+    _book = book; _cacheFingerprint = fingerprint;
     _wordMapKey = ''; _wordMap = null; _wordStart = -1; _wordEnd = -1;
     _items = _flatten(_book);
     _paragraphKeys.clear();
@@ -516,7 +520,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _sentenceRecognizers.clear();
     _pendingScrollIndex = null;
     _initLocate(); _initCharPrefix();
-    _rebuildToc();
   }
 
   void _rebuildToc() {
@@ -574,10 +577,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _loadSettings() async {
     final raw = await widget.storage.loadSettings();
-    await _viewportReady;
     if (!mounted || _leavingReader) return;
     _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(raw));
-    _formatBook();
+    final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
+      merge: _settings.mergeNonSentenceBreaks, indent: _settings.firstLineIndent,
+      filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none',
+      autoExtractToc: _settings.autoExtractToc));
+    await _viewportReady;
+    if (!mounted || _leavingReader) return;
+    prepared.attachSourceMaps();
+    _textSignature = _formatSignature(_settings);
+    _installFormattedBook(prepared.book, prepared.fingerprint);
+    _toc = prepared.toc; _tocAnchors = prepared.tocAnchors; _tocIsChapterTitle = prepared.chapterTitles;
+    _settings = AppAppearance.applyCurrentMode(_settings);
     AppAppearance.nightMode.value = _isNight;
     _applyReaderBrightness();
     if (_settings.automaticBrightness) _syncSystemBrightness();
@@ -1344,6 +1356,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   // Skip chapter headings and empty sentences, including at chapter boundaries.
   void _moveSentence(int direction) {
+    if (!_settingsLoaded) return;
     _cancelSentenceDrag();
     if (_ttsLoading || _paging || _items.isEmpty) return;
     var c = _chapter, p = _para, sentence = max(0, _ttsSentence) + direction;
@@ -1547,6 +1560,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 进入朗读模式：全屏隐藏UI，开始TTS播放
   Future<void> _play({bool requestNotificationPermission = false}) async {
+    if (!_settingsLoaded) return;
     if (_inReadingMode) return;
     if (requestNotificationPermission && !_volumeForeground) return;
     final generation = ++_playbackGeneration;

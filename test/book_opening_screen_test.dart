@@ -1,0 +1,150 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:duoduo_langdu/models/book.dart';
+import 'package:duoduo_langdu/models/progress.dart';
+import 'package:duoduo_langdu/screens/book_opening_screen.dart';
+import 'package:duoduo_langdu/screens/reader_screen.dart';
+import 'package:duoduo_langdu/services/app_storage.dart';
+import 'package:duoduo_langdu/services/reading_text.dart';
+import 'package:duoduo_langdu/services/reader_preparation.dart';
+
+class _NavigationLog extends NavigatorObserver {
+  final pushed = <Route<dynamic>>[];
+  final popped = <Route<dynamic>>[];
+  var replacements = 0;
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) { pushed.add(route); }
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) { popped.add(route); }
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) { replacements++; }
+}
+
+Book readableBook() => Book(id: 'opening-screen-test', title: '测试书籍', filePath: '', format: BookFormat.txt,
+  addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [ReadingText.paragraph('正文内容。')])]);
+
+void main() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  final messenger = binding.defaultBinaryMessenger;
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    ReaderPreparation.runnerForTesting = (request) async => ReaderPreparation.prepareSynchronously(request);
+    for (final name in ['com.ddnovelreader/volume_keys', 'com.ddnovelreader/debug_log',
+      'com.ddnovelreader/notifications', 'com.ddnovelreader/display_cutout', 'com.ddnovelreader/network',
+      'xyz.luan/audioplayers.global', 'xyz.luan/audioplayers.global/events']) {
+      messenger.setMockMethodCallHandler(MethodChannel(name), (_) async => null);
+    }
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (_) async => null);
+    messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers'), (call) async {
+      if (call.method == 'create') {
+        messenger.setMockMethodCallHandler(MethodChannel('xyz.luan/audioplayers/events/${(call.arguments as Map)['playerId']}'), (_) async => null);
+      }
+      return null;
+    });
+  });
+  tearDown(() { ReaderPreparation.runnerForTesting = null; });
+
+  Future<void> open(WidgetTester tester, _NavigationLog log, Future<(Book, BookProgress?)> Function() load) async {
+    await tester.pumpWidget(MaterialApp(navigatorObservers: [log], home: Builder(builder: (context) => Scaffold(
+      body: TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => BookOpeningScreen(title: '测试书籍', loadBook: load, storage: AppStorage()))),
+        child: const Text('open book'))))));
+    await tester.tap(find.text('open book'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+  }
+
+  testWidgets('opening a pending book immediately provides its title, progress and back button', (tester) async {
+    final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
+    var loads = 0;
+    await open(tester, log, () { loads++; return pending.future; });
+    expect(find.text('测试书籍'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(BackButton), findsOneWidget);
+    expect(loads, 1);
+    expect(log.pushed, hasLength(2));
+    await tester.tap(find.byType(BackButton));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    pending.complete((readableBook(), null)); await tester.pump();
+  });
+
+  testWidgets('a late successful load cannot reopen the reader after returning', (tester) async {
+    final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
+    await open(tester, log, () => pending.future);
+    await tester.tap(find.byType(BackButton));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('open book'), findsOneWidget);
+    pending.complete((readableBook(), null));
+    await tester.pump(); await tester.pump();
+    expect(find.byType(ReaderScreen), findsNothing);
+    expect(find.byType(BookOpeningScreen), findsNothing);
+    expect(log.pushed, hasLength(2));
+    expect(log.popped, hasLength(1));
+    expect(log.replacements, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a load exception remains on the same route and offers a working back button', (tester) async {
+    final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
+    await open(tester, log, () => pending.future);
+    pending.completeError(StateError('file decoding failed'));
+    await tester.pump(); await tester.pump();
+    expect(find.textContaining('file decoding failed'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text('测试书籍'), findsOneWidget);
+    expect(log.pushed, hasLength(2)); expect(log.replacements, 0);
+    await tester.tap(find.byType(BackButton));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('open book'), findsOneWidget);
+  });
+
+  testWidgets('a result arriving during the reverse transition cannot start the reader', (tester) async {
+    final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
+    final systemUiCalls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async { systemUiCalls.add(call); return null; });
+    await open(tester, log, () => pending.future);
+    await tester.tap(find.byType(BackButton));
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(find.byType(BookOpeningScreen), findsOneWidget, reason: 'The popped route is still animating out');
+    pending.complete((readableBook(), null));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 16));
+    expect(find.byType(ReaderScreen), findsNothing);
+    expect(systemUiCalls.where((call) => call.method == 'SystemChrome.setEnabledSystemUIMode'), isEmpty);
+    expect(log.pushed, hasLength(2)); expect(log.popped, hasLength(1));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('open book'), findsOneWidget);
+  });
+
+  testWidgets('a parser failure displays its error without creating another route', (tester) async {
+    final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
+    await open(tester, log, () => pending.future);
+    pending.complete((Book.failed(id: 'failed', title: '测试书籍', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), error: 'unsupported file'), null));
+    await tester.pump(); await tester.pump();
+    expect(find.textContaining('unsupported file'), findsOneWidget);
+    expect(find.byType(ReaderScreen), findsNothing);
+    expect(log.pushed, hasLength(2)); expect(log.replacements, 0);
+    await tester.tap(find.byType(BackButton));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('open book'), findsOneWidget);
+  });
+
+  testWidgets('successful loading builds the reader inside the original opening route', (tester) async {
+    final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
+    await open(tester, log, () => pending.future);
+    final openingRoute = log.pushed.last;
+    pending.complete((readableBook(), null));
+    await tester.pump(); await tester.pump();
+    expect(find.byType(BookOpeningScreen), findsOneWidget);
+    expect(find.byType(ReaderScreen), findsOneWidget);
+    expect(log.pushed, hasLength(2));
+    expect(identical(log.pushed.last, openingRoute), isTrue);
+    expect(log.replacements, 0);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+}
