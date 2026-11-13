@@ -117,6 +117,7 @@ class _ReaderGesturesState extends State<ReaderGestures> with WidgetsBindingObse
         widget.onPreviousPage();
       }
     } else {
+      if (!widget.sentenceSwipesEnabled) return;
       if (delta.dy.abs() < _threshold) return;
       if (delta.dy < 0) {
         widget.onPreviousSentence();
@@ -127,9 +128,7 @@ class _ReaderGesturesState extends State<ReaderGestures> with WidgetsBindingObse
   }
 
   @override
-  Widget build(BuildContext context) => Listener(
-      onPointerCancel: (_) { _panValid = false; _endLong(true); _distance = Offset.zero; },
-      child: GestureDetector(
+  Widget build(BuildContext context) => GestureDetector(
         behavior: HitTestBehavior.translucent,
         dragStartBehavior: DragStartBehavior.down,
         onTapUp: widget.onTapUp,
@@ -141,6 +140,12 @@ class _ReaderGesturesState extends State<ReaderGestures> with WidgetsBindingObse
         onHorizontalDragUpdate: widget.enabled && !widget.sentenceSwipesEnabled ? _movePan : null,
         onHorizontalDragEnd: widget.enabled && !widget.sentenceSwipesEnabled ? _finish : null,
         onHorizontalDragCancel: widget.enabled && !widget.sentenceSwipesEnabled ? () { _panValid = false; _distance = Offset.zero; } : null,
-        child: widget.child,
-      ));
+        // Handle cancellation before the recognizer's parent pointer listener:
+        // an accepted drag may otherwise report onEnd for PointerCancelEvent.
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerCancel: (_) { _panValid = false; _endLong(true); _distance = Offset.zero; },
+          child: widget.child,
+        ),
+      );
 }
