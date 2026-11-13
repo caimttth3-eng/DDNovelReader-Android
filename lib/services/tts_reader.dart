@@ -101,6 +101,7 @@ class TtsReader {
   String get voice => _voice;
   int get currentWordStart => _lastWordStart;
   int get currentWordEnd => _lastWordEnd;
+  int get currentTtsOffset => usesSystemVoice ? _systemResumeOffset : 0;
   int get prefetchSentences => _prefetchSentences;
 
   /// Restore the saved effective mode after restoring the selected voice.
@@ -249,6 +250,16 @@ class TtsReader {
     _position = Duration.zero; _resumePosition = Duration.zero; _systemResumeOffset = 0;
   }
 
+  int _systemOffset(int sentence, int requested) {
+    if (!usesSystemVoice || _sentences[sentence].isEmpty) return 0;
+    final text = _sentences[sentence];
+    var offset = requested.clamp(0, text.length - 1);
+    final code = text.codeUnitAt(offset);
+    if (offset > 0 && code >= 0xDC00 && code <= 0xDFFF &&
+      text.codeUnitAt(offset - 1) >= 0xD800 && text.codeUnitAt(offset - 1) <= 0xDBFF) offset--;
+    return offset;
+  }
+
   void _emitWord(int start, int end) {
     _lastWordStart = start; _lastWordEnd = end;
     onWordChanged?.call(start, end);
@@ -285,7 +296,8 @@ class TtsReader {
   /// [offsets]：与 [sentences] 等长的章内 tts 字符偏移列表；长度不符则禁用缓存。
   /// [chapterIndex]：章节索引，缓存坐标的一部分。
   Future<void> start(List<String> sentences,
-      {List<int>? offsets, List<int>? pauseAfterMilliseconds, int chapterIndex = 0, int from = 0}) async {
+      {List<int>? offsets, List<int>? pauseAfterMilliseconds, int chapterIndex = 0, int from = 0,
+      int initialTtsOffset = 0}) async {
     if (sentences.isEmpty) {
       final stopping = _stopInternal();
       final generation = _playGeneration;
@@ -317,7 +329,7 @@ class TtsReader {
     _prefetchIndex = _index - 1;
     _prefetchCompletes = 0;
     _setState(TtsState.playing);
-    await _playCurrent();
+    await _playCurrent(initialTtsOffset: initialTtsOffset);
   }
 
   /// 暂停（暂停音频播放，保留进度）
@@ -394,19 +406,20 @@ class TtsReader {
   }
 
   /// 跳到指定句子继续朗读
-  Future<void> jumpTo(int sentenceIndex) async {
+  Future<void> jumpTo(int sentenceIndex, {int ttsOffset = 0}) async {
     if (sentenceIndex < 0 || sentenceIndex >= _sentences.length) return;
     final stopping = _stopInternal();
     final generation = _playGeneration;
     await stopping;
     if (_disposed || generation != _playGeneration) return;
     _index = sentenceIndex;
+    _systemResumeOffset = _systemOffset(sentenceIndex, ttsOffset);
     onSentenceChanged?.call(_index);
     if (_state == TtsState.playing) {
       _prefetchCache.clear();
       _prefetchIndex = _index - 1;
       _prefetchCompletes = 0;
-      await _playCurrent();
+      await _playCurrent(initialTtsOffset: ttsOffset);
     }
   }
 
@@ -506,7 +519,7 @@ class TtsReader {
 
   /// 播放当前句（优先用预取缓存，否则查盘/现合成）。
   /// 返回 true=已进入播放；false=失败或章节结束（失败时会先触发 onError）。
-  Future<bool> _playCurrent({bool continueSentence = false}) async {
+  Future<bool> _playCurrent({bool continueSentence = false, int initialTtsOffset = 0}) async {
     if (_disposed) return false;
     if (_state != TtsState.playing) return false;
     if (_index < 0 || _index >= _sentences.length) {
@@ -519,6 +532,7 @@ class TtsReader {
     _activeAudioIndex = -1; _activeWords = [];
     if (!continueSentence) {
       _clearResume();
+      _systemResumeOffset = _systemOffset(sentence, initialTtsOffset);
       _emitWord(-1, -1);
       onSentenceChanged?.call(_index);
     }
@@ -526,7 +540,7 @@ class TtsReader {
     if (usesSystemVoice) {
       try {
         await _system.speak(_sentences[sentence], _speechRate,
-          startOffset: continueSentence ? _systemResumeOffset : 0,
+          startOffset: _systemResumeOffset,
           onDone: () {
             if (_disposed || generation != _playGeneration || _state != TtsState.playing) return;
             _sentenceFinished();

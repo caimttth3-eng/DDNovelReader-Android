@@ -493,7 +493,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     var anchor = ReadingText.anchor(_book, c, _para, _wordStart >= 0 && _inReadingMode ? _wordStart :
       _ttsSentence >= 0 && _ttsSentence < _book.chapters[c].paragraphs[_para].sentences.length
         ? _book.chapters[c].paragraphs[_para].sentences[_ttsSentence].displayStart : 0);
-    if (!_inReadingMode) {
+    if (!_inReadingMode && _pendingScrollIndex == null) {
       final top = _captureLineAnchor();
       if (top != null) { c = top.chapter; anchor = top.source; }
     }
@@ -513,7 +513,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _pageEndKey = null;
     if (_tocIsChapterTitle[index]) {
       _jumpToItem(_chapterItem(c), animate: false);
-      if (_inReadingMode) _ttsFollowSeek(c, p, sentence);
+      if (_inReadingMode) _ttsFollowSeek(c, p, sentence, displayOffset: entry.displayOffset);
       _updateMediaChapter(c); _scheduleSave(); return;
     }
     final before = _navigationGeneration;
@@ -522,7 +522,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final glyph = _ttsGlyphRect(c, p, entry.displayOffset);
     if (glyph != null) await _pageScrollController.animateScroll(offset: glyph.top, duration: const Duration(milliseconds: 1));
     if (!mounted) return;
-    if (_inReadingMode) _ttsFollowSeek(c, p, sentence);
+    if (_inReadingMode) _ttsFollowSeek(c, p, sentence, displayOffset: entry.displayOffset);
     _updateMediaChapter(c); _scheduleSave();
   }
 
@@ -1204,7 +1204,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _pageAnimation.value = 0;
       setState(() => _pageReady = true);
       await _pageAnimation.forward().orCancel;
-      if (mounted && _inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence));
+      if (mounted && _inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence),
+        displayOffset: _visibleDisplayOffset(_chapter, _para));
       return true;
     } on TickerCanceled {
       return false;
@@ -1471,6 +1472,26 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       render.getPositionForOffset(Offset(0, y)).offset, lineBreakAt: _lineBreakFor(it.chapterIndex, it.paragraphIndex));
   }
 
+  int _visibleDisplayOffset(int c, int p) {
+    final positions = _visibleItems().where((position) => position.index == _itemIndexOf(c, p));
+    return positions.isEmpty ? 0 : _visibleOffset(positions.first);
+  }
+
+  int _sentenceTtsOffset(int c, int p, int s, int? displayOffset) {
+    if (!_tts.usesSystemVoice || displayOffset == null) return 0;
+    final sentence = _book.chapters[c].paragraphs[p].sentences[s];
+    final relative = max(0, displayOffset - sentence.displayStart);
+    final map = const TextCleaner().clean(sentence.display);
+    var offset = 0;
+    while (offset < map.tts.length && map.displayOffsetOfTts(offset) < relative) { offset++; }
+    return offset.clamp(0, max(0, sentence.tts.length - 1));
+  }
+
+  int _sentenceDisplayOffset(int c, int p, int s, int ttsOffset) {
+    final sentence = _book.chapters[c].paragraphs[p].sentences[s];
+    return sentence.displayStart + const TextCleaner().clean(sentence.display).displayOffsetOfTts(ttsOffset);
+  }
+
   void _startTtsLoading() { if (mounted) setState(() => _ttsLoading = true); }
   void _stopTtsLoading() { if (mounted && _ttsLoading) setState(() => _ttsLoading = false); }
 
@@ -1519,7 +1540,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _showGestureTip();
     // 从视口当前句子开始朗读（合成首句期间显示 loading）
     _startTtsLoading();
-    await _startTtsFrom(startC, startP, startS);
+    await _startTtsFrom(startC, startP, startS, displayOffset: _visibleDisplayOffset(startC, startP));
     if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
     _stopTtsLoading();
   }
@@ -1909,23 +1930,24 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 播放中：跨章重新加载整章，同章 jumpTo 当前句
   /// 暂停/未播放：只更新阅读位置，不触发播放；跨章时保持 _ttsChapter
   /// 不变，恢复播放时由 _resumeReading 检测到不一致而重新加载
-  void _ttsFollowSeek(int c, int p, int s) {
+  void _ttsFollowSeek(int c, int p, int s, {int? displayOffset}) {
     if (c < 0 || c >= _book.chapters.length) return;
     _updateMediaChapter(c);
+    final offset = _sentenceTtsOffset(c, p, s, displayOffset);
     if (_tts.state == TtsState.paused || !_isPlaying) {
       if (c == _ttsChapter) {
-        _tts.jumpTo(_chapterSentenceStart(c, p) + s); // 同章：更新待播索引
+        _tts.jumpTo(_chapterSentenceStart(c, p) + s, ttsOffset: offset);
       }
       return;
     }
     if (c != _ttsChapter) {
-      _startTtsFrom(c, p, s);
+      _startTtsFrom(c, p, s, displayOffset: displayOffset);
     } else {
-      _tts.jumpTo(_chapterSentenceStart(c, p) + s);
+      _tts.jumpTo(_chapterSentenceStart(c, p) + s, ttsOffset: offset);
     }
   }
 
-  Future<void> _startTtsFrom(int c, int p, int s) async {
+  Future<void> _startTtsFrom(int c, int p, int s, {int? displayOffset}) async {
     if (c >= _book.chapters.length) {
       _exitFullscreen();
       setState(() {
@@ -1950,6 +1972,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       return;
     }
     final startIdx = _chapterSentenceStart(c, p) + s;
+    final offset = _sentenceTtsOffset(c, p, s, displayOffset ??
+      (c == _chapter && p == _para && s == _ttsSentence && _wordStart >= 0 ? _wordStart : null));
     _ttsChapter = c;
     // 保证播放位置有效
     final from = startIdx.clamp(0, sentences.length - 1);
@@ -1967,7 +1991,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     });
     _updateMediaChapter(c);
     if (_inReadingMode) globalAudioHandler?.notifyPlaying();
-    _followSentence(c, p, s);
+    _followSentence(c, p, s, character: offset > 0 ? _sentenceDisplayOffset(c, p, s, offset) : null);
     _scheduleSave();
     _refreshTtsCache();
     await _tts.start(
@@ -1977,6 +2001,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         for (final sentence in para.sentences) sentence.pauseAfterMilliseconds],
       chapterIndex: c,
       from: from,
+      initialTtsOffset: offset,
     );
   }
 
@@ -2030,7 +2055,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _updateMediaChapter(c);
     // A replay after a page animation may already have the right sentence but
     // still need to bring it back inside the newly laid out viewport.
-    if (_itemScrollController.isAttached) _followSentence(c, p, s);
+    if (_itemScrollController.isAttached) _followSentence(c, p, s, character: _tts.currentTtsOffset > 0
+      ? _sentenceDisplayOffset(c, p, s, _tts.currentTtsOffset) : null);
   }
 
   void _onTtsWordChanged(int start, int end) {
@@ -2398,6 +2424,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       return const Scaffold(
           body: Center(child: CircularProgressIndicator()));
     }
+    final header = _headerLayout.chapterTitle(_chapterBarTitle(_chapter));
     return PopScope(
       child: Scaffold(
         backgroundColor: _theme.bg,
@@ -2414,9 +2441,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           ),
           // 固定章节标题：位于顶部两行半空白之后，正文滚动时保持不动
           Positioned.fromRect(
-            rect: _headerLayout.titleRect,
-            child: _buildChapterHeader(),
+            rect: header.nameRect,
+            child: _buildChapterHeader(header.chapterName),
           ),
+          if (header.chapterNumber != null && header.numberRect != null)
+            Positioned.fromRect(rect: header.numberRect!, child: Center(child: Text(header.chapterNumber!,
+              key: const ValueKey('reader-chapter-number'), maxLines: 1, overflow: TextOverflow.ellipsis,
+              textScaler: TextScaler.noScaling, style: TextStyle(fontSize: 12, color: _theme.title)))),
           // 三区点击层
           _buildReadingStatus(),
           // 拖动 seek 预览浮层
@@ -2534,7 +2565,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// A fixed-size chapter title occupies the safe top slot. Body font changes
   /// and toolbar overlays never change this reserved height.
-  Widget _buildChapterHeader() {
+  Widget _buildChapterHeader(String name) {
     return Container(
       key: const ValueKey('reader-chapter-header'),
       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -2550,7 +2581,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       child: Align(
         alignment: Alignment.center,
         child: Text(
-          _chapterBarTitle(_chapter),
+          name,
           maxLines: 1,
           textScaler: TextScaler.noScaling,
           overflow: TextOverflow.ellipsis,

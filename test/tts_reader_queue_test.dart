@@ -609,6 +609,22 @@ void main() {
     expect(finished, isTrue);
   });
 
+  test('system character offsets do not alter online synthesis or its audio seek position', () async {
+    final player = _ResumePlayer();
+    final requested = <String>[];
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      requested.add(text); onWords([]); return Uint8List.fromList([1]);
+    }
+    final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(0);
+    addTearDown(reader.dispose);
+    await reader.start(['甲乙丙丁。'], initialTtsOffset: 2);
+    expect(reader.currentTtsOffset, 0); expect(player.starts, [Duration.zero]);
+    await reader.jumpTo(0, ttsOffset: 3);
+    expect(requested, ['甲乙丙丁。', '甲乙丙丁。']);
+    expect(reader.currentTtsOffset, 0); expect(player.starts.last, Duration.zero);
+  });
+
   test('jump, voice and rate changes discard the paused audio position', () async {
     final player = _ResumePlayer();
     var requests = 0;

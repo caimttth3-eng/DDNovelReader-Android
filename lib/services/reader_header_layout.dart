@@ -19,13 +19,56 @@ class DisplayCutoutGeometry {
     (viewport.height - size.height).abs() <= 1;
 }
 
+class ChapterTitleParts {
+  final String number;
+  final String name;
+  const ChapterTitleParts(this.number, this.name);
+
+  /// A bare chapter number or an unnumbered heading remains one whole title.
+  static ChapterTitleParts? split(String text) {
+    final title = text.trim();
+    final match = RegExp(r'^(第\s*[0-9０-９零〇一二三四五六七八九十百千万两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟]+\s*(?:章节|章節|章|节|節|回|卷|部|集|篇|话|話)|(?:chapter|section|part|episode)\s*(?:\d+|[IVXLCDM]+)(?=$|[\s:：.\-—]))', caseSensitive: false).firstMatch(title);
+    if (match == null) return null;
+    final name = title.substring(match.end).replaceFirst(RegExp(r'^[\s:：、.\-—]+'), '').trim();
+    if (name.isEmpty) return null;
+    return ChapterTitleParts(match.group(0)!.trim(), name);
+  }
+}
+
+class ChapterHeaderContent {
+  final String chapterName;
+  final Rect nameRect;
+  final String? chapterNumber;
+  final Rect? numberRect;
+  const ChapterHeaderContent({required this.chapterName, required this.nameRect,
+    this.chapterNumber, this.numberRect});
+}
+
 /// Chooses a horizontal title slot from real obstruction bounds. It never
 /// invents a centre camera hole from a safe inset alone.
 class ReaderHeaderLayout {
   final Rect titleRect;
   final double topArea;
   final bool sharesCutoutBand;
-  const ReaderHeaderLayout._(this.titleRect, this.topArea, this.sharesCutoutBand);
+  final List<Rect> _slots;
+  const ReaderHeaderLayout._(this.titleRect, this.topArea, this.sharesCutoutBand, [this._slots = const []]);
+
+  ChapterHeaderContent chapterTitle(String text, {double minNumberWidth = 48, double minNameWidth = 64}) {
+    ChapterHeaderContent whole() => ChapterHeaderContent(chapterName: text, nameRect: titleRect);
+    final parts = ChapterTitleParts.split(text);
+    if (!sharesCutoutBand || parts == null || titleRect.width < minNameWidth) return whole();
+    final painter = TextPainter(text: TextSpan(text: parts.number, style: const TextStyle(fontSize: 12)),
+      textDirection: TextDirection.ltr, textScaler: TextScaler.noScaling, maxLines: 1)..layout();
+    final needed = math.max(minNumberWidth, painter.width + 8);
+    painter.dispose();
+    Rect? number;
+    for (final slot in _slots) {
+      if (slot != titleRect && slot.width >= needed && (number == null || slot.width > number.width)) number = slot;
+    }
+    if (number == null) return whole();
+    return ChapterHeaderContent(chapterName: parts.name, nameRect: titleRect,
+      chapterNumber: parts.number, numberRect: number);
+  }
 
   static ReaderHeaderLayout compute({required Size viewport, required EdgeInsets safeInsets,
     List<Rect> cutouts = const [], double topLeftRadius = 0, double topRightRadius = 0,
@@ -49,14 +92,17 @@ class ReaderHeaderLayout {
     if (obstacles.isEmpty) return below(math.max(0.0, safeInsets.top));
     var cursor = left;
     var bestLeft = left, bestRight = left;
+    final slots = <Rect>[];
     for (final r in obstacles) {
       final start = (r.left - clearance).clamp(left, right).toDouble();
       final end = (r.right + clearance).clamp(left, right).toDouble();
+      if (start > cursor) slots.add(Rect.fromLTWH(cursor, (band - line) / 2, start - cursor, line));
       if (start - cursor > bestRight - bestLeft) { bestLeft = cursor; bestRight = start; }
       cursor = math.max(cursor, end);
     }
+    if (right > cursor) slots.add(Rect.fromLTWH(cursor, (band - line) / 2, right - cursor, line));
     if (right - cursor > bestRight - bestLeft) { bestLeft = cursor; bestRight = right; }
     if (bestRight <= bestLeft) return below(band);
-    return ReaderHeaderLayout._(Rect.fromLTWH(bestLeft, (band - line) / 2, bestRight - bestLeft, line), band, true);
+    return ReaderHeaderLayout._(Rect.fromLTWH(bestLeft, (band - line) / 2, bestRight - bestLeft, line), band, true, List.unmodifiable(slots));
   }
 }

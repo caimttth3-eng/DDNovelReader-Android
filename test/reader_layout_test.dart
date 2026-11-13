@@ -1306,6 +1306,62 @@ void main() {
     await handler.playbackState.close(); await handler.mediaItem.close();
   });
 
+  testWidgets('system speech starts at the visible line and page turns keep its sentence character offset', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..voice = TtsReader.systemVoice).toJson());
+    final book = Book(id: 'system-page-offset', title: '系统翻页', filePath: '', format: BookFormat.txt, addedAt: DateTime(2026),
+      chapters: [Chapter(title: '第一章 山间', paragraphs: [Paragraph(display: List.filled(200, '清晨山间风吹树林远方传来朋友问候').join() + '。',
+        tts: '', sentences: const [], sentenceStartTts: const [])])]);
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    final started = speech.currentTtsOffset;
+    expect(started, greaterThan(0), reason: 'Starting system speech after a page turn must not read from the sentence beginning');
+    await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    expect(speech.jumpCalls, 1); expect(speech.currentTtsOffset, greaterThan(started));
+    final list = find.byKey(const ValueKey('reader-body'));
+    double edge() => tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
+      .singleWhere((p) => p.index == 1).itemLeadingEdge;
+    final before = edge();
+    speech.onSentenceChanged?.call(0); speech.onWordChanged?.call(speech.currentTtsOffset, speech.currentTtsOffset + 2);
+    await tester.pumpAndSettle();
+    expect(edge(), closeTo(before, 0.001), reason: 'The initial sentence callback and real word range must not scroll back to the previous page');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  for (final corner in [false, true]) {
+    testWidgets('header separates chapter number only when two safe slots exist corner=$corner', (tester) async {
+      tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+      tester.view.viewPadding = const FakeViewPadding(top: 40);
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
+      messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async => {
+        'width': 390, 'height': 844, 'safeInsets': {'top': 40},
+        'cutouts': [{'left': corner ? 8 : 170, 'right': corner ? 40 : 210, 'top': 0, 'bottom': 40}],
+      });
+      final book = Book(id: 'dual-header-$corner', title: '双侧标题', filePath: '', format: BookFormat.txt,
+        addedAt: DateTime(2026), chapters: [Chapter(title: '第十二章 山间来信', paragraphs: [ReadingText.paragraph('清晨风吹过树林。')])]);
+      final preview = GlobalKey();
+      await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(home: ReaderScreen(book: book, storage: AppStorage()))));
+      await tester.pumpAndSettle(); await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+      final name = find.byKey(const ValueKey('reader-chapter-header')), number = find.byKey(const ValueKey('reader-chapter-number'));
+      expect(tester.getRect(find.byKey(const ValueKey('reader-body'))).top, 40);
+      if (corner) {
+        expect(number, findsNothing); expect(find.descendant(of: name, matching: find.text('第十二章 山间来信')), findsOneWidget);
+      } else {
+        expect(find.descendant(of: name, matching: find.text('山间来信')), findsOneWidget);
+        expect(tester.widget<Text>(number).data, '第十二章');
+        expect(tester.getCenter(name).dx, greaterThan(tester.getCenter(number).dx));
+      }
+      await _captureReaderPreview(tester, preview, corner ? 'reader-header-corner-full-title' : 'reader-header-split-number-name');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    });
+  }
+
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
@@ -1529,23 +1585,32 @@ class _TestSpeech extends TtsReader {
   TtsState _status = TtsState.idle;
   int startedAt = -1;
   int startCalls = 0, resumeCalls = 0, _sentenceIndex = -1;
+  int speechOffset = 0, jumpCalls = 0;
   List<String> lastSentences = const [];
   List<int>? lastPauses;
   Completer<bool>? resumeResult;
-  void emitSentence(int idx) { _sentenceIndex = idx; onSentenceChanged?.call(idx); }
+  void emitSentence(int idx) { if (idx != _sentenceIndex) speechOffset = 0; _sentenceIndex = idx; onSentenceChanged?.call(idx); }
+  @override
+  int get currentTtsOffset => usesSystemVoice ? speechOffset : 0;
   @override
   int get currentIndex => _sentenceIndex;
   @override
   TtsState get state => _status;
   @override
   Future<void> start(List<String> sentences, {List<int>? offsets, List<int>? pauseAfterMilliseconds,
-    int chapterIndex = 0, int from = 0}) async {
+    int chapterIndex = 0, int from = 0, int initialTtsOffset = 0}) async {
     lastSentences = List.of(sentences); lastPauses = pauseAfterMilliseconds == null ? null : List.of(pauseAfterMilliseconds);
-    startCalls++; startedAt = from; _status = TtsState.playing; emitSentence(from);
+    speechOffset = usesSystemVoice ? initialTtsOffset : 0;
+    startCalls++; startedAt = from; _status = TtsState.playing; _sentenceIndex = from; onSentenceChanged?.call(from);
     if (delay > Duration.zero) await Future<void>.delayed(delay);
   }
   @override
   Future<void> pause() async { _status = TtsState.paused; }
+  @override
+  Future<void> jumpTo(int sentenceIndex, {int ttsOffset = 0}) async {
+    if (!usesSystemVoice) return super.jumpTo(sentenceIndex, ttsOffset: ttsOffset);
+    jumpCalls++; speechOffset = ttsOffset; _sentenceIndex = sentenceIndex; onSentenceChanged?.call(sentenceIndex);
+  }
   @override
   Future<bool> resume() async {
     resumeCalls++; _status = TtsState.playing; onSentenceChanged?.call(_sentenceIndex);

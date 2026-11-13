@@ -22,6 +22,62 @@ void main() {
     expect(layout.topArea, 40);
   });
 
+  test('chapter number uses the narrow side while the name stays in the wide side', () {
+    final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
+      cutouts: [const Rect.fromLTRB(140, 8, 170, 32)]);
+    final title = layout.chapterTitle('第42章 江湖再见');
+    expect(title.chapterNumber, '第42章');
+    expect(title.chapterName, '江湖再见');
+    expect(title.numberRect!.right, 136);
+    expect(title.nameRect.left, 174);
+    expect(title.numberRect!.width, lessThan(title.nameRect.width));
+    expect(layout.topArea, 40);
+    expect(title.numberRect!.top, title.nameRect.top);
+  });
+
+  test('equal sides keep the name left and put the number right', () {
+    final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
+      cutouts: [const Rect.fromLTRB(188, 8, 212, 32)]);
+    final title = layout.chapterTitle('Chapter IV: Return');
+    expect(title.chapterNumber, 'Chapter IV');
+    expect(title.chapterName, 'Return');
+    expect(title.nameRect.left, 8);
+    expect(title.numberRect!.left, 216);
+  });
+
+  test('corner cameras and absent cutouts keep the complete title on one side', () {
+    final corner = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
+      cutouts: [const Rect.fromLTRB(0, 8, 40, 32)]).chapterTitle('第一章 开始');
+    expect(corner.chapterNumber, isNull);
+    expect(corner.numberRect, isNull);
+    expect(corner.chapterName, '第一章 开始');
+    expect(corner.nameRect.left, 44);
+    final plain = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: EdgeInsets.zero)
+      .chapterTitle('第一章 开始');
+    expect(plain.chapterNumber, isNull);
+    expect(plain.chapterName, '第一章 开始');
+  });
+
+  test('insufficient number space and unnumbered headings never create empty controls', () {
+    final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
+      cutouts: [const Rect.fromLTRB(48, 8, 80, 32)]);
+    expect(layout.chapterTitle('第一章 开始').chapterNumber, isNull);
+    for (final text in ['楔子', '第一章', 'Chapter IV', '']) {
+      final title = layout.chapterTitle(text);
+      expect(title.chapterNumber, isNull);
+      expect(title.numberRect, isNull);
+      expect(title.chapterName, text);
+    }
+  });
+
+  test('chapter title parsing handles traditional digits and separators', () {
+    final parts = ChapterTitleParts.split('第 壹佰 節：後續')!;
+    expect(parts.number, '第 壹佰 節');
+    expect(parts.name, '後續');
+    expect(ChapterTitleParts.split('第一章——开端')!.name, '开端');
+    expect(ChapterTitleParts.split('无编号的名字'), isNull);
+  });
+
   test('multiple and overlapping cutouts are treated as a union', () {
     final holes = [const Rect.fromLTRB(80, 0, 130, 36), const Rect.fromLTRB(100, 4, 160, 40),
       const Rect.fromLTRB(290, 4, 320, 36)];

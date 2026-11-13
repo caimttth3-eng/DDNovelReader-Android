@@ -108,6 +108,56 @@ void main() {
     await emit('start', {'id': spoken.last['id']});
     await reader.dispose();
   });
+  test('system sentence cursor starts at visible text and survives pause, jump and next sentence', () async {
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    final ranges = <(int, int)>[];
+    final announced = <(int, int)>[];
+    reader.onWordChanged = (start, end) { if (start >= 0) ranges.add((start, end)); };
+    reader.onSentenceChanged = (index) => announced.add((index, reader.currentTtsOffset));
+    queued = Completer<void>(); var pending = queued!.future;
+    final initial = reader.start(['前一句。', '甲乙丙丁戊己。', '下一句。'], from: 1, initialTtsOffset: 2);
+    await pending;
+    expect(spoken.last['text'], '丙丁戊己。');
+    expect(announced, [(1, 2)], reason: 'UI must know the cursor before following the sentence.');
+    var id = spoken.last['id']; await emit('start', {'id': id}); await initial;
+    await reader.pause();
+    queued = Completer<void>(); pending = queued!.future;
+    final resumed = reader.resume(); await pending;
+    expect(spoken.last['text'], '丙丁戊己。', reason: 'An engine without ranges must retain the explicitly requested cursor.');
+    final stale = id; id = spoken.last['id']; await emit('start', {'id': id}); expect(await resumed, isTrue);
+    await emit('range', {'id': id, 'start': 1, 'end': 3});
+    expect(ranges.last, (3, 5)); expect(reader.currentTtsOffset, 3);
+    await reader.pause();
+    await reader.jumpTo(1, ttsOffset: 4);
+    expect(reader.currentTtsOffset, 4);
+    queued = Completer<void>(); pending = queued!.future;
+    final afterJump = reader.resume(); await pending;
+    expect(spoken.last['text'], '戊己。');
+    id = spoken.last['id']; await emit('start', {'id': id}); expect(await afterJump, isTrue);
+    await emit('range', {'id': stale, 'start': 0, 'end': 1});
+    expect(reader.currentTtsOffset, 4, reason: 'An old utterance cannot replace the new cursor.');
+    await emit('range', {'id': id, 'start': 0, 'end': 2}); expect(ranges.last, (4, 6));
+    queued = Completer<void>(); pending = queued!.future;
+    await emit('done', {'id': id}); await pending;
+    expect(reader.currentIndex, 2); expect(reader.currentTtsOffset, 0);
+    expect(spoken.last['text'], '下一句。');
+    await emit('start', {'id': spoken.last['id']});
+    queued = Completer<void>(); pending = queued!.future;
+    final playingJump = reader.jumpTo(1, ttsOffset: 1); await pending;
+    expect(spoken.last['text'], '乙丙丁戊己。');
+    await emit('start', {'id': spoken.last['id']}); await playingJump;
+    expect(reader.currentTtsOffset, 1);
+  });
+  test('a system visible cursor never starts inside a UTF-16 surrogate pair', () async {
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    queued = Completer<void>(); final pending = queued!.future;
+    final started = reader.start(['甲😀乙。'], initialTtsOffset: 2);
+    await pending;
+    expect(reader.currentTtsOffset, 1); expect(spoken.last['text'], '😀乙。');
+    await emit('start', {'id': spoken.last['id']}); await started;
+  });
   test('native rejection returns promptly instead of waiting for the start timeout', () async {
     messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
       if (call.method == 'initialize') return 'engine';

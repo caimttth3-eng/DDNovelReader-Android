@@ -28,9 +28,9 @@ class SystemTtsClient {
         _initialization = null; throw error;
       });
 
-  /// [startOffset] is the latest reported word start in the original sentence,
-  /// measured in UTF-16 code units, as are Android's range callbacks. Engines
-  /// without range callbacks must resume from zero rather than an estimate.
+  /// [startOffset] is a requested visible-text cursor or the latest reported
+  /// word start in the original sentence, measured in UTF-16 code units.
+  /// Engines without ranges retain the requested cursor when resuming.
   /// Callbacks remain relative to [text], even when speaking only its suffix.
   Future<void> speak(String text, double rate, {int startOffset = 0, required void Function() onDone,
     required void Function(int, int) onRange, required void Function(Object) onError}) async {
