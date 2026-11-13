@@ -119,6 +119,17 @@ class _PlaybackPermissionGate {
   void cancel() { cancelled = true; resume(); }
 }
 
+class _SentenceDragSession {
+  final (int, int, int) origin;
+  (int, int, int) target;
+  final bool wasPlaying;
+  final int generation, wordStart, wordEnd;
+  late final Future<bool> paused;
+  bool ending = false;
+  int lastSteps = 0;
+  _SentenceDragSession(this.origin, this.wasPlaying, this.generation, this.wordStart, this.wordEnd) : target = origin;
+}
+
 class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   late final TtsReader _tts;
   StreamSubscription<bool>? _networkSubscription;
@@ -209,6 +220,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   bool _followingWord = false;
   bool _isPlaying = false;
   int _playbackGeneration = 0;
+  _SentenceDragSession? _sentenceDrag;
   final PlaybackNotifications _playbackNotifications = PlaybackNotifications();
   PlaybackNotificationStatus? _notificationStatus;
   bool _notificationSettingsPending = false;
@@ -310,6 +322,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// A MediaSession play request is idempotent; pause has its own callback.
   Future<void> _onHeadsetPlay() async {
+    _cancelSentenceDrag();
     print('SCREEN onHeadsetPlay ttsState=${_tts.state} reading=$_inReadingMode loading=$_ttsLoading');
     _debugLog('SCREEN onHeadsetPlay state=${_tts.state} reading=$_inReadingMode');
     if (!mounted) return;
@@ -324,6 +337,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Future<void> _onHeadsetPause() async {
+    _cancelSentenceDrag();
     print('SCREEN onHeadsetPause ttsState=${_tts.state}');
     _debugLog('SCREEN onHeadsetPause state=${_tts.state}');
     if (!mounted) return;
@@ -343,6 +357,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void dispose() {
+    _sentenceDrag = null;
     AppAppearance.nightMode.removeListener(_onAppearanceChanged);
     _networkSubscription?.cancel();
     _permissionGate?.cancel(); _permissionGate = null;
@@ -964,7 +979,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (recognizer != null) recognizer.onLongPress = () => _onSentenceLongPress(_Item.sentence(it.chapterIndex, it.paragraphIndex, i), para);
       final marks = _hlIndex[_hlKey(it.chapterIndex, it.paragraphIndex)] ?? [];
       final points = <int>{start, end};
-      if (current && _wordStart >= 0 && _wordEnd > _wordStart) {
+      if (_settings.wordHighlightEnabled && current && _wordStart >= 0 && _wordEnd > _wordStart) {
         points.add(_wordStart.clamp(start, end)); points.add(_wordEnd.clamp(start, end));
       }
       for (final h in marks) {
@@ -1295,6 +1310,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   // Skip chapter headings and empty sentences, including at chapter boundaries.
   void _moveSentence(int direction) {
+    _cancelSentenceDrag();
     if (_ttsLoading || _paging || _items.isEmpty) return;
     var c = _chapter, p = _para, sentence = max(0, _ttsSentence) + direction;
     while (c >= 0 && c < _book.chapters.length) {
@@ -1557,6 +1573,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 朗读模式中暂停：保留全屏，弹出底部控制面板
   Future<void> _pauseReading({bool force = false}) async {
+    _cancelSentenceDrag();
     if (_ttsLoading && !force) return; // Screen taps still ignore loading.
     if (!_inReadingMode || (!force && _tts.state != TtsState.playing)) return;
     if (force) {
@@ -1641,6 +1658,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 彻底退出朗读模式：停止TTS，恢复正常阅读页UI
   Future<void> _exitReadingMode() async {
+    _sentenceDrag = null;
     final generation = ++_playbackGeneration;
     _permissionGate?.cancel();
     _sleepTimer?.cancel();
@@ -1721,6 +1739,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) _cancelSentenceDrag();
     _volumeForeground = state == AppLifecycleState.resumed;
     _syncMediaVolumePolling();
     if (state == AppLifecycleState.resumed) _permissionGate?.resume();
@@ -2017,7 +2036,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onTtsSentenceChanged(int idx) {
-    if (!mounted || !_inReadingMode) return;
+    if (!mounted || !_inReadingMode || _sentenceDrag != null) return;
     if (idx < 0) return;
     if (_paging) {
       _pendingTtsSentence = (_ttsChapter, idx);
@@ -2060,7 +2079,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onTtsWordChanged(int start, int end) {
-    if (!mounted || !_inReadingMode) return;
+    if (!mounted || !_inReadingMode || _sentenceDrag != null) return;
     if (_paging) {
       // Word offsets belong to the queued sentence, never the old screen one.
       if (_pendingTtsSentence != null) _pendingTtsWord = (start, end);
@@ -2172,7 +2191,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onTtsCompleted() {
-    if (!mounted || !_inReadingMode) return;
+    if (!mounted || !_inReadingMode || _sentenceDrag != null) return;
     // 本章读完：自动进入下一章继续朗读
     final next = _ttsChapter + 1;
     if (next < _book.chapters.length) {
@@ -2201,6 +2220,84 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  (int, int, int) _sentenceDragTarget((int, int, int) origin, int steps) {
+    int count(int chapter) => _book.chapters[chapter].paragraphs.fold(0, (sum, p) => sum + p.sentences.length);
+    var c = origin.$1, index = _chapterSentenceStart(origin.$1, origin.$2) + origin.$3 + steps;
+    while (c > 0 && index < 0) { c--; index += count(c); }
+    while (c < _book.chapters.length - 1 && index >= count(c)) { index -= count(c); c++; }
+    while (c > 0 && count(c) == 0) { c--; index = count(c) - 1; }
+    index = index.clamp(0, max(0, count(c) - 1));
+    for (var p = 0; p < _book.chapters[c].paragraphs.length; p++) {
+      final n = _book.chapters[c].paragraphs[p].sentences.length;
+      if (index < n) return (c, p, index);
+      index -= n;
+    }
+    return origin;
+  }
+
+  void _startSentenceDrag() {
+    if (!_inReadingMode || _paging || _sentenceDrag != null) return;
+    final wasLoading = _ttsLoading;
+    final session = _SentenceDragSession((_chapter, _para, max(0, _ttsSentence)), _isPlaying,
+      ++_playbackGeneration, _wordStart, _wordEnd);
+    _sentenceDrag = session;
+    setState(() { _isPlaying = false; _ttsLoading = false; _showReadingPanel = false; });
+    final pause = _tts.state == TtsState.playing ? _tts.pause() : wasLoading ? _tts.stop() : Future<void>.value();
+    session.paused = pause.then((_) => true, onError: (Object _) => false);
+    globalAudioHandler?.notifyPaused();
+  }
+
+  void _previewSentenceDrag(int steps) {
+    final session = _sentenceDrag;
+    if (session == null || session.ending) return;
+    final delta = steps - session.lastSteps;
+    session.lastSteps = steps;
+    final target = _sentenceDragTarget(session.target, delta);
+    if (session.target == target) return;
+    session.target = target; _navigationGeneration++;
+    setState(() { _chapter = target.$1; _para = target.$2; _ttsSentence = target.$3; _wordStart = -1; _wordEnd = -1; });
+    _followSentence(target.$1, target.$2, target.$3);
+  }
+
+  void _cancelSentenceDrag() {
+    final session = _sentenceDrag;
+    if (session == null) return;
+    _sentenceDrag = null; _navigationGeneration++;
+    if (!mounted || !_inReadingMode) return;
+    setState(() { _chapter = session.origin.$1; _para = session.origin.$2; _ttsSentence = session.origin.$3;
+      _wordStart = session.wordStart; _wordEnd = session.wordEnd; _isPlaying = false; _showReadingPanel = true; });
+    _followSentence(_chapter, _para, _ttsSentence, character: _wordStart >= 0 ? _wordStart : null);
+    globalAudioHandler?.notifyPaused(); _scheduleSave();
+  }
+
+  Future<void> _finishSentenceDrag(bool cancelled) async {
+    if (cancelled) { _cancelSentenceDrag(); return; }
+    final session = _sentenceDrag;
+    if (session == null || session.ending) return;
+    session.ending = true;
+    final paused = await session.paused;
+    if (!mounted || !_inReadingMode || !identical(_sentenceDrag, session) || session.generation != _playbackGeneration) return;
+    if (!paused) { _cancelSentenceDrag(); return; }
+    _sentenceDrag = null;
+    final target = session.target;
+    if (session.wasPlaying) {
+      if (target == session.origin) {
+        setState(() { _wordStart = session.wordStart; _wordEnd = session.wordEnd; });
+        await _resumeReading();
+      } else {
+        await _startTtsFrom(target.$1, target.$2, target.$3);
+      }
+    } else {
+      setState(() { _isPlaying = false; _showReadingPanel = true; });
+      if (target == session.origin) {
+        setState(() { _wordStart = session.wordStart; _wordEnd = session.wordEnd; });
+      } else {
+        _ttsFollowSeek(target.$1, target.$2, target.$3);
+      }
+      _scheduleSave();
+    }
   }
 
   // 上一句 / 下一句
@@ -2893,6 +2990,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (minutes > 0) {
       _sleepTimer = Timer(Duration(minutes: minutes), () {
         if (!mounted) return;
+        _cancelSentenceDrag();
         setState(() { _sleepMinutes = 0; _sleepTimer = null; });
         if (mounted && _inReadingMode && _isPlaying) {
           _pauseReading(force: true);
@@ -3277,6 +3375,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     return ReaderGestures(
         enabled: inReading || _settings.pageTurnMode == 'swipe',
         sentenceSwipesEnabled: inReading,
+        onSentenceDragStart: inReading ? _startSentenceDrag : null,
+        onSentenceDragChange: inReading ? _previewSentenceDrag : null,
+        onSentenceDragEnd: inReading ? _finishSentenceDrag : null,
         onPreviousSentence: _prevSentence,
         onNextSentence: _nextSentence,
         onPreviousPage: () { if (_settings.pageTurnMode == 'swipe') _pageUp(); },
@@ -3457,7 +3558,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         child: Material(key: const ValueKey('contents-handle'), color: const Color(0xDD333333),
           borderRadius: const BorderRadius.horizontal(right: Radius.circular(14)),
           child: Tooltip(message: T('toc'), child: const SizedBox(width: 16, height: 64,
-            child: ClipRect(child: OverflowBox(maxWidth: 28, child: ReaderIcon(ReaderSymbol.contents, size: 28, color: Colors.white70))))))))),
+            child: Center(child: ReaderIcon(ReaderSymbol.contents, size: 14, color: Colors.white70)))))))),
   );
 
   Future<void> _openChapterList() async {

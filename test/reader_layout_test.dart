@@ -279,7 +279,7 @@ void main() {
     expect(guide, findsNothing);
     await tester.tap(find.byKey(const ValueKey('reader-menu')));
     await tester.pumpAndSettle();
-    await tester.tapAt(const Offset(20, 400));
+    await tester.tapAt(const Offset(195, 500));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('night-mode')));
     await tester.pumpAndSettle();
@@ -465,7 +465,7 @@ void main() {
     expect(tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
       .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1), isNotEmpty);
     expect(before, isNotEmpty); expect(tester.takeException(), isNull);
-    expect(find.text('上滑上一句 · 下滑下一句'), findsOneWidget);
+    expect(find.text('上下拖动连续切句，松手确认'), findsOneWidget);
     expect(speech.startedAt, greaterThan(0), reason: 'Speech must start at the visible sentence rather than the chapter start');
     speech.onWordChanged?.call(0, 2);
     await tester.pump();
@@ -1411,6 +1411,69 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  for (final paused in [false, true]) {
+    testWidgets('direct sentence drag previews reversibly and commits audio once originalPaused=$paused', (tester) async {
+      tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+      final speech = _TestSpeech()..recordJumps = true;
+      final book = Book(id: 'drag-$paused', title: '拖动选句', filePath: '', format: BookFormat.txt, addedAt: DateTime(2026),
+        chapters: [Chapter(title: '第一章', paragraphs: List.generate(6, (p) => ReadingText.paragraph('第$p句清晨风吹过树林。')))]);
+      await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: AppStorage(), ttsReader: speech)));
+      await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+      if (paused) { await tester.tapAt(const Offset(195, 280)); await tester.pumpAndSettle(); }
+      String highlighted() {
+        String result = '';
+        bool yellow(InlineSpan span) => span is TextSpan && (span.style?.backgroundColor == const Color(0x44FFC107) ||
+          (span.children ?? <InlineSpan>[]).any(yellow));
+        for (final text in tester.widgetList<Text>(find.byType(Text))) {
+          if (text.textSpan != null && yellow(text.textSpan!)) result = text.textSpan!.toPlainText().replaceAll('\u200B', '');
+        }
+        return result;
+      }
+      final gesture = await tester.startGesture(const Offset(195, 220));
+      await gesture.moveBy(const Offset(0, 160)); await tester.pumpAndSettle();
+      expect(highlighted(), contains('第3句')); expect(speech.startCalls, 1); expect(speech.state, TtsState.paused);
+      await gesture.moveBy(const Offset(0, -112)); await tester.pumpAndSettle();
+      expect(highlighted(), contains('第1句')); expect(speech.startCalls, 1); expect(speech.jumpCalls, 0);
+      await gesture.up(); await tester.pumpAndSettle();
+      expect(highlighted(), contains('第1句'));
+      expect(speech.state, paused ? TtsState.paused : TtsState.playing);
+      expect(speech.startCalls, paused ? 1 : 2); expect(speech.jumpCalls, paused ? 1 : 0);
+      final starts = speech.startCalls, jumps = speech.jumpCalls;
+      final boundary = await tester.startGesture(const Offset(195, 220));
+      await boundary.moveBy(const Offset(0, 960)); await tester.pumpAndSettle(); expect(highlighted(), contains('第5句'));
+      await boundary.moveBy(const Offset(0, -48)); await tester.pumpAndSettle(); expect(highlighted(), contains('第4句'));
+      await boundary.cancel(); await tester.pumpAndSettle();
+      expect(highlighted(), contains('第1句')); expect(speech.state, TtsState.paused);
+      expect(speech.startCalls, starts); expect(speech.jumpCalls, jumps);
+      speech.speechOffset = 7;
+      final short = await tester.startGesture(const Offset(195, 220));
+      await short.moveBy(const Offset(0, 24)); await tester.pumpAndSettle(); await short.up(); await tester.pumpAndSettle();
+      expect(speech.jumpCalls, jumps, reason: 'A zero-step paused drag must preserve the existing resume position');
+      expect(speech.speechOffset, 7);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    });
+  }
+
+  testWidgets('stop after releasing a drag cancels its pending pause completion', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final speech = _TestSpeech(), handler = TtsAudioHandler(), previous = globalAudioHandler;
+    globalAudioHandler = handler; addTearDown(() { globalAudioHandler = previous; });
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('drag-stop'), storage: AppStorage(), ttsReader: speech)));
+    await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    final paused = Completer<void>(); speech.pauseResult = paused;
+    final drag = await tester.startGesture(const Offset(195, 220));
+    await drag.moveBy(const Offset(0, 160)); await tester.pumpAndSettle(); await drag.up(); await tester.pump();
+    await handler.stop(); await tester.pumpAndSettle(); paused.complete(); await tester.pumpAndSettle();
+    expect(speech.startCalls, 1); expect(speech.resumeCalls, 0); expect(speech.state, TtsState.stopped);
+    expect(find.byTooltip('朗读'), findsOneWidget); expect(handler.playbackState.value.playing, isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    await handler.playbackState.close(); await handler.mediaItem.close();
+  });
+
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
@@ -1635,9 +1698,11 @@ class _TestSpeech extends TtsReader {
   int startedAt = -1;
   int startCalls = 0, resumeCalls = 0, _sentenceIndex = -1;
   int speechOffset = 0, jumpCalls = 0;
+  bool recordJumps = false;
   List<String> lastSentences = const [];
   List<int>? lastPauses;
   Completer<bool>? resumeResult;
+  Completer<void>? pauseResult;
   void emitSentence(int idx) { if (idx != _sentenceIndex) speechOffset = 0; _sentenceIndex = idx; onSentenceChanged?.call(idx); }
   @override
   int get currentTtsOffset => usesSystemVoice ? speechOffset : 0;
@@ -1654,10 +1719,10 @@ class _TestSpeech extends TtsReader {
     if (delay > Duration.zero) await Future<void>.delayed(delay);
   }
   @override
-  Future<void> pause() async { _status = TtsState.paused; }
+  Future<void> pause() async { _status = TtsState.paused; if (pauseResult != null) await pauseResult!.future; }
   @override
   Future<void> jumpTo(int sentenceIndex, {int ttsOffset = 0}) async {
-    if (!usesSystemVoice) return super.jumpTo(sentenceIndex, ttsOffset: ttsOffset);
+    if (!usesSystemVoice && !recordJumps) return super.jumpTo(sentenceIndex, ttsOffset: ttsOffset);
     jumpCalls++; speechOffset = ttsOffset; _sentenceIndex = sentenceIndex; onSentenceChanged?.call(sentenceIndex);
   }
   @override

@@ -3,6 +3,78 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:duoduo_langdu/widgets/reader_gestures.dart';
 
 void main() {
+  Widget continuous(List<String> actions, List<int> steps, {bool sentenceMode = true, bool enabled = true}) => MaterialApp(
+    home: ReaderGestures(enabled: enabled, sentenceSwipesEnabled: sentenceMode,
+      onPreviousSentence: () => actions.add('old previous'), onNextSentence: () => actions.add('old next'),
+      onPreviousPage: () => actions.add('previous page'), onNextPage: () => actions.add('next page'),
+      onSentenceDragStart: () => actions.add('start'), onSentenceDragChange: steps.add,
+      onSentenceDragEnd: (cancelled) => actions.add(cancelled ? 'cancel' : 'end'),
+      child: const SizedBox.expand()));
+
+  testWidgets('direct vertical dragging previews multiple sentences and reverses from the original touch', (tester) async {
+    final actions = <String>[], steps = <int>[];
+    await tester.pumpWidget(continuous(actions, steps));
+    final gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 25));
+    await tester.pump();
+    expect(actions, ['start'], reason: 'No long-press delay is required');
+    await gesture.moveBy(const Offset(0, 85));
+    await gesture.moveBy(const Offset(0, -20));
+    await gesture.moveBy(const Offset(0, -150));
+    expect(steps, [2, 1, -1]);
+    await gesture.up();
+    expect(actions, ['start', 'end'], reason: 'Release must not trigger a second legacy swipe');
+  });
+
+  testWidgets('vertical cancellation and lifecycle changes end a preview exactly once', (tester) async {
+    final actions = <String>[], steps = <int>[];
+    await tester.pumpWidget(continuous(actions, steps));
+    var gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 80));
+    await gesture.cancel();
+    expect(actions, ['start', 'cancel']);
+    actions.clear();
+    gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 80));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await gesture.up();
+    expect(actions, ['start', 'cancel']);
+  });
+
+  testWidgets('the first accepted axis stays locked for the whole drag', (tester) async {
+    final actions = <String>[], steps = <int>[];
+    await tester.pumpWidget(continuous(actions, steps));
+    var gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(70, 0));
+    await gesture.moveBy(const Offset(0, 180));
+    await gesture.up();
+    expect(actions, ['previous page']);
+    expect(steps, isEmpty);
+    actions.clear();
+    gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, -70));
+    await gesture.moveBy(const Offset(180, 0));
+    await gesture.up();
+    expect(actions, ['start', 'end']);
+    expect(steps, [-1]);
+  });
+
+  testWidgets('disabling continuous gestures cancels a preview and ordinary reading never starts one', (tester) async {
+    final actions = <String>[], steps = <int>[];
+    await tester.pumpWidget(continuous(actions, steps));
+    final gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 80));
+    await tester.pumpWidget(continuous(actions, steps, sentenceMode: false));
+    await tester.pump();
+    await gesture.up();
+    expect(actions, ['start', 'cancel']);
+    actions.clear(); steps.clear();
+    await tester.drag(find.byType(ReaderGestures), const Offset(0, -100));
+    expect(actions, isEmpty);
+    expect(steps, isEmpty);
+  });
+
   testWidgets('normal reading leaves swipes to its scrollable child', (tester) async {
     var navigations = 0;
     final controller = ScrollController();
