@@ -1,8 +1,10 @@
 """Align/sign an APK with the pinned fixed key, or verify its certificate."""
 import argparse
+import base64
 import hashlib
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -11,25 +13,32 @@ from prepare_signing import (SigningError, check_keystore, find_tool, fingerprin
 
 
 def verify_apk(apk, expected, apksigner=None):
-    result = run_tool(tool_command(find_tool("apksigner", apksigner)) +
-                      ["verify", "--verbose", "--print-certs", str(apk)]).decode("utf-8", errors="replace")
-    # v3.1 prints each SDK-range signer instead of the legacy `Signer #1`.
-    # The source-stamp certificate identifies a distributor, not the APK key.
-    pattern = re.compile(r"Signer (?P<label>#\d+|\(minSdkVersion=\d+(?: \(dev release=true\))?, maxSdkVersion=\d+\))"
-                         r" certificate SHA-256 digest:\s*(?P<digest>[0-9a-fA-F]{64})")
-    rows = [line.strip() for line in result.splitlines()
-            if line.strip().startswith("Signer ") and "certificate SHA-256 digest:" in line]
-    matches = [pattern.fullmatch(row) for row in rows]
-    certificates = [(match["label"], match["digest"].lower()) for match in matches if match]
-    legacy = [label for label, _ in certificates if label.startswith("#")]
-    signer_counts = re.findall(r"^Number of signers:\s*(\d+)\s*$", result, re.MULTILINE)
-    valid = (bool(certificates) and len(certificates) == len(rows)
-             and all(digest == expected for _, digest in certificates)
-             and (not legacy or (len(certificates) == 1 and legacy == ["#1"]))
-             and all(count == "1" for count in signer_counts))
-    if not valid:
-        actual = ", ".join(f"{label}={digest}" for label, digest in certificates) or "none parsed"
-        raise SigningError(f"APK signer certificate does not match the pinned certificate; expected={expected}; actual={actual}.")
+    command = tool_command(find_tool("apksigner", apksigner)) + ["verify", "--verbose", "--print-certs-pem", str(apk)]
+    try:
+        result = subprocess.run(command, capture_output=True, check=False, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        raise SigningError("APK verification tool could not finish.") from None
+    # Read both streams and hash the actual DER bytes. Human-readable signer
+    # labels vary between Build Tools versions, locales and signature schemes.
+    public_output = result.stdout.decode("utf-8", errors="replace") + "\n" + result.stderr.decode("utf-8", errors="replace")
+    blocks = re.findall(r"-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----", public_output, re.DOTALL)
+    digests = []
+    malformed = public_output.count("-----BEGIN CERTIFICATE-----") != len(blocks) or public_output.count("-----END CERTIFICATE-----") != len(blocks)
+    for block in blocks:
+        try:
+            der = base64.b64decode(re.sub(r"\s", "", block), validate=True)
+            if not der:
+                raise ValueError()
+            digests.append(hashlib.sha256(der).hexdigest())
+        except ValueError:
+            malformed = True
+    # Repeated identical certificates may describe multiple SDK ranges. Every
+    # certificate must still match the pin; extra distinct signers (or source
+    # stamps) are rejected rather than relying on their display labels.
+    if result.returncode or malformed or not digests or set(digests) != {expected}:
+        print("APK verification public stdout:\n" + result.stdout.decode("utf-8", errors="replace"), file=sys.stderr)
+        print("APK verification public stderr:\n" + result.stderr.decode("utf-8", errors="replace"), file=sys.stderr)
+        raise SigningError(f"APK certificate verification failed; exit={result.returncode}; expected={expected}; actual={','.join(digests) or 'no PEM certificate'}.")
 
 
 def sign_apk(apk, secret_path, output, expected, apksigner=None, zipalign=None, keytool=None):

@@ -60,19 +60,25 @@ jobs:
           DDNOVEL_SIGNING_JSON: ${{ github.event_name != 'pull_request' && secrets.DDNOVEL_SIGNING_JSON || '' }}
         run: python3 scripts/prepare_signing.py --output-directory "$RUNNER_TEMP/ddnovel-signing"
       - name: Build APK
+        id: build
         env:
           DDNOVEL_SIGNING_PROPERTIES: ${{ steps.signing.outputs.properties_path }}
         run: flutter build apk --release
       - name: Check APK signature and checksum
+        id: verify
         env:
           FIXED_SIGNING: ${{ steps.signing.outputs.signing_available }}
         run: |
           mkdir -p build/distribution
+          echo 'UNVERIFIED: do not install or distribute until certificate verification succeeds' > build/distribution/SIGNING_STATUS.txt
+          cp android/signing-certificate.sha256 build/distribution/signing-certificate.sha256
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
           test -n "$APKSIGNER"
           if [ "$FIXED_SIGNING" = true ]; then
             APK=build/distribution/app-release.apk
             cp build/app/outputs/flutter-apk/app-release.apk "$APK"
+            (cd build/distribution && sha256sum *.apk > SHA256SUMS.txt)
+            "$APKSIGNER" verify --verbose --print-certs "$APK"
             python3 scripts/sign_apk.py --verify-only --apk "$APK" --apksigner "$APKSIGNER"
             echo 'SIGNED: fixed certificate verified' > build/distribution/SIGNING_STATUS.txt
           else
@@ -80,6 +86,7 @@ jobs:
             SOURCE=$(find build/app/outputs/apk/release -name '*-unsigned.apk' -print -quit)
             test -n "$SOURCE"
             cp "$SOURCE" "$APK"
+            (cd build/distribution && sha256sum *.apk > SHA256SUMS.txt)
             if "$APKSIGNER" verify "$APK" >/dev/null 2>&1; then
               echo 'ERROR: expected an unsigned APK, but found a signature.' >&2
               exit 1
@@ -92,8 +99,9 @@ jobs:
         if: always()
         run: python3 scripts/prepare_signing.py --cleanup --output-directory "$RUNNER_TEMP/ddnovel-signing"
       - uses: actions/upload-artifact@v4
+        if: always() && steps.build.outcome == 'success'
         with:
-          name: DDNovelReader-gestures-apk
+          name: ${{ steps.verify.outcome == 'success' && 'DDNovelReader-gestures-apk' || 'DDNovelReader-unverified-apk' }}
           path: |
             build/distribution/*.apk
             build/distribution/SHA256SUMS.txt

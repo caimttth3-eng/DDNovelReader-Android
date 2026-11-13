@@ -4,6 +4,9 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import contextlib
+import io
 import unittest
 from unittest.mock import patch
 
@@ -82,35 +85,31 @@ class SigningTests(unittest.TestCase):
         with patch.object(prepare, "find_tool", return_value=Path("java.exe")):
             self.assertEqual(prepare.tool_command(launcher), ["java.exe", "-jar", str(jar)])
 
-    def test_apk_verification_requires_one_matching_certificate(self):
-        with patch.object(sign_apk, "find_tool", return_value=Path("apksigner")):
-            for certificates in ([self.expected], ["0" * 64], [self.expected, self.expected], []):
-                output = "\n".join(f"Signer #{i + 1} certificate SHA-256 digest: {cert}" for i, cert in enumerate(certificates)).encode()
-                with self.subTest(certificates=certificates), patch.object(sign_apk, "run_tool", return_value=output):
-                    if certificates == [self.expected]:
-                        sign_apk.verify_apk("sample.apk", self.expected)
-                    else:
-                        with self.assertRaises(prepare.SigningError):
-                            sign_apk.verify_apk("sample.apk", self.expected)
+    @staticmethod
+    def pem(der):
+        return b"-----BEGIN CERTIFICATE-----\r\n" + base64.b64encode(der) + b"\r\n-----END CERTIFICATE-----\r\n"
 
-    def test_sdk_range_output_requires_the_pinned_key_for_every_sdk(self):
-        ranges = ["(minSdkVersion=24, maxSdkVersion=32)", "(minSdkVersion=33, maxSdkVersion=2147483647)"]
-        valid = "Number of signers: 1\n" + "\n".join(
-            f"Signer {label} certificate SHA-256 digest: {self.expected}" for label in ranges)
+    def test_verification_hashes_pem_der_on_either_stream_without_display_labels(self):
+        pem = self.pem(b"test-certificate")
         with patch.object(sign_apk, "find_tool", return_value=Path("apksigner")):
-            for output in [valid, valid.replace(ranges[1], "(minSdkVersion=33 (dev release=true), maxSdkVersion=2147483647)"),
-                           valid + "\nSource Stamp Signer certificate SHA-256 digest: " + "0" * 64]:
-                with self.subTest(valid=output), patch.object(sign_apk, "run_tool", return_value=output.encode()):
+            for stdout, stderr in [(pem, b""), (b"", pem), (pem, pem), (b"SDK range/localized labels\n" + pem + pem, b"")]:
+                result = subprocess.CompletedProcess([], 0, stdout, stderr)
+                with self.subTest(stdout=stdout, stderr=stderr), patch.object(sign_apk.subprocess, "run", return_value=result) as run:
                     sign_apk.verify_apk("sample.apk", self.expected)
-            for output in [valid.replace(self.expected, "0" * 64, 1),
-                           valid.replace("Number of signers: 1", "Number of signers: 2"),
-                           valid + f"\nSigner #1 certificate SHA-256 digest: {self.expected}",
-                           valid + "\nSigner (unrecognized format) certificate SHA-256 digest: " + "0" * 64,
-                           "Number of signers: 1\n"]:
-                with self.subTest(invalid=output), patch.object(sign_apk, "run_tool", return_value=output.encode()):
-                    with self.assertRaises(prepare.SigningError) as caught:
-                        sign_apk.verify_apk("sample.apk", self.expected)
-                    self.assertIn("expected=" + self.expected, str(caught.exception))
+                    self.assertIn("--print-certs-pem", run.call_args.args[0])
+
+    def test_missing_wrong_extra_malformed_pem_and_failed_crypto_verification_are_rejected(self):
+        pem = self.pem(b"test-certificate")
+        for output, code in [(b"no cert", 0), (self.pem(b"wrong"), 0), (pem + self.pem(b"extra signer"), 0),
+                             (pem + b"-----BEGIN CERTIFICATE-----", 0),
+                             (b"-----BEGIN CERTIFICATE-----\n%%%\n-----END CERTIFICATE-----", 0), (pem, 1)]:
+            result = subprocess.CompletedProcess([], code, output, b"public verifier diagnostics")
+            with self.subTest(output=output, code=code), patch.object(sign_apk, "find_tool", return_value=Path("apksigner")), \
+                    patch.object(sign_apk.subprocess, "run", return_value=result), contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                with self.assertRaises(prepare.SigningError) as caught:
+                    sign_apk.verify_apk("sample.apk", self.expected)
+                self.assertIn("expected=" + self.expected, str(caught.exception))
+                self.assertIn("public verifier diagnostics", diagnostic.getvalue())
 
     def test_no_secret_build_is_explicitly_unsigned_and_cleans_stale_files(self):
         certificate = self.root / "certificate.sha256"
