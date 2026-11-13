@@ -60,7 +60,8 @@ void main() {
   }
 
   testWidgets('opening a pending book immediately provides its title, progress and back button', (tester) async {
-    final semantics = tester.ensureSemantics(); addTearDown(semantics.dispose);
+    final semantics = tester.ensureSemantics();
+    try {
     final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
     var loads = 0;
     await open(tester, log, () { loads++; return pending.future; });
@@ -74,6 +75,9 @@ void main() {
     await tester.tap(find.byType(BackButton));
     await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
     pending.complete((readableBook(), null)); await tester.pump();
+    } finally {
+      semantics.dispose();
+    }
   });
 
   testWidgets('a late successful load cannot reopen the reader after returning', (tester) async {
