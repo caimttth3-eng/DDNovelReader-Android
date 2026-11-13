@@ -35,7 +35,7 @@ class DisplayCutoutPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
     }
 
     @Suppress("DEPRECATION")
-    private fun geometry(): Map<String, Any>? {
+    private fun geometry(): Map<String, Any?>? {
         val host = activity ?: return null
         val decor = host.window.decorView
         val view = flutterView(decor) ?: return null
@@ -70,6 +70,15 @@ class DisplayCutoutPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
         val topInset = if (Build.VERSION.SDK_INT >= 28) max(cutout?.safeInsetTop ?: 0, cutoutInsets?.top ?: 0) else 0
         val rightInset = if (Build.VERSION.SDK_INT >= 28) max(cutout?.safeInsetRight ?: 0, cutoutInsets?.right ?: 0) else 0
         val bottomInset = if (Build.VERSION.SDK_INT >= 28) max(cutout?.safeInsetBottom ?: 0, cutoutInsets?.bottom ?: 0) else 0
+        val normalInsets = if (Build.VERSION.SDK_INT >= 30) {
+            (metricsInsets ?: insets)?.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+        } else null
+        // Legacy stable insets also ignore transient status/navigation hiding.
+        // Combine edges by max: the cutout and status bar overlap, not stack.
+        val normalLeft = max(leftInset, normalInsets?.left ?: insets?.stableInsetLeft ?: 0)
+        val normalTop = max(topInset, normalInsets?.top ?: insets?.stableInsetTop ?: 0)
+        val normalRight = max(rightInset, normalInsets?.right ?: insets?.stableInsetRight ?: 0)
+        val normalBottom = max(bottomInset, normalInsets?.bottom ?: insets?.stableInsetBottom ?: 0)
         val statusTop = if (Build.VERSION.SDK_INT >= 30) {
             (metricsInsets ?: insets)?.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars())?.top ?: 0
         } else insets?.stableInsetTop ?: 0
@@ -90,6 +99,11 @@ class DisplayCutoutPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCa
                 "top" to max(0, topInset - y) / density,
                 "right" to max(0, rightInset - (windowWidth - x - view.width)) / density,
                 "bottom" to max(0, bottomInset - (windowHeight - y - view.height)) / density),
+            "systemBarInsets" to if (insets == null && metricsInsets == null) null else mapOf(
+                "left" to max(0, normalLeft - x) / density,
+                "top" to max(0, normalTop - y) / density,
+                "right" to max(0, normalRight - (windowWidth - x - view.width)) / density,
+                "bottom" to max(0, normalBottom - (windowHeight - y - view.height)) / density),
             "statusBarTop" to max(0, statusTop - y) / density,
             "statusBarVisible" to statusVisible,
             "topLeftRadius" to corner(RoundedCorner.POSITION_TOP_LEFT),

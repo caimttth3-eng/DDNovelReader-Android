@@ -12,6 +12,7 @@ import '../services/book_cache_task.dart';
 import '../services/book_parser.dart';
 import '../services/tts_cache_store.dart';
 import '../services/updater.dart';
+import '../widgets/stable_system_bar_safe_area.dart';
 import 'about_screen.dart';
 import 'reader_screen.dart';
 
@@ -30,6 +31,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
   List<BookMeta> _books = [];
   Map<String, BookProgress> _progress = {};
   bool _loading = true;
+  bool _readerRouteOpen = false;
 
   @override
   void initState() {
@@ -136,7 +138,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
+      body: StableSystemBarSafeArea(
+        holdInsets: _readerRouteOpen,
         child: Column(
           children: [
             _buildTopBar(context),
@@ -262,8 +265,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
     }
     final saved = await _storage.loadProgress(meta.id);
     if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
+    final route = MaterialPageRoute<void>(
         builder: (_) => ReaderScreen(
           book: book,
           storage: _storage,
@@ -275,8 +277,15 @@ class _ShelfScreenState extends State<ShelfScreen> {
             }
           },
         ),
-      ),
-    );
+      );
+    setState(() => _readerRouteOpen = true);
+    try {
+      await Navigator.of(context).push(route);
+      // The push future completes at pop, before the reverse transition does.
+      await route.completed;
+    } finally {
+      if (mounted) setState(() => _readerRouteOpen = false);
+    }
   }
 
   /// 缓存管理：语音缓存总占用 + 按书籍列出占用（清理单本/清空全部）

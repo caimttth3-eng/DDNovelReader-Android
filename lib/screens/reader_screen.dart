@@ -133,8 +133,12 @@ class _SentenceDragSession {
 class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   late final TtsReader _tts;
   StreamSubscription<bool>? _networkSubscription;
-  final Map<Size, DisplayCutoutGeometry> _cutoutGeometry = {};
+  final Map<(Size, double), DisplayCutoutGeometry> _cutoutGeometry = {};
   int _cutoutRevision = 0;
+  late final Future<void> _viewportReady;
+  bool _viewportPrepared = false;
+  bool _leavingReader = false;
+  final Map<(Size, double), ReaderHeaderLayout> _stableHeaders = {};
   late List<_Item> _items;
   late Book _book;
   List<BookTocEntry> _toc = [];
@@ -189,9 +193,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   // 控制 UI 显隐
   bool _showControls = true;
   bool _showQuickMenu = false;
-  final Map<Orientation, EdgeInsets> _stableInsets = {};
+  final Map<(Size, double), EdgeInsets> _stableInsets = {};
   EdgeInsets get _readerInsets => _stableInsets.putIfAbsent(
-    MediaQuery.orientationOf(context), () => MediaQuery.viewPaddingOf(context));
+    (MediaQuery.sizeOf(context), MediaQuery.devicePixelRatioOf(context)), () => MediaQuery.viewPaddingOf(context));
   bool get _isNight => _settings.themeIndex == 2;
   Color get _menuColor => _isNight ? const Color(0xFF181818) : const Color(0xF2333333);
 
@@ -276,7 +280,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     AppAppearance.nightMode.addListener(_onAppearanceChanged);
-    _refreshDisplayCutout();
+    _viewportReady = _prepareReaderViewport();
     _pageAnimation = AnimationController(vsync: this, duration: const Duration(milliseconds: 80));
     _autoClock = AnimationController(vsync: this, duration: const Duration(seconds: 20))
       ..addStatusListener((status) {
@@ -377,13 +381,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     _volumeChannel.invokeMethod('resetScreenBrightness');
     // 恢复系统默认系统栏样式（书架页浅色背景使用深色图标）
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: _isNight ? Brightness.light : Brightness.dark,
-      systemNavigationBarColor: Colors.transparent,
-      systemNavigationBarIconBrightness: _isNight ? Brightness.light : Brightness.dark,
-    ));
+    _restoreSystemUiForExit();
     _gestureTipTimer?.cancel();
     _tts.dispose();
     _itemPositionsListener.itemPositions.removeListener(_onScroll);
@@ -399,33 +397,69 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _refreshDisplayCutout() async {
     final revision = ++_cutoutRevision;
+    final dpr = View.of(context).devicePixelRatio;
     final geometry = await DisplayCutoutService.read();
-    if (!mounted || revision != _cutoutRevision || geometry == null) return;
-    setState(() => _cutoutGeometry[geometry.viewport] = geometry);
+    if (!mounted || _leavingReader || revision != _cutoutRevision || geometry == null) return;
+    if (View.of(context).devicePixelRatio != dpr) return;
+    setState(() => _cutoutGeometry[(geometry.viewport, dpr)] = geometry);
   }
 
   @override
   void didChangeMetrics() {
-    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _refreshDisplayCutout(); });
+    if (!_viewportPrepared || _leavingReader) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted && !_leavingReader) _refreshDisplayCutout(); });
+  }
+
+  Future<void> _prepareReaderViewport() async {
+    await _applySystemUi();
+    if (!mounted || _leavingReader) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _leavingReader) return;
+    await _refreshDisplayCutout();
+    if (!mounted || _leavingReader) return;
+    final viewport = MediaQuery.sizeOf(context), dpr = MediaQuery.devicePixelRatioOf(context);
+    if (!_cutoutGeometry.entries.any((entry) => entry.key.$2 == dpr && entry.value.matches(viewport))) {
+      // rootWindowInsets can be absent until the first layout. Retry on one
+      // more real frame, then retain the platform-independent safe fallback.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || _leavingReader) return;
+      await _refreshDisplayCutout();
+    }
+    if (mounted && !_leavingReader) _viewportPrepared = true;
+  }
+
+  void _restoreSystemUiForExit() {
+    if (_leavingReader) return;
+    _leavingReader = true; _playbackGeneration++; _permissionGate?.cancel(); _sentenceDrag = null;
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge).catchError((Object _) {});
+    final dark = AppAppearance.nightMode.value;
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(statusBarColor: Colors.transparent,
+      statusBarIconBrightness: dark ? Brightness.light : Brightness.dark, systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark));
   }
 
   ReaderHeaderLayout get _headerLayout {
     final viewport = MediaQuery.sizeOf(context);
-    DisplayCutoutGeometry? native = _cutoutGeometry[viewport];
+    final dpr = MediaQuery.devicePixelRatioOf(context), key = (viewport, MediaQuery.devicePixelRatioOf(context));
+    final stable = _stableHeaders[key];
+    if (stable != null) return stable;
+    DisplayCutoutGeometry? native = _cutoutGeometry[key];
     if (native == null) {
-      for (final candidate in _cutoutGeometry.values) {
-        if (candidate.matches(viewport)) { native = candidate; break; }
+      for (final entry in _cutoutGeometry.entries) {
+        if (entry.key.$2 == dpr && entry.value.matches(viewport)) { native = entry.value; break; }
       }
     }
     final features = MediaQuery.of(context).displayFeatures
       .where((feature) => feature.type == ui.DisplayFeatureType.cutout).map((feature) => feature.bounds).toList();
     final cutouts = features.isNotEmpty ? features : native?.cutouts ?? const <Rect>[];
-    return ReaderHeaderLayout.compute(viewport: viewport,
+    final layout = ReaderHeaderLayout.compute(viewport: viewport,
       safeInsets: cutouts.isNotEmpty && native != null ? native.safeInsets : _readerInsets,
       cutouts: cutouts, topLeftRadius: native?.topLeftRadius ?? 0, topRightRadius: native?.topRightRadius ?? 0,
       // The reading layout stays immersive even while an OS bar is transiently
       // revealed. Its visibility must never move the text beneath overlays.
       statusBarVisible: false);
+    if (_settingsLoaded && (native != null || features.isNotEmpty)) _stableHeaders[key] = layout;
+    return layout;
   }
 
   void _onAppearanceChanged() {
@@ -543,7 +577,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _loadSettings() async {
     final raw = await widget.storage.loadSettings();
-    if (!mounted) return;
+    await _viewportReady;
+    if (!mounted || _leavingReader) return;
     _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(raw));
     _formatBook();
     AppAppearance.nightMode.value = _isNight;
@@ -551,12 +586,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (_settings.automaticBrightness) _syncSystemBrightness();
     _applySystemUi();
     await _tts.setSpeechRate(_settings.speechRate);
+    if (!mounted || _leavingReader) return;
     _tts.setPrefetchSentences(_settings.prefetchSentences);
     final restoreFallback = _settings.systemFallbackActive;
     _tts.setVoice(_settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice);
     _tts.restoreSystemFallback(restoreFallback);
     final p = await widget.storage.loadProgress(_book.id) ?? widget.initialProgress;
-    if (!mounted) return;
+    if (!mounted || _leavingReader) return;
     final atTitle = p == null || p.atChapterTitle ||
       (p.layoutSignature.isEmpty && p.paragraphIndex == 0 && p.offsetInParagraph == 0);
     _lastProgress = p;
@@ -571,16 +607,17 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _ttsSentence = ReadingText.sentenceAt(_book.chapters[_chapter].paragraphs[_para], location.$2);
     setState(() => _settingsLoaded = true);
     await _loadAnnotations();
+    if (!mounted || _leavingReader) return;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
+      if (!mounted || _leavingReader) return;
       final exact = p != null && p.layoutSignature == _layoutSignature && p.viewportItem != null;
       final index = exact ? p.viewportItem!.clamp(0, _items.length - 1) :
         atTitle ? _chapterItem(_chapter) : _itemIndexOf(_chapter, _para);
       await _positionViewport(index, exact ? p.viewportAlignment : 0);
-      if (mounted && !exact && p != null && !atTitle) {
+      if (mounted && !_leavingReader && !exact && p != null && !atTitle) {
         await _followSentence(_chapter, _para, max(0, _ttsSentence), character: location.$2);
       }
-      if (mounted) { _restoringProgress = false; _scheduleSave(); }
+      if (mounted && !_leavingReader) { _restoringProgress = false; _scheduleSave(); }
     });
   }
 
@@ -1694,8 +1731,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// - 朗读/全屏模式：immersiveSticky 彻底隐藏状态栏与导航条
   /// - UI 模式：edgeToEdge + 状态栏/导航条与 UI 栏同色(深暖黑)+白色图标，
   ///   系统栏与顶栏/底栏视觉融为一体，无突兀白条
-  void _applySystemUi() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  Future<void> _applySystemUi() async {
+    if (_leavingReader) return;
+    final applying = SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
@@ -1704,6 +1742,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       systemNavigationBarIconBrightness: Brightness.light,
       systemNavigationBarContrastEnforced: false,
     ));
+    try { await applying; } on PlatformException { /* Preserve a usable reader on older hosts. */ }
+    on MissingPluginException { /* Non-Android hosts can still read. */ }
   }
 
   void _applyReaderBrightness() {
@@ -2514,15 +2554,16 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   @override
   Widget build(BuildContext context) {
     _syncMediaVolumePolling();
+    if (!_settingsLoaded) {
+      return PopScope(onPopInvokedWithResult: (didPop, result) { if (didPop) _restoreSystemUiForExit(); },
+        child: const Scaffold(body: Center(child: CircularProgressIndicator())));
+    }
     _viewportSize = MediaQuery.sizeOf(context);
     _headerReservedExtent = _chapterTopArea();
     _bodyExtent = _bodyHeight;
-    if (!_settingsLoaded) {
-      return const Scaffold(
-          body: Center(child: CircularProgressIndicator()));
-    }
     final header = _headerLayout.chapterTitle(_chapterBarTitle(_chapter));
     return PopScope(
+      onPopInvokedWithResult: (didPop, result) { if (didPop) _restoreSystemUiForExit(); },
       child: Scaffold(
         backgroundColor: _theme.bg,
         body: Stack(
@@ -3420,7 +3461,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               onPressed: () async {
                 if (_inReadingMode) await _exitReadingMode();
                 _scheduleSave();
-                if (mounted) Navigator.of(context).pop();
+                if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+                  _restoreSystemUiForExit(); Navigator.of(context).pop();
+                }
               }),
             const Spacer(),
             IconButton(tooltip: T('read'), icon: const ReaderIcon(ReaderSymbol.headphones, color: Colors.white70),

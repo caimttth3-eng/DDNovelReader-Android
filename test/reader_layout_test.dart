@@ -1475,6 +1475,79 @@ void main() {
     await handler.playbackState.close(); await handler.mediaItem.close();
   });
 
+  testWidgets('reader waits for immersive geometry before first content and pins same viewport header metrics', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    tester.view.viewPadding = const FakeViewPadding(top: 44);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
+    final geometry = Completer<Map<String, dynamic>>();
+    var reads = 0;
+    Map<String, dynamic> snapshot(int top) => {'width': 390, 'height': 844, 'safeInsets': {'top': top},
+      'cutouts': [{'left': 175, 'right': 215, 'top': 0, 'bottom': top}]};
+    messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async {
+      reads++; return reads == 1 ? geometry.future : snapshot(44);
+    });
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('initial-viewport'), storage: AppStorage(), ttsReader: _TestSpeech())));
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(platformCalls.any((call) => call.method == 'SystemChrome.setEnabledSystemUIMode' &&
+      call.arguments == 'SystemUiMode.immersiveSticky'), isTrue);
+    expect(find.byKey(const ValueKey('reader-body')), findsNothing);
+    expect(reads, 1);
+    tester.view.viewPadding = const FakeViewPadding(); await tester.pump();
+    geometry.complete(snapshot(40)); await tester.pumpAndSettle();
+    final body = find.byKey(const ValueKey('reader-body')), header = find.byKey(const ValueKey('reader-chapter-header'));
+    expect(tester.getRect(body).top, 64, reason: 'The first text frame must use the prepared cutout, not the earlier 44px status inset');
+    final beforeBody = tester.getRect(body), beforeHeader = tester.getRect(header);
+    tester.view.viewPadding = const FakeViewPadding(top: 44); await tester.pumpAndSettle();
+    expect(reads, greaterThan(1));
+    expect(tester.getRect(body), beforeBody); expect(tester.getRect(header), beforeHeader);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('reader restores bars at route pop start while dialog dismissal keeps immersive', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final navigator = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(MaterialApp(navigatorKey: navigator, home: Builder(builder: (context) => Scaffold(
+      body: TextButton(key: const ValueKey('open-reader'), onPressed: () => Navigator.push(context,
+        MaterialPageRoute<void>(builder: (_) => ReaderScreen(book: sample('route-bars'), storage: AppStorage(), ttsReader: _TestSpeech()))),
+        child: const Text('打开阅读'))))));
+    int modes(String mode) => platformCalls.where((call) => call.method == 'SystemChrome.setEnabledSystemUIMode' &&
+      call.arguments == mode).length;
+    await tester.tap(find.byKey(const ValueKey('open-reader'))); await tester.pumpAndSettle();
+    final before = tester.getRect(find.byKey(const ValueKey('reader-body')));
+    await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
+    navigator.currentState!.pop(); await tester.pumpAndSettle();
+    expect(modes('SystemUiMode.edgeToEdge'), 0, reason: 'A modal belonging to the reader is not a reader exit');
+    navigator.currentState!.pop(); await tester.pump();
+    expect(modes('SystemUiMode.edgeToEdge'), 1);
+    expect(find.byType(ReaderScreen), findsOneWidget, reason: 'System bars must restore before the outgoing route is disposed');
+    expect(tester.getRect(find.byKey(const ValueKey('reader-body'))), before);
+    await tester.pumpAndSettle(); expect(find.byType(ReaderScreen), findsNothing);
+    expect(modes('SystemUiMode.edgeToEdge'), 1, reason: 'Dispose is only an idempotent fallback');
+    await tester.tap(find.byKey(const ValueKey('open-reader'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('返回')); await tester.pump();
+    expect(modes('SystemUiMode.edgeToEdge'), 2);
+    await tester.pumpAndSettle(); expect(find.byType(ReaderScreen), findsNothing);
+    expect(modes('SystemUiMode.edgeToEdge'), 2); expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('leaving reader while initial geometry is pending cannot reenter immersive on completion', (tester) async {
+    final geometry = Completer<Map<String, dynamic>?>();
+    messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) => geometry.future);
+    final navigator = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(MaterialApp(navigatorKey: navigator, home: Builder(builder: (context) => Scaffold(body: TextButton(
+      onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ReaderScreen(
+        book: sample('leave-initial-geometry'), storage: AppStorage(), ttsReader: _TestSpeech()))), child: const Text('打开'))))));
+    await tester.tap(find.text('打开')); await tester.pump(); await tester.pump(const Duration(milliseconds: 16));
+    navigator.currentState!.pop(); await tester.pump();
+    final afterPop = platformCalls.length;
+    geometry.complete(null); await tester.pumpAndSettle();
+    expect(platformCalls.skip(afterPop).where((call) => call.method == 'SystemChrome.setEnabledSystemUIMode' &&
+      call.arguments == 'SystemUiMode.immersiveSticky'), isEmpty);
+    expect(find.byType(ReaderScreen), findsNothing); expect(tester.takeException(), isNull);
+  });
+
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);

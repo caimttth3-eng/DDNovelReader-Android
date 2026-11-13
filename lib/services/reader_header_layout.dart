@@ -6,13 +6,16 @@ class DisplayCutoutGeometry {
   final Size viewport;
   final List<Rect> cutouts;
   final EdgeInsets safeInsets;
+  /// Normal system bars plus cutout, regardless of transient bar visibility.
+  /// Null for hosts that do not implement this additional geometry field.
+  final EdgeInsets? systemBarInsets;
   final double topLeftRadius;
   final double topRightRadius;
   final double statusBarTop;
   final bool statusBarVisible;
 
   const DisplayCutoutGeometry({required this.viewport, this.cutouts = const [],
-    this.safeInsets = EdgeInsets.zero, this.topLeftRadius = 0,
+    this.safeInsets = EdgeInsets.zero, this.systemBarInsets, this.topLeftRadius = 0,
     this.topRightRadius = 0, this.statusBarTop = 0, this.statusBarVisible = false});
 
   bool matches(Size size) => (viewport.width - size.width).abs() <= 1 &&

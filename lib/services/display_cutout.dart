@@ -16,6 +16,7 @@ class DisplayCutoutService {
       final size = Size(value(data, 'width'), value(data, 'height'));
       if (size.isEmpty) return null;
       final insets = data['safeInsets'] is Map ? data['safeInsets'] as Map : const {};
+      final normal = data['systemBarInsets'];
       final cutouts = <Rect>[];
       if (data['cutouts'] is List) {
         for (final item in data['cutouts'] as List) {
@@ -26,6 +27,8 @@ class DisplayCutoutService {
       }
       return DisplayCutoutGeometry(viewport: size, cutouts: cutouts,
         safeInsets: EdgeInsets.fromLTRB(value(insets, 'left'), value(insets, 'top'), value(insets, 'right'), value(insets, 'bottom')),
+        systemBarInsets: normal is Map ? EdgeInsets.fromLTRB(value(normal, 'left'), value(normal, 'top'),
+          value(normal, 'right'), value(normal, 'bottom')) : null,
         topLeftRadius: value(data, 'topLeftRadius'), topRightRadius: value(data, 'topRightRadius'),
         statusBarTop: value(data, 'statusBarTop'), statusBarVisible: data['statusBarVisible'] == true);
     } on PlatformException { return null; }
