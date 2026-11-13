@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import java.security.MessageDigest
 
 plugins {
     id("com.android.application")
@@ -7,9 +8,30 @@ plugins {
 }
 
 val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("key.properties")
-if (keystorePropertiesFile.exists()) {
+val signingPropertiesPath = System.getenv("DDNOVEL_SIGNING_PROPERTIES")?.takeIf { it.isNotBlank() }
+val keystorePropertiesFile = signingPropertiesPath?.let { file(it) }
+if (keystorePropertiesFile != null) {
+    require(keystorePropertiesFile.isFile) { "Signing properties file is missing." }
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+    for (name in listOf("storeFile", "storePassword", "keyAlias", "keyPassword", "storeType")) {
+        require(!keystoreProperties.getProperty(name).isNullOrBlank()) { "Incomplete signing properties." }
+    }
+    require(keystoreProperties.getProperty("storeType") == "PKCS12") { "A PKCS12 fixed signing key is required." }
+    val expected = rootProject.file("signing-certificate.sha256").readText()
+        .replace(Regex("[:\\s]"), "").lowercase()
+    require(expected.matches(Regex("[0-9a-f]{64}"))) { "Invalid public signing certificate fingerprint." }
+    val keytool = File(System.getProperty("java.home"), "bin/keytool" + if (System.getProperty("os.name").startsWith("Windows")) ".exe" else "")
+    val command = ProcessBuilder(keytool.absolutePath, "-exportcert", "-keystore",
+        keystoreProperties.getProperty("storeFile"), "-alias", keystoreProperties.getProperty("keyAlias"),
+        "-storetype", "PKCS12", "-storepass:env", "DD_STORE_PASSWORD")
+    command.environment()["DD_STORE_PASSWORD"] = keystoreProperties.getProperty("storePassword")
+    val process = command.start()
+    val certificate = process.inputStream.readBytes()
+    process.errorStream.readBytes()
+    require(process.waitFor() == 0) { "Could not validate signing certificate." }
+    val actual = MessageDigest.getInstance("SHA-256").digest(certificate)
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    require(actual == expected) { "Signing certificate differs from the pinned public certificate." }
 }
 
 android {
@@ -35,6 +57,7 @@ android {
 
     signingConfigs {
         create("release") {
+            storeType = "PKCS12"
             keyAlias = keystoreProperties["keyAlias"] as String? ?: ""
             keyPassword = keystoreProperties["keyPassword"] as String? ?: ""
             storeFile = keystoreProperties["storeFile"]?.let { file(it) }
@@ -44,11 +67,11 @@ android {
 
     buildTypes {
         release {
-            // Fork builds use the debug key unless a release keystore is supplied.
-            signingConfig = if (keystorePropertiesFile.exists()) {
+            // Missing secrets produce an unsigned APK. Never invent a new key.
+            signingConfig = if (keystorePropertiesFile != null) {
                 signingConfigs.getByName("release")
             } else {
-                signingConfigs.getByName("debug")
+                null
             }
             isMinifyEnabled = true
             isShrinkResources = true

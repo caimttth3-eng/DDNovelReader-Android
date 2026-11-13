@@ -35,14 +35,32 @@ void main() {
     expect(title.numberRect!.top, title.nameRect.top);
   });
 
-  test('equal sides keep the name left and put the number right', () {
+  test('equal sides put the chapter number left and the name right', () {
     final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
       cutouts: [const Rect.fromLTRB(188, 8, 212, 32)]);
     final title = layout.chapterTitle('Chapter IV: Return');
     expect(title.chapterNumber, 'Chapter IV');
     expect(title.chapterName, 'Return');
+    expect(title.nameRect.left, 216);
+    expect(title.numberRect!.left, 8);
+  });
+
+  test('similar sides keep the number left even when the left side is slightly wider', () {
+    final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
+      cutouts: [const Rect.fromLTRB(193, 8, 217, 32)]);
+    final title = layout.chapterTitle('第一章 开端');
+    expect(title.numberRect!.left, 8);
+    expect(title.nameRect.left, 221);
+    expect(title.numberRect!.width, greaterThan(title.nameRect.width));
+  });
+
+  test('clearly unequal sides retain the number on the narrow right side', () {
+    final layout = ReaderHeaderLayout.compute(viewport: portrait, safeInsets: topSafe,
+      cutouts: [const Rect.fromLTRB(235, 8, 265, 32)]);
+    final title = layout.chapterTitle('第一章 开端');
     expect(title.nameRect.left, 8);
-    expect(title.numberRect!.left, 216);
+    expect(title.numberRect!.left, 269);
+    expect(title.numberRect!.width, lessThan(title.nameRect.width));
   });
 
   test('corner cameras and absent cutouts keep the complete title on one side', () {

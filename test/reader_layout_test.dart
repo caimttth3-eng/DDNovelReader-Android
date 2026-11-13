@@ -1333,16 +1333,22 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
-  for (final corner in [false, true]) {
-    testWidgets('header separates chapter number only when two safe slots exist corner=$corner', (tester) async {
+  for (final scenario in [
+    ('near-right-wide', 170, false, 'reader-header-split-number-name'),
+    ('equal', 175, false, 'reader-header-equal-left-number-right-name'),
+    ('near-left-wide', 180, false, 'reader-header-near-equal-left-number-right-name'),
+    ('corner', 8, true, 'reader-header-corner-full-title'),
+  ]) {
+    testWidgets('header uses left number and right name for comparable slots ${scenario.$1}', (tester) async {
+      final corner = scenario.$3;
       tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
       tester.view.viewPadding = const FakeViewPadding(top: 40);
       addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
       messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async => {
         'width': 390, 'height': 844, 'safeInsets': {'top': 40},
-        'cutouts': [{'left': corner ? 8 : 170, 'right': corner ? 40 : 210, 'top': 0, 'bottom': 40}],
+        'cutouts': [{'left': scenario.$2, 'right': corner ? 40 : scenario.$2 + 40, 'top': 0, 'bottom': 40}],
       });
-      final book = Book(id: 'dual-header-$corner', title: '双侧标题', filePath: '', format: BookFormat.txt,
+      final book = Book(id: 'dual-header-${scenario.$1}', title: '双侧标题', filePath: '', format: BookFormat.txt,
         addedAt: DateTime(2026), chapters: [Chapter(title: '第十二章 山间来信', paragraphs: [ReadingText.paragraph('清晨风吹过树林。')])]);
       final preview = GlobalKey();
       await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(home: ReaderScreen(book: book, storage: AppStorage()))));
@@ -1355,8 +1361,10 @@ void main() {
         expect(find.descendant(of: name, matching: find.text('山间来信')), findsOneWidget);
         expect(tester.widget<Text>(number).data, '第十二章');
         expect(tester.getCenter(name).dx, greaterThan(tester.getCenter(number).dx));
+        expect(tester.getCenter(number).dx, lessThan(195));
+        expect(tester.getCenter(name).dx, greaterThan(195));
       }
-      await _captureReaderPreview(tester, preview, corner ? 'reader-header-corner-full-title' : 'reader-header-split-number-name');
+      await _captureReaderPreview(tester, preview, scenario.$4);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     });

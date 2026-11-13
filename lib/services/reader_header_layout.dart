@@ -47,6 +47,7 @@ class ChapterHeaderContent {
 /// Chooses a horizontal title slot from real obstruction bounds. It never
 /// invents a centre camera hole from a safe inset alone.
 class ReaderHeaderLayout {
+  static const similarSlotWidthRatio = 0.10;
   final Rect titleRect;
   final double topArea;
   final bool sharesCutoutBand;
@@ -66,7 +67,16 @@ class ReaderHeaderLayout {
       if (slot != titleRect && slot.width >= needed && (number == null || slot.width > number.width)) number = slot;
     }
     if (number == null) return whole();
-    return ChapterHeaderContent(chapterName: parts.name, nameRect: titleRect,
+    var name = titleRect;
+    if ((name.width - number.width).abs() <= math.max(name.width, number.width) * similarSlotWidthRatio) {
+      final left = name.left < number.left ? name : number;
+      final right = name.left < number.left ? number : name;
+      if (left.width >= needed && right.width >= minNameWidth) {
+        number = left;
+        name = right;
+      }
+    }
+    return ChapterHeaderContent(chapterName: parts.name, nameRect: name,
       chapterNumber: parts.number, numberRect: number);
   }
 
