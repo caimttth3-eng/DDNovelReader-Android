@@ -3,6 +3,7 @@ import 'package:crypto/crypto.dart';
 
 import '../models/book.dart';
 import 'text_cleaner.dart';
+import 'chapterizer.dart';
 
 /// Rebuild display paragraphs and TTS sentences from the same source text.
 /// The imported file is never rewritten.
@@ -79,9 +80,15 @@ class ReadingText {
 
   static (List<Paragraph>, List<List<int>>) _paragraphs(Chapter chapter, bool merge, bool indent, String filter) {
     final lines = <_MappedLine>[];
+    final sourceLines = [for (final p in chapter.paragraphs)
+      ...p.display.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')];
+    final headings = merge ? detectChapterTitles(sourceLines.join('\n')).map((h) => h.offset).toSet() : <int>{};
+    var lineOffset = 0;
+    var previousHeading = false;
     var sourceAnchor = 0;
-    for (final p in chapter.paragraphs) {
-      for (final line in p.display.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')) {
+      for (final line in sourceLines) {
+        final isHeading = headings.contains(lineOffset + line.length - line.trimLeft().length);
+        lineOffset += line.length + 1;
         final anchors = <int>[];
         for (var i = 0; i < line.length; i++) {
           anchors.add(sourceAnchor);
@@ -100,7 +107,7 @@ class ReadingText {
           mapped = mapped.remove(RegExp(r'[\uFEFF\u200B\u200C\u200D\u2060\u00AD]'));
           // A misplaced closing quote belongs to an unmatched opening quote on
           // the preceding line. Never invent or reverse quotation marks.
-          if (lines.isNotEmpty) {
+          if (lines.isNotEmpty && !isHeading && !previousHeading) {
             var trimmed = mapped.trimLeft();
             while (trimmed.text.startsWith('”') &&
               '“'.allMatches(lines.last.text).length > '”'.allMatches(lines.last.text).length) {
@@ -111,7 +118,7 @@ class ReadingText {
             if (mapped.text.trim().isEmpty) continue;
           }
         }
-        if (merge && lines.isNotEmpty && !_end.hasMatch(lines.last.text.trimRight())) {
+        if (merge && !isHeading && !previousHeading && lines.isNotEmpty && !_end.hasMatch(lines.last.text.trimRight())) {
           // Restore a separating space for words in Latin-script text.
           final right = mapped.trimLeft();
           final space = RegExp(r'[A-Za-z0-9]$').hasMatch(lines.last.text) &&
@@ -120,8 +127,8 @@ class ReadingText {
         } else {
           lines.add(mapped);
         }
+        previousHeading = isHeading;
       }
-    }
     final output = lines.map((line) {
       final leading = RegExp(r'^[ \t\u3000]*').firstMatch(line.text)!.group(0)!;
       return indent && leading.length < 2 ? line.trimLeft().prepend('　　') : line;

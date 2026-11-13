@@ -12,6 +12,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../i18n.dart';
 import '../services/app_appearance.dart';
 import '../services/reading_text.dart';
+import '../services/book_parser.dart';
 import '../services/reader_typography.dart';
 import '../services/text_cleaner.dart';
 import '../widgets/reader_icon.dart';
@@ -125,6 +126,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   int _cutoutRevision = 0;
   late List<_Item> _items;
   late Book _book;
+  List<BookTocEntry> _toc = [];
+  List<int> _tocAnchors = [];
+  List<bool> _tocIsChapterTitle = [];
   String _textSignature = '';
   String _cacheFingerprint = '';
   final GlobalKey _pageBoundary = GlobalKey();
@@ -211,7 +215,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   _PlaybackPermissionGate? _permissionGate;
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
   int _ttsChapter = 0;
-  int? _mediaChapter;
+  String? _mediaTocKey;
   // TTS 合成加载中（点击播放/恢复后等待首句出声；期间防误触）
   bool _ttsLoading = false;
 
@@ -466,6 +470,60 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _sentenceRecognizers.clear();
     _pendingScrollIndex = null;
     _initLocate(); _initCharPrefix();
+    _rebuildToc();
+  }
+
+  void _rebuildToc() {
+    final entries = BookParser.extractToc(widget.book, autoExtractToc: _settings.autoExtractToc);
+    _tocAnchors = [for (final entry in entries)
+      ReadingText.anchor(widget.book, entry.chapterIndex, entry.paragraphIndex, entry.displayOffset)];
+    _tocIsChapterTitle = [for (final entry in entries) entry.paragraphIndex == 0 && entry.displayOffset == 0 &&
+      entry.title == widget.book.chapters[entry.chapterIndex].title &&
+      !widget.book.chapters[entry.chapterIndex].paragraphs.first.display.trimLeft().startsWith(entry.title)];
+    _toc = [for (var i = 0; i < entries.length; i++) (() {
+      final entry = entries[i], location = ReadingText.locate(_book, entries[i].chapterIndex, _tocAnchors[i]);
+      return BookTocEntry(title: entry.title, chapterIndex: entry.chapterIndex,
+        paragraphIndex: location.$1, displayOffset: location.$2);
+    })()];
+  }
+
+  int get _currentTocIndex {
+    if (_toc.isEmpty) return 0;
+    var c = _chapter;
+    var anchor = ReadingText.anchor(_book, c, _para, _wordStart >= 0 && _inReadingMode ? _wordStart :
+      _ttsSentence >= 0 && _ttsSentence < _book.chapters[c].paragraphs[_para].sentences.length
+        ? _book.chapters[c].paragraphs[_para].sentences[_ttsSentence].displayStart : 0);
+    if (!_inReadingMode) {
+      final top = _captureLineAnchor();
+      if (top != null) { c = top.chapter; anchor = top.source; }
+    }
+    var result = 0;
+    for (var i = 0; i < _toc.length; i++) {
+      if (_toc[i].chapterIndex > c || _toc[i].chapterIndex == c && _tocAnchors[i] > anchor) break;
+      result = i;
+    }
+    return result;
+  }
+
+  Future<void> _navigateToc(int index) async {
+    if (_ttsLoading || _paging || index < 0 || index >= _toc.length) return;
+    final entry = _toc[index], c = _toc[index].chapterIndex, p = _toc[index].paragraphIndex;
+    final sentence = ReadingText.sentenceAt(_book.chapters[c].paragraphs[p], entry.displayOffset);
+    setState(() { _showQuickMenu = false; _chapter = c; _para = p; _ttsSentence = sentence; _wordStart = -1; _wordEnd = -1; });
+    _pageEndKey = null;
+    if (_tocIsChapterTitle[index]) {
+      _jumpToItem(_chapterItem(c), animate: false);
+      if (_inReadingMode) _ttsFollowSeek(c, p, sentence);
+      _updateMediaChapter(c); _scheduleSave(); return;
+    }
+    final before = _navigationGeneration;
+    await _positionViewport(_itemIndexOf(c, p), 0);
+    if (!mounted || _navigationGeneration != before + 1) return;
+    final glyph = _ttsGlyphRect(c, p, entry.displayOffset);
+    if (glyph != null) await _pageScrollController.animateScroll(offset: glyph.top, duration: const Duration(milliseconds: 1));
+    if (!mounted) return;
+    if (_inReadingMode) _ttsFollowSeek(c, p, sentence);
+    _updateMediaChapter(c); _scheduleSave();
   }
 
   Future<void> _loadSettings() async {
@@ -1368,7 +1426,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   TtsCacheStore _currentCacheStore() =>
       TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate, textFingerprint: _cacheFingerprint);
 
-  String get _cacheTaskKey => '${_book.id}/$_cacheFingerprint/$_effectiveVoice/${_settings.speechRate.toStringAsFixed(2)}';
 
   /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
   void _refreshTtsCache() {
@@ -1837,13 +1894,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _changeChapter(int direction) {
-    if (_ttsLoading || _paging) return;
-    final chapter = _chapter + direction;
-    if (chapter < 0 || chapter >= _book.chapters.length) return;
-    setState(() { _showQuickMenu = false; _chapter = chapter; _para = 0; _ttsSentence = 0; });
-    _jumpToItem(_chapterItem(chapter), animate: false);
-    if (_inReadingMode) _ttsFollowSeek(chapter, 0, 0);
-    _scheduleSave();
+    _navigateToc(_currentTocIndex + direction);
   }
 
   void _enterFullscreen() {
@@ -1930,10 +1981,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _updateMediaChapter(int chapter) {
-    if (_mediaChapter == chapter || chapter < 0 || chapter >= _book.chapters.length) return;
-    _mediaChapter = chapter;
+    if (chapter < 0 || chapter >= _book.chapters.length) return;
+    final toc = _toc.isEmpty ? null : _toc[_currentTocIndex];
+    final title = toc?.title ?? _book.chapters[chapter].title;
+    final key = '$chapter/${toc?.paragraphIndex}/${toc?.displayOffset}/$title';
+    if (_mediaTocKey == key) return;
+    _mediaTocKey = key;
     globalAudioHandler?.updateBookChapter(bookId: _book.id, bookTitle: _book.title,
-      chapterTitle: _book.chapters[chapter].title, chapterIndex: chapter);
+      chapterTitle: title, chapterIndex: chapter);
   }
 
   void _onTtsSentenceChanged(int idx) {
@@ -1962,7 +2017,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       remain -= n;
     }
     if (!found) return;
-    _updateMediaChapter(c);
     final changed = (_chapter != c || _para != p || _ttsSentence != s);
     if (changed) {
       setState(() {
@@ -1973,6 +2027,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       });
       _scheduleSave();
     }
+    _updateMediaChapter(c);
     // A replay after a page animation may already have the right sentence but
     // still need to bring it back inside the newly laid out viewport.
     if (_itemScrollController.isAttached) _followSentence(c, p, s);
@@ -2001,6 +2056,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final right = (base + _wordMap!.displayOffsetOfTts(end)).clamp(left, sentence.displayEnd);
     while (left < right && para.display[left].trim().isEmpty) { left++; }
     setState(() { _wordStart = left; _wordEnd = right; });
+    _updateMediaChapter(_chapter);
     _ensureWordVisible(left);
   }
 
@@ -2462,6 +2518,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 章节标题行文案：标题已含"第X章/Chapter"则原样，否则加章节序号
   String _chapterBarTitle(int c) {
+    if (_toc.isNotEmpty) return _toc[_currentTocIndex].title;
     if (c < 0 || c >= _book.chapters.length) return '';
     final t = _book.chapters[c].title.trim();
     if (t.startsWith('第') ||
@@ -2620,9 +2677,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   style: const TextStyle(color: Color(0xFFA89060), fontSize: 11)),
                 trailing: const Icon(Icons.tune, color: Color(0xFF9BC5DD), size: 22),
                 onTap: _openPrefetchSettings)),
-              if (_effectiveVoice == TtsReader.systemVoice)
-                Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(T('cacheOnlineOnly'),
-                  style: const TextStyle(color: Color(0xFFA89060), fontSize: 11))),
               // 功能按钮行
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -2639,13 +2693,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   _panelButton(
                     key: const ValueKey('reading-voice'),
                     icon: Icons.record_voice_over,
-                    label: T('voice'), detail: _voiceLabel(_effectiveVoice),
+                    label: T('voiceWithName', {'name': _shortVoiceLabel(_effectiveVoice)}), singleLine: true,
                     onTap: _openVoiceSelector,
                   ),
-                  _panelButton(key: const ValueKey('reading-cache'), icon: Icons.download_outlined,
-                    label: T('cacheBook'), detail: _effectiveVoice == TtsReader.systemVoice
-                      ? T('cacheUnavailable') : _voiceLabel(_effectiveVoice),
-                    onTap: _effectiveVoice == TtsReader.systemVoice ? null : _openBookCache),
                   _panelButton(key: const ValueKey('playback-notifications'),
                     icon: _notificationStatus?.enabled == true ? Icons.notifications_active_outlined : Icons.notifications_none,
                     label: T('playbackNotifications'), onTap: _openPlaybackNotifications,
@@ -2669,6 +2719,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     required String label,
     required VoidCallback? onTap,
     String? detail,
+    bool singleLine = false,
     bool active = false,
   }) {
     return GestureDetector(
@@ -2681,7 +2732,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               color: onTap == null ? Colors.grey : const Color(0xFF9BC5DD),
               size: 26),
           const SizedBox(height: 4),
-          Text(label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis,
+          Text(label, textAlign: TextAlign.center, maxLines: singleLine ? 1 : 2, overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   color: active
                       ? const Color(0xFF9BC5DD)
@@ -2892,7 +2943,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final voices = sortedEdgeVoices();
     final items = <Widget>[ListTile(
       leading: Icon(_settings.voice == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
-      title: Text(T('systemTts')), subtitle: Text(T('systemTtsDescription')),
+      title: Text(T('systemTts')),
       onTap: () => Navigator.pop(context, TtsReader.systemVoice)), const Divider()];
     String? lastLang;
     for (final v in voices) {
@@ -2919,6 +2970,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           color: const Color(0xFF6498B5),
         ),
         title: Text(_voiceLabel(v.id)),
+        trailing: IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
+          icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
         onTap: () => Navigator.pop(context, v.id),
       ));
     }
@@ -2953,12 +3006,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   /// 全书语音缓存管理：任务控制（开始/暂停/继续/取消）+ 缓存占用 + 清除
-  Future<void> _openBookCache() async {
-    if (_settings.voice == TtsReader.systemVoice) { _showToast(T('cacheOnlineOnly')); return; }
+  Future<void> _openBookCache({String? cacheVoice}) async {
+    final voice = cacheVoice ?? _effectiveVoice;
+    if (voice == TtsReader.systemVoice) { _showToast(T('cacheOnlineOnly')); return; }
     // Keep every operation bound to the selected online voice/rate, even if a
     // temporary offline fallback or another settings change occurs later.
-    final voice = _effectiveVoice, rate = _settings.speechRate, cacheKey = _cacheTaskKey;
-    final store = _currentCacheStore();
+    final rate = _settings.speechRate;
+    final cacheKey = '${_book.id}/$_cacheFingerprint/$voice/${rate.toStringAsFixed(2)}';
+    final store = TtsCacheStore(_book.id, voice, rate, textFingerprint: _cacheFingerprint);
     final task = activeBookCaches[cacheKey] ??
         (activeBookCaches[cacheKey] = BookCacheTask(
               book: _book,
@@ -3323,7 +3378,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               icon: const ReaderIcon(ReaderSymbol.previousChapter, size: 18, color: Colors.white70),
               visualDensity: VisualDensity.compact,
               key: const ValueKey('previous-chapter'),
-              onPressed: _chapter > 0 ? () => _changeChapter(-1) : null,
+              onPressed: _currentTocIndex > 0 ? () => _changeChapter(-1) : null,
               tooltip: T('previousChapter'),
             ),
             Text(
@@ -3342,14 +3397,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             const SizedBox(width: 4),
             Text(
               T('chapterIndicator',
-                  {'c': '${_chapter + 1}', 'total': '${_book.chapters.length}'}),
+                  {'c': '${_currentTocIndex + 1}', 'total': '${_toc.length}'}),
               style: const TextStyle(fontSize: 11, color: Color(0xFFD6D6D6)),
             ),
             IconButton(
               icon: const ReaderIcon(ReaderSymbol.nextChapter, size: 18, color: Colors.white70),
               visualDensity: VisualDensity.compact,
               key: const ValueKey('next-chapter'),
-              onPressed: _chapter < _book.chapters.length - 1 ? () => _changeChapter(1) : null,
+              onPressed: _currentTocIndex < _toc.length - 1 ? () => _changeChapter(1) : null,
               tooltip: T('nextChapter'),
             ),
           ],
@@ -3386,18 +3441,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           child: Theme(data: ThemeData.dark(useMaterial3: true).copyWith(
             colorScheme: const ColorScheme.dark(primary: Color(0xFF9BC5DD), surface: Color(0xFF2D3032))),
             child: Material(color: const Color(0xFF2D3032),
-              child: SafeArea(child: _ChapterSheet(book: _book, current: _chapter)))),
+              child: SafeArea(child: _ChapterSheet(entries: _toc, current: _currentTocIndex)))),
         ),
       ),
     );
     if (selected == -1) { _openBookmarks(); return; }
     if (selected == null) return;
-    setState(() {
-      _chapter = selected;
-      _para = 0;
-    });
-    _jumpToItem(_chapterItem(selected), animate: false);
-    _scheduleSave();
+    await _navigateToc(selected);
   }
 
   Widget _buildSearchBar() {
@@ -3465,6 +3515,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
     return id;
   }
+
+  static String _shortVoiceLabel(String id) => id == TtsReader.systemVoice ? T('shortSystemVoice')
+    : _voiceLabel(id).split(RegExp(r'[（(]')).first.trim();
 
   /// 音色组标题（语言自称，各界面语言下通用）
   static String _groupLabel(String langCode) => switch (langCode) {
@@ -3539,6 +3592,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         settings: _settings,
         onFontTune: _openFontFineTune,
         onChanged: (s) {
+          final tocChanged = s.autoExtractToc != _settings.autoExtractToc;
           AppAppearance.setThemeMode(s.themeMode);
           final current = AppAppearance.applyCurrentMode(s);
           final textChanged = _textSignature != _formatSignature(s);
@@ -3554,6 +3608,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           }
           setState(() {
             _settings = current;
+            if (tocChanged && !textChanged) _rebuildToc();
             if (textChanged) {
               _formatBook(); _flowChapter = null; _flowParagraph = null; _flowOffset = null;
               if (anchor != null && !anchor.title) {
@@ -3577,6 +3632,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           _applyReaderBrightness();
           _pageEndKey = null; _schedulePageGeometry();
           widget.storage.saveSettings(_settings.toJson());
+          if (tocChanged) _updateMediaChapter(_chapter);
         },
       ),
     );
@@ -3625,9 +3681,9 @@ class _SearchHit {
 
 /// Side contents panel, positioned at the current chapter.
 class _ChapterSheet extends StatefulWidget {
-  final Book book;
+  final List<BookTocEntry> entries;
   final int current;
-  const _ChapterSheet({required this.book, required this.current});
+  const _ChapterSheet({required this.entries, required this.current});
   @override
   State<_ChapterSheet> createState() => _ChapterSheetState();
 }
@@ -3651,10 +3707,11 @@ class _ChapterSheetState extends State<_ChapterSheet> {
     Expanded(child: ListView.builder(
       controller: _controller,
       itemExtent: 56,
-      itemCount: widget.book.chapters.length,
+      itemCount: widget.entries.length,
       itemBuilder: (context, i) => ListTile(
+        key: ValueKey('toc-entry-$i'),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-        title: Text(widget.book.chapters[i].title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(widget.entries[i].title, maxLines: 1, overflow: TextOverflow.ellipsis),
         selected: i == widget.current,
         selectedTileColor: const Color(0x226498B5),
         selectedColor: const Color(0xFF9BC5DD),
@@ -3852,6 +3909,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   child: Text(T(mode == 'system' ? 'followSystemTheme' : mode == 'dark' ? 'darkTheme' : 'lightTheme')))).toList(),
                 onChanged: (mode) { if (mode != null) setState(() { _s.themeMode = mode; _update(); }); })),
               // 亮度
+              SwitchListTile(key: const ValueKey('auto-extract-toc'), title: Text(T('autoExtractToc')),
+                value: _s.autoExtractToc, onChanged: (value) => setState(() { _s.autoExtractToc = value; _update(); })),
               ReaderBrightnessControl(value: _s.brightness, automatic: _s.automaticBrightness,
                 onChanged: (value) => setState(() { _s.brightness = value; _s.automaticBrightness = false; _update(); }),
                 onAutomatic: () async {

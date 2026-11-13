@@ -13,6 +13,18 @@ Book format(String text, {bool correction = true, bool indent = true, String fil
   ReadingText.format(source(text), merge: correction, indent: indent, filter: filter);
 
 void main() {
+  test('trusted headings always keep paragraph boundaries and source anchors during correction', () {
+    const text = '前文没有结束符\n第一章 山中\n山中正文没有结束符\n第二章 海边\n海边正文。';
+    final original = source(text);
+    final formatted = ReadingText.format(original, merge: true, indent: false);
+    expect(formatted.chapters.single.paragraphs.map((p) => p.display).toList(),
+      ['前文没有结束符', '第一章 山中', '山中正文没有结束符', '第二章 海边', '海边正文。']);
+    final anchor = ReadingText.anchor(original, 0, 0, text.indexOf('第二章'));
+    final location = ReadingText.locate(formatted, 0, anchor);
+    expect(location.$1, 3); expect(location.$2, 0);
+    expect(formatted.chapters.single.paragraphs[location.$1].sentences.single.tts, '第二章 海边');
+    expect(ReadingText.anchor(formatted, 0, location.$1, location.$2), anchor);
+  });
   test('legacy whole-chapter annotations migrate beyond the first physical paragraph', () {
     final original = Book(id: 'legacy', title: 'legacy', filePath: '', format: BookFormat.txt,
       addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [

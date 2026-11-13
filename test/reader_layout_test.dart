@@ -653,7 +653,7 @@ void main() {
       await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
       expect(speech.state, TtsState.paused);
       expect(find.byKey(const ValueKey('reading-volume-slider')), findsOneWidget);
-      await tester.tap(find.text('音源')); await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
       await tester.tap(find.text(target.$2)); await tester.pumpAndSettle();
       expect(speech.voice, target.$1);
       expect(speech.state, TtsState.playing);
@@ -951,8 +951,10 @@ void main() {
     expect(speech.prefetchSentences, 8);
     await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
-    expect(tester.getCenter(find.byKey(const ValueKey('reading-cache'))).dx,
-      greaterThan(tester.getCenter(find.byKey(const ValueKey('reading-voice'))).dx));
+    expect(find.byKey(const ValueKey('reading-cache')), findsNothing);
+    expect(find.descendant(of: find.byKey(const ValueKey('reading-voice')), matching: find.text('音源：晓晓')), findsOneWidget);
+    expect(tester.widget<Text>(find.descendant(of: find.byKey(const ValueKey('reading-voice')),
+      matching: find.byType(Text))).maxLines, 1);
     await _captureReaderPreview(tester, preview, 'reader-speech-controls');
     await tester.tap(find.byKey(const ValueKey('reading-prefetch'))); await tester.pumpAndSettle();
     final prefetch = find.byKey(const ValueKey('prefetch-number'));
@@ -1019,14 +1021,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('reading-cache'))); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural'))); await tester.pumpAndSettle();
     expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 晓晓（女·温暖） · 语速 1.8x');
     await _captureReaderPreview(tester, preview, 'reader-selected-voice-cache');
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    await _captureReaderPreview(tester, preview, 'reader-voice-menu-cache-actions');
+    await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-YunxiNeural'))); await tester.pumpAndSettle();
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.8x');
+    expect(speech.voice, TtsReader.defaultVoice, reason: 'Opening another voice cache must not change the playing voice');
+    await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await tester.tap(find.text('云希（男·阳光）')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('reading-cache'))); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-YunxiNeural'))); await tester.pumpAndSettle();
     expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.8x');
     await tester.tap(find.text('清除缓存')); await tester.pumpAndSettle();
     expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('云希（男·阳光）')), findsOneWidget);
@@ -1036,11 +1044,15 @@ void main() {
     expect(activeBookCaches[key(TtsReader.defaultVoice)], same(first));
     ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
     await tester.pumpAndSettle(); await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     await tester.tap(find.text('使用系统文本转语音能力')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
-    expect(tester.widget<GestureDetector>(find.byKey(const ValueKey('reading-cache'))).onTap, isNull);
-    expect(find.text('当前使用系统语音；请切换在线音源后缓存在线语音'), findsOneWidget);
+    expect(find.byKey(const ValueKey('reading-cache')), findsNothing);
+    expect(find.text('音源：系统'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    final systemOption = find.widgetWithText(ListTile, '使用系统文本转语音能力');
+    expect(tester.widget<ListTile>(systemOption).trailing, isNull);
+    expect(tester.widget<ListTile>(systemOption).subtitle, isNull);
+    await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await _captureReaderPreview(tester, preview, 'reader-system-cache-disabled');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
@@ -1057,9 +1069,10 @@ void main() {
     await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('tts-offline-fallback')), findsOneWidget);
-    expect(find.descendant(of: find.byKey(const ValueKey('reading-cache')), matching: find.text('晓晓（女·温暖）')), findsOneWidget);
-    expect(tester.widget<GestureDetector>(find.byKey(const ValueKey('reading-cache'))).onTap, isNotNull);
+    expect(find.text('音源：晓晓'), findsOneWidget);
+    expect(find.byKey(const ValueKey('reading-cache')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural')), findsOneWidget);
     await tester.tap(find.widgetWithText(ListTile, '晓晓（女·温暖）')); await tester.pumpAndSettle();
     expect(speech.usingSystemFallback, isFalse); expect(speech.voice, TtsReader.defaultVoice);
     expect((await storage.loadSettings())['systemFallbackActive'], isFalse);
@@ -1241,6 +1254,56 @@ void main() {
     expect((await storage.loadSettings())['fontSize'], 45); expect((await storage.loadSettings())['speechRate'], 2.4);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('TOC indices locate headings inside one source paragraph and toggles keep viewport and audio', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..firstLineIndent = false).toJson());
+    final book = Book(id: 'toc-index-toggle', title: '目录示例', filePath: '', format: BookFormat.txt, addedAt: DateTime(2026),
+      chapters: [Chapter(title: '正文', paragraphs: [Paragraph(display: '开篇文字没有结束符\n第一章 山中\n' +
+        List.filled(20, '山间吹来清新的风。').join() + '\n第二章 海边\n' + List.filled(20, '海边传来悠远的歌声。').join(),
+        tts: '', sentences: const [], sentenceStartTts: const [])])]);
+    final speech = _TestSpeech(), handler = TtsAudioHandler(), previousHandler = globalAudioHandler;
+    globalAudioHandler = handler; addTearDown(() { globalAudioHandler = previousHandler; });
+    final preview = GlobalKey();
+    await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(home: ReaderScreen(book: book,
+      storage: storage, ttsReader: speech))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, '第一章 山中'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, '第二章 海边'), findsOneWidget);
+    await _captureReaderPreview(tester, preview, 'reader-extracted-toc');
+    await tester.tap(find.widgetWithText(ListTile, '第一章 山中')); await tester.pumpAndSettle();
+    final header = find.byKey(const ValueKey('reader-chapter-header'));
+    expect(find.descendant(of: header, matching: find.text('第一章 山中')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('next-chapter'))); await tester.pumpAndSettle();
+    expect(find.descendant(of: header, matching: find.text('第二章 海边')), findsOneWidget,
+      reason: 'A single chapter triangle click navigates the next logical heading, even in the same source paragraph');
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    await handler.play(); await tester.pumpAndSettle();
+    expect(speech.lastSentences[speech.startedAt], '第二章 海边',
+      reason: 'Text correction must not merge a TOC heading with preceding unfinished prose');
+    final list = find.byKey(const ValueKey('reader-body'));
+    List<(int, double)> visible() => tester.widget<ScrollablePositionedList>(list).itemPositionsNotifier!.itemPositions.value
+      .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1).map((p) => (p.index, p.itemLeadingEdge)).toList();
+    final before = visible(), started = speech.startCalls, resumed = speech.resumeCalls;
+    final toggle = find.byKey(const ValueKey('auto-extract-toc'));
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    tester.widget<SwitchListTile>(toggle).onChanged!(false); await tester.pumpAndSettle();
+    expect(visible(), before, reason: 'Rebuilding only the TOC must preserve the first visible text line');
+    expect(speech.startCalls, started); expect(speech.resumeCalls, resumed); expect(speech.state, TtsState.playing);
+    expect((await storage.loadSettings())['autoExtractToc'], isFalse);
+    await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
+    await handler.stop(); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('toc-entry-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('toc-entry-1')), findsNothing, reason: 'A short book uses one approximate 5000-character section when extraction is off');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    await handler.playbackState.close(); await handler.mediaItem.close();
   });
 
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {
