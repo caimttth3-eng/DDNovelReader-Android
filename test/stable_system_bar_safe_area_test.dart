@@ -49,7 +49,7 @@ void main() {
   });
 
   testWidgets('new size and DPR use native normal insets and ignore stale replies', (tester) async {
-    final requests = <Completer<Map<String, Object?>> >[];
+    final requests = <Completer<Map<String, Object?>>>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(DisplayCutoutService.channel, (_) {
         final request = Completer<Map<String, Object?>>();
@@ -62,16 +62,19 @@ void main() {
     await show(tester, hold: true, insets: EdgeInsets.zero, size: landscape, dpr: 2);
     // The same logical size at another DPR must not accept the old reply.
     await show(tester, hold: true, insets: EdgeInsets.zero, size: landscape, dpr: 3);
+    expect(requests, hasLength(3));
     requests[1].complete(geometry(landscape, const EdgeInsets.only(top: 99)));
-    await tester.pump();
+    // A platform reply first passes through the method-channel codec and
+    // read() continuation; its setState schedules a subsequent render frame.
+    await tester.pumpAndSettle();
     expect(tester.getTopLeft(find.byKey(content)).dy, 0);
     requests[2].complete(geometry(landscape, smaller));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(tester.getTopLeft(find.byKey(content)).dy, 20);
     // The first portrait request can finish after the widget is gone.
     await tester.pumpWidget(const SizedBox());
     requests[0].complete(geometry(portrait, normal));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
