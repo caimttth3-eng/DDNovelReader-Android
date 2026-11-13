@@ -78,6 +78,25 @@ void main() {
     expect(ChapterTitleParts.split('无编号的名字'), isNull);
   });
 
+  test('volume-first headings split into their number and nonempty name', () {
+    final volume = ChapterTitleParts.split('卷三 江湖')!;
+    expect(volume.number, '卷三');
+    expect(volume.name, '江湖');
+    expect(ChapterTitleParts.split('章１２：开端')!.name, '开端');
+    expect(ChapterTitleParts.split('卷三'), isNull);
+  });
+
+  test('numeric headings require an explicit separator and a name', () {
+    for (final title in ['001 初见', '001、初见', '001_初见']) {
+      final parts = ChapterTitleParts.split(title)!;
+      expect(parts.number, '001');
+      expect(parts.name, '初见');
+    }
+    expect(ChapterTitleParts.split('001初见'), isNull);
+    expect(ChapterTitleParts.split('001'), isNull);
+    expect(ChapterTitleParts.split('001、'), isNull);
+  });
+
   test('multiple and overlapping cutouts are treated as a union', () {
     final holes = [const Rect.fromLTRB(80, 0, 130, 36), const Rect.fromLTRB(100, 4, 160, 40),
       const Rect.fromLTRB(290, 4, 320, 36)];

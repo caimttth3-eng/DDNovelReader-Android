@@ -27,9 +27,9 @@ class ChapterTitleParts {
   /// A bare chapter number or an unnumbered heading remains one whole title.
   static ChapterTitleParts? split(String text) {
     final title = text.trim();
-    final match = RegExp(r'^(第\s*[0-9０-９零〇一二三四五六七八九十百千万两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟]+\s*(?:章节|章節|章|节|節|回|卷|部|集|篇|话|話)|(?:chapter|section|part|episode)\s*(?:\d+|[IVXLCDM]+)(?=$|[\s:：.\-—]))', caseSensitive: false).firstMatch(title);
+    final match = RegExp(r'^(第\s*[0-9０-９零〇一二三四五六七八九十百千万两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟]+\s*(?:章节|章節|章|节|節|回|卷|部|集|篇|话|話)|[卷章]\s*[0-9０-９零〇一二三四五六七八九十百千万两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟]+|[0-9０-９]{1,5}(?=[\s:：、.．\-—_])|(?:chapter|section|part|episode)\s*(?:\d+|[IVXLCDM]+)(?=$|[\s:：.\-—]))', caseSensitive: false).firstMatch(title);
     if (match == null) return null;
-    final name = title.substring(match.end).replaceFirst(RegExp(r'^[\s:：、.\-—]+'), '').trim();
+    final name = title.substring(match.end).replaceFirst(RegExp(r'^[\s:：、.．\-—_]+'), '').trim();
     if (name.isEmpty) return null;
     return ChapterTitleParts(match.group(0)!.trim(), name);
   }
