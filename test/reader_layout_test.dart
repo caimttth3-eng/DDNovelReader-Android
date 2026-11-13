@@ -1475,7 +1475,7 @@ void main() {
     await handler.playbackState.close(); await handler.mediaItem.close();
   });
 
-  testWidgets('reader waits for immersive geometry before first content and pins same viewport header metrics', (tester) async {
+  testWidgets('reader waits only for native geometry and pins same viewport header metrics', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     tester.view.viewPadding = const FakeViewPadding(top: 44);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
@@ -1502,6 +1502,46 @@ void main() {
     expect(tester.getRect(body), beforeBody); expect(tester.getRect(header), beforeHeader);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('native geometry can display reader during route transition while immersive response is pending', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    tester.view.viewPadding = const FakeViewPadding(top: 44);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
+    final immersive = Completer<void>();
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      platformCalls.add(call);
+      if (call.method == 'SystemChrome.setEnabledSystemUIMode' && call.arguments == 'SystemUiMode.immersiveSticky') {
+        await immersive.future;
+      }
+      return null;
+    });
+    messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async => {
+      'width': 390, 'height': 844, 'safeInsets': {'top': 40},
+      'cutouts': [{'left': 175, 'right': 215, 'top': 0, 'bottom': 40}],
+    });
+    final navigator = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(MaterialApp(navigatorKey: navigator, home: Builder(builder: (context) => Scaffold(body: TextButton(
+      onPressed: () => Navigator.push(context, MaterialPageRoute<void>(allowSnapshotting: false,
+        builder: (_) => ReaderScreen(book: sample('parallel-viewport'), storage: AppStorage(), ttsReader: _TestSpeech()))),
+      child: const Text('打开'))))));
+    await tester.tap(find.text('打开')); await tester.pump(); await tester.pump(const Duration(milliseconds: 16));
+    final body = find.byKey(const ValueKey('reader-body'));
+    expect(body, findsOneWidget, reason: 'Content must not wait for the immersive platform call or full route animation');
+    final reader = tester.element(find.byType(ReaderScreen));
+    expect(ModalRoute.of(reader)!.animation!.status, AnimationStatus.forward);
+    // Compare reader-local coordinates while the route transition transforms
+    // its subtree, rather than measuring the animated screen position.
+    final beforeSize = tester.getSize(body);
+    double localTop() {
+      final scaffold = tester.renderObject<RenderBox>(find.descendant(of: find.byType(ReaderScreen), matching: find.byType(Scaffold)).first);
+      return tester.renderObject<RenderBox>(body).localToGlobal(Offset.zero, ancestor: scaffold).dy;
+    }
+    expect(localTop(), 64);
+    immersive.complete(); tester.view.viewPadding = const FakeViewPadding(); await tester.pumpAndSettle();
+    expect(tester.getSize(body), beforeSize); expect(localTop(), 64);
+    expect(tester.takeException(), isNull);
+    navigator.currentState!.pop(); await tester.pumpAndSettle();
   });
 
   testWidgets('reader restores bars at route pop start while dialog dismissal keeps immersive', (tester) async {

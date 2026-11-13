@@ -137,6 +137,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   int _cutoutRevision = 0;
   late final Future<void> _viewportReady;
   bool _viewportPrepared = false;
+  (Size, double)? _preparedViewportKey;
   bool _leavingReader = false;
   final Map<(Size, double), ReaderHeaderLayout> _stableHeaders = {};
   late List<_Item> _items;
@@ -397,10 +398,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _refreshDisplayCutout() async {
     final revision = ++_cutoutRevision;
-    final dpr = View.of(context).devicePixelRatio;
+    // This Android app has one implicit Flutter view. Reading its DPR here
+    // avoids depending on inherited widgets while initState is still running.
+    final dpr = WidgetsBinding.instance.platformDispatcher.implicitView?.devicePixelRatio ?? 1.0;
     final geometry = await DisplayCutoutService.read();
     if (!mounted || _leavingReader || revision != _cutoutRevision || geometry == null) return;
-    if (View.of(context).devicePixelRatio != dpr) return;
+    if ((WidgetsBinding.instance.platformDispatcher.implicitView?.devicePixelRatio ?? 1.0) != dpr) return;
     setState(() => _cutoutGeometry[(geometry.viewport, dpr)] = geometry);
   }
 
@@ -411,21 +414,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Future<void> _prepareReaderViewport() async {
-    await _applySystemUi();
-    if (!mounted || _leavingReader) return;
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted || _leavingReader) return;
+    // Insets that ignore visibility can be read while immersive is applying.
+    // Neither the immersive response nor route animation blocks the text frame.
+    _applySystemUi();
     await _refreshDisplayCutout();
-    if (!mounted || _leavingReader) return;
-    final viewport = MediaQuery.sizeOf(context), dpr = MediaQuery.devicePixelRatioOf(context);
-    if (!_cutoutGeometry.entries.any((entry) => entry.key.$2 == dpr && entry.value.matches(viewport))) {
-      // rootWindowInsets can be absent until the first layout. Retry on one
-      // more real frame, then retain the platform-independent safe fallback.
-      await WidgetsBinding.instance.endOfFrame;
-      if (!mounted || _leavingReader) return;
-      await _refreshDisplayCutout();
+    if (mounted && !_leavingReader) {
+      final view = WidgetsBinding.instance.platformDispatcher.implicitView;
+      if (view != null) _preparedViewportKey = (view.physicalSize / view.devicePixelRatio, view.devicePixelRatio);
+      _viewportPrepared = true;
     }
-    if (mounted && !_leavingReader) _viewportPrepared = true;
   }
 
   void _restoreSystemUiForExit() {
@@ -458,7 +455,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       // The reading layout stays immersive even while an OS bar is transiently
       // revealed. Its visibility must never move the text beneath overlays.
       statusBarVisible: false);
-    if (_settingsLoaded && (native != null || features.isNotEmpty)) _stableHeaders[key] = layout;
+    if (_settingsLoaded && (native != null || features.isNotEmpty || key == _preparedViewportKey)) _stableHeaders[key] = layout;
     return layout;
   }
 
