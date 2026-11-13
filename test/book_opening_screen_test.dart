@@ -74,8 +74,20 @@ void main() {
   testWidgets('a late successful load cannot reopen the reader after returning', (tester) async {
     final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
     await open(tester, log, () => pending.future);
+    final route = log.pushed.last as TransitionRoute<dynamic>;
+    var removed = false;
+    route.completed.then((_) { removed = true; });
     await tester.tap(find.byType(BackButton));
-    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump();
+    // Wait for the actual reverse transition/overlay removal, rather than a
+    // fixed duration that may be shorter than the platform page transition.
+    // pumpAndSettle cannot be used while the loading spinner is still active.
+    for (var frame = 0; frame < 20 && !removed; frame++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.pump();
+    expect(removed, isTrue);
+    expect(find.byType(BookOpeningScreen), findsNothing);
     expect(find.text('open book'), findsOneWidget);
     pending.complete((readableBook(), null));
     await tester.pump(); await tester.pump();
