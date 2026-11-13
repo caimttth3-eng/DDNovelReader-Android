@@ -2,6 +2,59 @@
 /// 移植自 Windows 版 chapterizer.py 的三重检测逻辑。
 library;
 
+/// A heading index over the unchanged source, not a request to split its text.
+class DetectedChapterTitle {
+  final String title;
+  final int offset;
+  const DetectedChapterTitle(this.title, this.offset);
+}
+
+/// Conservative line rules inspired by Legado's TXT TOC families. Ambiguous
+/// numbered lists require multiple ascending entries separated by body text.
+/// The legacy makeChapters pipeline stays unchanged for saved coordinates.
+List<DetectedChapterTitle> detectChapterTitles(String text) {
+  const numbers = r'0-9０-９零〇○一二三四五六七八九十百千万两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟';
+  final chinese = RegExp('^第[ \\t　]{0,4}[$numbers]{1,12}[ \\t　]{0,4}(?:章|章節|章节|節(?!課)|节(?!课)|卷|集(?![合和])|部(?![分赛賽游])|篇(?!张)|回(?![合来來事去])|話|话)');
+  final volume = RegExp('^[卷章][$numbers]{1,12}');
+  final english = RegExp(r'^(?:chapter|section|part|episode)\s*(?:\d{1,5}|[IVXLCDM]{1,12})(?=$|[\s:：.\-—])', caseSensitive: false);
+  final special = RegExp(r'^(?:楔子|序章|序言|前言|引子|引言|尾声|尾聲|后记|後記|番外|终章|終章|大结局|大結局|完结篇|完結篇)(?=$|[\s:：、\-—])');
+  final numeric = RegExp(r'^(\d{1,5})[ \t　]*[、:：.．\-—_ ][ \t　]*\S.{0,29}$');
+  final plainChinese = RegExp('^[$numbers]{1,8}[、:：．. ][ \\t　]*\\S.{0,29}\$');
+  final result = <DetectedChapterTitle>[];
+  final numbered = <(DetectedChapterTitle, int, int)>[];
+  var lineIndex = 0;
+  for (final line in RegExp(r'[^\r\n]+').allMatches(text)) {
+    final original = line.group(0)!;
+    final trimmed = original.trim();
+    final offset = line.start + original.length - original.trimLeft().length;
+    var title = trimmed.replaceFirst(RegExp(r'^\uFEFF'), '');
+    if (title.startsWith('【') && title.endsWith('】')) title = title.substring(1, title.length - 1).trim();
+    if (title.isEmpty || title.length > 60 || RegExp(r'https?://|www\.|[。；;“”]|\.{3,}|…{2,}', caseSensitive: false).hasMatch(title)) { lineIndex++; continue; }
+    final head = chinese.firstMatch(title) ?? volume.firstMatch(title) ?? english.firstMatch(title) ?? special.firstMatch(title);
+    if (head != null) {
+      final suffix = title.substring(head.end);
+      if (!RegExp(r'^(?:的|是|中|里|裡|讲述|講述|已经|已經|之后|之後|之前|的时候|的時候|结束了|結束了)').hasMatch(suffix)) {
+        result.add(DetectedChapterTitle(title, offset));
+      }
+    } else {
+      final match = numeric.firstMatch(title);
+      if (match != null) numbered.add((DetectedChapterTitle(title, offset), int.parse(match.group(1)!), lineIndex));
+      else if (plainChinese.hasMatch(title)) numbered.add((DetectedChapterTitle(title, offset), -1, lineIndex));
+    }
+    lineIndex++;
+  }
+  for (var i = 0; i < numbered.length; i++) {
+    bool supports(int j) => j >= 0 && j < numbered.length &&
+      (numbered[i].$3 - numbered[j].$3).abs() > 1 &&
+      ((numbered[i].$2 == -1 && numbered[j].$2 == -1) ||
+       (numbered[i].$2 >= 0 && numbered[j].$2 >= 0 &&
+        (i < j ? numbered[i].$2 < numbered[j].$2 : numbered[i].$2 > numbered[j].$2)));
+    if (supports(i - 1) || supports(i + 1)) result.add(numbered[i].$1);
+  }
+  result.sort((a, b) => a.offset.compareTo(b.offset));
+  return result;
+}
+
 final RegExp _numRe = RegExp(r'[0-9０-９零〇○一二三四五六七八九十百千万两]+');
 final String _unit = '[章节回卷部集篇]';
 

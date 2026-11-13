@@ -118,6 +118,7 @@ class ReadingSettings {
   bool retainPageLine = false;
   bool mergeNonSentenceBreaks = true;
   bool firstLineIndent = true;
+  bool autoExtractToc = true;
   bool informationFilter = false;
   String informationFilterLevel = 'none';
   double fontSize = 20.0;
@@ -140,6 +141,7 @@ class ReadingSettings {
         'retainPageLine': retainPageLine,
         'textCorrection': mergeNonSentenceBreaks,
         'firstLineIndent': firstLineIndent,
+        'autoExtractToc': autoExtractToc,
         'informationFilter': informationFilter,
         'informationFilterLevel': informationFilterLevel,
         'fontSize': fontSize,
@@ -168,6 +170,7 @@ class ReadingSettings {
     s.retainPageLine = json['retainPageLine'] as bool? ?? false;
     s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
     s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;
+    s.autoExtractToc = json['autoExtractToc'] is bool ? json['autoExtractToc'] as bool : true;
     s.informationFilter = json['informationFilter'] as bool? ?? false;
     final level = json['informationFilterLevel'];
     s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'none';

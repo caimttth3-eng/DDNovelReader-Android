@@ -10,6 +10,7 @@ void main() {
     expect(settings.retainPageLine, isFalse);
     expect(settings.mergeNonSentenceBreaks, isTrue);
     expect(settings.firstLineIndent, isTrue);
+    expect(settings.autoExtractToc, isTrue);
     expect(settings.informationFilter, isFalse);
     expect(settings.informationFilterLevel, 'none');
     expect(settings.prefetchSentences, 8);
@@ -63,6 +64,21 @@ void main() {
       final restored = ReadingSettings.fromJson(await AppStorage().loadSettings());
       expect(restored.themeMode, mode);
       expect(restored.themeIndex, 3); expect(restored.dayThemeIndex, 2);
+    }
+  });
+  test('automatic TOC extraction defaults on and persists the user choice', () async {
+    SharedPreferences.setMockInitialValues({});
+    expect(ReadingSettings.fromJson(null).autoExtractToc, isTrue);
+    expect(ReadingSettings.fromJson({'fontSize': 24}).autoExtractToc, isTrue);
+    for (final invalid in <Object?>[null, '', 'false', 0, 1]) {
+      expect(ReadingSettings.fromJson({'autoExtractToc': invalid}).autoExtractToc, isTrue);
+    }
+    for (final enabled in [false, true]) {
+      final settings = ReadingSettings()..autoExtractToc = enabled..voice = 'saved-voice'..fontSize = 28;
+      await AppStorage().saveSettings(settings.toJson());
+      final restored = ReadingSettings.fromJson(await AppStorage().loadSettings());
+      expect(restored.autoExtractToc, enabled);
+      expect(restored.voice, 'saved-voice'); expect(restored.fontSize, 28);
     }
   });
   test('old full-brightness defaults migrate to system brightness', () {

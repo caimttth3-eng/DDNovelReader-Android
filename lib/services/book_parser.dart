@@ -9,11 +9,86 @@ import '../models/book.dart';
 import 'chapterizer.dart';
 import 'text_cleaner.dart';
 
+class BookTocEntry {
+  final String title;
+  final int chapterIndex;
+  final int paragraphIndex;
+  final int displayOffset;
+  const BookTocEntry({required this.title, required this.chapterIndex,
+    required this.paragraphIndex, this.displayOffset = 0});
+}
+
 /// 书籍解析器：支持 TXT / EPUB / PDF / DOCX，并自动分章。
 class BookParser {
   final TextCleaner _cleaner;
 
   BookParser({TextCleaner? cleaner}) : _cleaner = cleaner ?? const TextCleaner();
+
+  /// A view over stable source coordinates. It deliberately does not regroup
+  /// chapters or remove headings, preserving progress, annotations and audio.
+  static List<BookTocEntry> extractToc(Book source, {bool autoExtractToc = true}) {
+    final whitespace = RegExp(r'\s');
+    List<BookTocEntry> fallbackIndex() {
+    final fallback = <BookTocEntry>[];
+    var count = 0, next = 0;
+    for (var c = 0; c < source.chapters.length; c++) {
+      final paragraphs = source.chapters[c].paragraphs;
+      for (var p = 0; p < paragraphs.length; p++) {
+        final text = paragraphs[p].display;
+        for (var offset = 0; offset < text.length; offset++) {
+          final code = text.codeUnitAt(offset);
+          if (whitespace.hasMatch(text[offset]) || (code >= 0xDC00 && code <= 0xDFFF)) continue;
+          if (count >= next) {
+            fallback.add(BookTocEntry(title: '第 ${fallback.length + 1} 节', chapterIndex: c,
+              paragraphIndex: p, displayOffset: offset));
+            next = count + 5000;
+          }
+          count++;
+        }
+      }
+    }
+    return fallback;
+    }
+    if (!autoExtractToc) return fallbackIndex();
+    final entries = <BookTocEntry>[];
+    for (var c = 0; c < source.chapters.length; c++) {
+      final chapter = source.chapters[c];
+      final joined = chapter.paragraphs.map((p) => p.display).join('\n');
+      final detected = detectChapterTitles(joined);
+      final synthetic = RegExp(r'^(?:第\s*\d+\s*节|正文|简介)$').hasMatch(chapter.title.trim());
+      final existing = !synthetic && (detectChapterTitles(chapter.title).isNotEmpty || source.format == BookFormat.epub);
+      if (existing && chapter.paragraphs.isNotEmpty) {
+        entries.add(BookTocEntry(title: chapter.title, chapterIndex: c, paragraphIndex: 0));
+      }
+      var p = 0, base = 0;
+      for (final heading in detected) {
+        while (p < chapter.paragraphs.length - 1 && base + chapter.paragraphs[p].display.length < heading.offset) {
+          base += chapter.paragraphs[p].display.length + 1; p++;
+        }
+        final offset = (heading.offset - base).clamp(0, chapter.paragraphs[p].display.length);
+        if (entries.isNotEmpty && entries.last.chapterIndex == c && entries.last.paragraphIndex == p &&
+          entries.last.title == heading.title && (entries.last.displayOffset == offset ||
+            (entries.last.displayOffset == 0 && chapter.paragraphs[p].display.substring(0, offset).trim().isEmpty))) continue;
+        entries.add(BookTocEntry(title: heading.title, chapterIndex: c, paragraphIndex: p, displayOffset: offset));
+      }
+    }
+    if (entries.isEmpty) return fallbackIndex();
+    BookTocEntry? firstContent;
+    for (var c = 0; c < source.chapters.length && firstContent == null; c++) {
+      for (var p = 0; p < source.chapters[c].paragraphs.length; p++) {
+        final match = RegExp(r'\S').firstMatch(source.chapters[c].paragraphs[p].display);
+        if (match != null) { firstContent = BookTocEntry(title: '正文', chapterIndex: c, paragraphIndex: p, displayOffset: match.start); break; }
+      }
+    }
+    if (firstContent != null) {
+      final first = entries.first, start = firstContent;
+      if (first.chapterIndex != start.chapterIndex || first.paragraphIndex != start.paragraphIndex || first.displayOffset > start.displayOffset) {
+        entries.insert(0, BookTocEntry(title: '正文', chapterIndex: start.chapterIndex,
+          paragraphIndex: start.paragraphIndex, displayOffset: start.displayOffset));
+      }
+    }
+    return entries;
+  }
 
   /// 章节标题匹配：中文「第X章/节/回/卷」或英文 Chapter N
   static final RegExp chapterTitleRe = RegExp(
