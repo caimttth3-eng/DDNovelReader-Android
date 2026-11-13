@@ -3837,8 +3837,7 @@ class _ChapterSheetState extends State<_ChapterSheet> {
   Widget build(BuildContext context) => Column(children: [
     Row(children: [
       Expanded(child: TextButton(key: const ValueKey('contents-tab'), onPressed: () {},
-        style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.primary,
-          backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12)),
+        style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.primary),
         child: Text(T('toc'), style: const TextStyle(fontWeight: FontWeight.bold)))),
       Expanded(child: TextButton(key: const ValueKey('bookmarks-tab'), onPressed: () => Navigator.pop(context, -1),
         style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant), child: Text(T('bookmark')))),

@@ -1404,8 +1404,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
     final active = tester.widget<TextButton>(find.byKey(const ValueKey('contents-tab')));
     final inactive = tester.widget<TextButton>(find.byKey(const ValueKey('bookmarks-tab')));
-    expect(active.style!.backgroundColor!.resolve({}), isNot(Colors.transparent));
+    expect(active.style!.backgroundColor?.resolve({}), isNull);
     expect(inactive.style!.backgroundColor?.resolve({}), isNull);
+    expect(active.style!.foregroundColor!.resolve({}), isNot(inactive.style!.foregroundColor!.resolve({})));
     expect(tester.widget<ListTile>(find.byKey(const ValueKey('toc-entry-0'))).selected, isTrue);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
