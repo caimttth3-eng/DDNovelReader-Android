@@ -93,6 +93,25 @@ class SigningTests(unittest.TestCase):
                         with self.assertRaises(prepare.SigningError):
                             sign_apk.verify_apk("sample.apk", self.expected)
 
+    def test_sdk_range_output_requires_the_pinned_key_for_every_sdk(self):
+        ranges = ["(minSdkVersion=24, maxSdkVersion=32)", "(minSdkVersion=33, maxSdkVersion=2147483647)"]
+        valid = "Number of signers: 1\n" + "\n".join(
+            f"Signer {label} certificate SHA-256 digest: {self.expected}" for label in ranges)
+        with patch.object(sign_apk, "find_tool", return_value=Path("apksigner")):
+            for output in [valid, valid.replace(ranges[1], "(minSdkVersion=33 (dev release=true), maxSdkVersion=2147483647)"),
+                           valid + "\nSource Stamp Signer certificate SHA-256 digest: " + "0" * 64]:
+                with self.subTest(valid=output), patch.object(sign_apk, "run_tool", return_value=output.encode()):
+                    sign_apk.verify_apk("sample.apk", self.expected)
+            for output in [valid.replace(self.expected, "0" * 64, 1),
+                           valid.replace("Number of signers: 1", "Number of signers: 2"),
+                           valid + f"\nSigner #1 certificate SHA-256 digest: {self.expected}",
+                           valid + "\nSigner (unrecognized format) certificate SHA-256 digest: " + "0" * 64,
+                           "Number of signers: 1\n"]:
+                with self.subTest(invalid=output), patch.object(sign_apk, "run_tool", return_value=output.encode()):
+                    with self.assertRaises(prepare.SigningError) as caught:
+                        sign_apk.verify_apk("sample.apk", self.expected)
+                    self.assertIn("expected=" + self.expected, str(caught.exception))
+
     def test_no_secret_build_is_explicitly_unsigned_and_cleans_stale_files(self):
         certificate = self.root / "certificate.sha256"
         certificate.write_text(self.expected)

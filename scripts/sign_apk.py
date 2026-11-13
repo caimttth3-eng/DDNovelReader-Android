@@ -13,9 +13,23 @@ from prepare_signing import (SigningError, check_keystore, find_tool, fingerprin
 def verify_apk(apk, expected, apksigner=None):
     result = run_tool(tool_command(find_tool("apksigner", apksigner)) +
                       ["verify", "--verbose", "--print-certs", str(apk)]).decode("utf-8", errors="replace")
-    certificates = re.findall(r"Signer #\d+ certificate SHA-256 digest:\s*([0-9a-fA-F]+)", result)
-    if len(certificates) != 1 or certificates[0].lower() != expected:
-        raise SigningError("APK signer certificate does not match the pinned certificate.")
+    # v3.1 prints each SDK-range signer instead of the legacy `Signer #1`.
+    # The source-stamp certificate identifies a distributor, not the APK key.
+    pattern = re.compile(r"Signer (?P<label>#\d+|\(minSdkVersion=\d+(?: \(dev release=true\))?, maxSdkVersion=\d+\))"
+                         r" certificate SHA-256 digest:\s*(?P<digest>[0-9a-fA-F]{64})")
+    rows = [line.strip() for line in result.splitlines()
+            if line.strip().startswith("Signer ") and "certificate SHA-256 digest:" in line]
+    matches = [pattern.fullmatch(row) for row in rows]
+    certificates = [(match["label"], match["digest"].lower()) for match in matches if match]
+    legacy = [label for label, _ in certificates if label.startswith("#")]
+    signer_counts = re.findall(r"^Number of signers:\s*(\d+)\s*$", result, re.MULTILINE)
+    valid = (bool(certificates) and len(certificates) == len(rows)
+             and all(digest == expected for _, digest in certificates)
+             and (not legacy or (len(certificates) == 1 and legacy == ["#1"]))
+             and all(count == "1" for count in signer_counts))
+    if not valid:
+        actual = ", ".join(f"{label}={digest}" for label, digest in certificates) or "none parsed"
+        raise SigningError(f"APK signer certificate does not match the pinned certificate; expected={expected}; actual={actual}.")
 
 
 def sign_apk(apk, secret_path, output, expected, apksigner=None, zipalign=None, keytool=None):
