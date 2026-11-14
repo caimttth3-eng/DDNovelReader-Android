@@ -101,6 +101,9 @@ void main() {
     }
     Future<void> openMenu() async {
       await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
+      final expand = find.byKey(const ValueKey('pause-expand'));
+      await scrollTo(expand); await tester.tap(expand); await tester.pumpAndSettle();
       await scrollTo(find.byKey(const ValueKey('pause-slider-comma')));
     }
     await openMenu();
@@ -114,6 +117,15 @@ void main() {
     expect(tester.widget<Slider>(comma).value, greaterThan(0));
     expect(tester.getRect(comma).left, before.left); expect(tester.getRect(comma).right, before.right);
     expect(tester.getRect(semicolon).left, before.left); expect(tester.getRect(semicolon).right, before.right);
+    final drafted = tester.widget<Slider>(comma).value;
+    // Collapsing the section keeps its draft but cannot apply it.
+    final expand = find.byKey(const ValueKey('pause-expand'));
+    final sheetScroll = find.descendant(of: find.byType(BottomSheet), matching: find.byType(Scrollable)).last;
+    await tester.scrollUntilVisible(expand, -180, scrollable: sheetScroll); await tester.pumpAndSettle();
+    await tester.tap(expand); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
+    await tester.tap(expand); await tester.pumpAndSettle(); await scrollTo(comma);
+    expect(tester.widget<Slider>(comma).value, drafted);
     expect(requests, isEmpty);
     expect((await storage.loadSettings())['speechPauses']['comma'], 0);
     if (Platform.isLinux) {

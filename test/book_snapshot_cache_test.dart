@@ -59,6 +59,8 @@ void main() {
     expect(restored.prepared.chapterTitles, prepared.chapterTitles);
     expect(restored.prepared.book.chapters.expand((c) => c.paragraphs).expand((p) => p.sentences)
       .any((s) => s.pauseAfterMilliseconds == 300), isTrue);
+    expect(restored.prepared.book.chapters.expand((c) => c.paragraphs).expand((p) => p.sentences)
+      .any((s) => s.pauseAfterMilliseconds == 200 && s.display.endsWith('——')), isTrue);
     final entry = restored.prepared.toc.last;
     expect(ReadingText.anchor(restored.prepared.book, entry.chapterIndex, entry.paragraphIndex, entry.displayOffset),
       restored.prepared.tocAnchors.last);

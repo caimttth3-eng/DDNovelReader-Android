@@ -7,7 +7,8 @@ class SpeechPauseSettings {
   final Map<SpeechPauseKind, int> _values;
   const SpeechPauseSettings() : _values = const {};
   SpeechPauseSettings._(Map<SpeechPauseKind, int> values) : _values = Map.unmodifiable(values);
-  int millisecondsFor(SpeechPauseKind kind) => _values[kind] ?? (kind == SpeechPauseKind.dash ? 300 : 0);
+  int millisecondsFor(SpeechPauseKind kind) => _values[kind] ??
+    (kind == SpeechPauseKind.dash || kind == SpeechPauseKind.ellipsis ? 200 : kind == SpeechPauseKind.paragraph ? 300 : 0);
   static int _normalize(num value) => ((value.clamp(minimum, maximum) / step).round() * step);
   SpeechPauseSettings withPause(SpeechPauseKind kind, int milliseconds) =>
     SpeechPauseSettings._({..._values, kind: _normalize(milliseconds)});

@@ -3089,6 +3089,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _openPlaybackSettings() async {
     if (_applyingSpeechPauses) return;
     var pauses = _settings.speechPauses;
+    var pausesExpanded = false;
     final selected = await showModalBottomSheet<SpeechPauseSettings>(context: context, isScrollControlled: true,
       builder: (context) => StatefulBuilder(builder: (ctx, update) => SafeArea(child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
@@ -3119,7 +3120,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               if (chosen != null && mounted && ctx.mounted) { setState(() => _settings.keepScreenMinutes = chosen); update(() {});
                 widget.storage.saveSettings(_settings.toJson()); _syncScreenAwake(); }
             })),
-          ListTile(title: Text(T('additionalPauses')), subtitle: Text('${T('pauseDescription')}\n${T('pauseDraftHint')}')),
+          ListTile(key: const ValueKey('pause-expand'), title: Text(T('additionalPauses')),
+            trailing: Icon(pausesExpanded ? Icons.expand_less : Icons.expand_more),
+            onTap: () => update(() => pausesExpanded = !pausesExpanded)),
+          if (pausesExpanded) ...[
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text('${T('pauseDescription')}\n${T('pauseDraftHint')}')),
           for (final kind in SpeechPauseKind.values) Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(children: [
             SizedBox(width: 64, child: Text(T('pause-${kind.name}'))),
             SizedBox(width: 80, child: TextButton(key: ValueKey('pause-${kind.name}'),
@@ -3140,6 +3146,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child:
             FilledButton(key: const ValueKey('pause-apply'), onPressed: pauses == _settings.speechPauses ? null :
               () => Navigator.pop(ctx, pauses), child: Text(T('applyPauseSettings')))),
+          ],
         ])))));
     if (selected != null && mounted && selected != _settings.speechPauses) await _applySpeechPauses(selected);
   }
@@ -4000,7 +4007,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       context: context,
       builder: (ctx) => _SettingsSheet(
         settings: _settings,
-        onFontTune: _openFontFineTune,
         onChanged: (s) {
           final rotationChanged = s.followSystemRotation != _settings.followSystemRotation;
           final tocChanged = s.autoExtractToc != _settings.autoExtractToc;
@@ -4174,11 +4180,9 @@ class _IntegerInputDialogState extends State<_IntegerInputDialog> {
 
 class _SettingsSheet extends StatefulWidget {
   final ReadingSettings settings;
-  final VoidCallback onFontTune;
   final ValueChanged<ReadingSettings> onChanged;
   const _SettingsSheet({
     required this.settings,
-    required this.onFontTune,
     required this.onChanged,
   });
 
@@ -4318,33 +4322,22 @@ class _SettingsSheetState extends State<_SettingsSheet> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              _group(context, 'settingsAppearance'),
               ListTile(title: Text(T('themeColor')), trailing: DropdownButton<String>(
                 key: const ValueKey('theme-mode'), value: _s.themeMode,
                 items: ['system', 'dark', 'light'].map((mode) => DropdownMenuItem(value: mode,
                   child: Text(T(mode == 'system' ? 'followSystemTheme' : mode == 'dark' ? 'darkTheme' : 'lightTheme')))).toList(),
                 onChanged: (mode) { if (mode != null) setState(() { _s.themeMode = mode; _update(); }); })),
-              // 亮度
-              SwitchListTile(key: const ValueKey('auto-extract-toc'), title: Text(T('autoExtractToc')),
-                value: _s.autoExtractToc, onChanged: (value) => setState(() { _s.autoExtractToc = value; _update(); })),
-              ReaderBrightnessControl(value: _s.brightness, automatic: _s.automaticBrightness,
-                onChanged: (value) => setState(() { _s.brightness = value; _s.automaticBrightness = false; _update(); }),
-                onAutomatic: () async {
-                  setState(() => _s.automaticBrightness = true); _update();
-                  final value = await _ReaderScreenState._volumeChannel.invokeMethod<double>('getSystemBrightness');
-                  if (mounted && _s.automaticBrightness && value != null) {
-                    setState(() => _s.brightness = ReaderBrightnessControl.split + value.clamp(0.0, 1.0) * (1 - ReaderBrightnessControl.split));
-                    _update();
-                  }
-                }),
-              // 字体大小
-              Row(children: [
-                Expanded(child: Slider(padding: const EdgeInsets.symmetric(horizontal: 12), value: _s.fontSize.clamp(14, 64), min: 14, max: 64, divisions: 50,
-                  onChanged: (value) => setState(() { _s.fontSize = value; _update(); }))),
-                SizedBox(width: 44, height: 44, child: TextButton(
-                  style: TextButton.styleFrom(minimumSize: const Size(44, 44), padding: EdgeInsets.zero),
-                  onPressed: () { Navigator.pop(context); widget.onFontTune(); },
-                  child: const Text('T±', style: TextStyle(fontSize: 20)))),
-              ]),
+              ListTile(key: const ValueKey('reader-font-family'), title: Text(T('fontReplace')),
+                trailing: SizedBox(width: 120, child: Row(children: [Expanded(child: Text(
+                  _s.fontFamily.isEmpty ? T('default') : FontManager.familyOf(_s.fontFamily),
+                  maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.end)),
+                  const Icon(Icons.chevron_right, size: 18)])), onTap: _openFontPicker),
+              ListTile(title: Text(T('lineHeight')), subtitle: Slider(key: const ValueKey('reader-line-height'),
+                padding: EdgeInsets.zero, value: _s.lineHeight, min: 1.2, max: 2.4, divisions: 12,
+                onChanged: (value) => setState(() { _s.lineHeight = value; _update(); }))),
+              const Divider(),
+              _group(context, 'settingsPageTurning'),
               ListTile(title: const Text('翻页方式'), trailing: DropdownButton<String>(
                 key: const ValueKey('page-turn-mode'), value: _s.pageTurnMode,
                 items: const [DropdownMenuItem(value: 'tap', child: Text('点击左右侧')),
@@ -4356,6 +4349,13 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 items: ['off', 'slide'].map((value) => DropdownMenuItem(value: value,
                   child: Text(T(value == 'off' ? 'animationOff' : 'animationSlide')))).toList(),
                 onChanged: (value) { if (value != null) setState(() { _s.pageTurnAnimation = value; _update(); }); })),
+              SwitchListTile(key: const ValueKey('retain-page-line'), title: const Text('翻页后保留首行'),
+                subtitle: Text(_s.pageTurnMode == 'scroll' ? '上下滚动时不可用' : '下一页首行重复上一页最后一整行'),
+                value: _s.retainPageLine, onChanged: _s.pageTurnMode == 'scroll' ? null : (value) {
+                  setState(() { _s.retainPageLine = value; _update(); });
+                }),
+              const Divider(),
+              _group(context, 'settingsScreen'),
               SwitchListTile(key: const ValueKey('follow-system-rotation'), title: Text(T('followSystemRotation')),
                 value: _s.followSystemRotation, onChanged: (value) => setState(() { _s.followSystemRotation = value; _update(); })),
               ListTile(title: Text(T('readingScreenAwake')), subtitle: Text(T('screenTimeoutDescription')),
@@ -4364,11 +4364,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 items: [for (final seconds in [0, 60, 120, 300, 600, 1800]) DropdownMenuItem(value: seconds,
                   child: Text(seconds == 0 ? T('systemScreenAwake') : T('minutes', {'m': '${seconds ~/ 60}'})))],
                 onChanged: (value) { if (value != null) setState(() { _s.readingScreenSeconds = value; _update(); }); })),
-              SwitchListTile(key: const ValueKey('retain-page-line'), title: const Text('翻页后保留首行'),
-                subtitle: Text(_s.pageTurnMode == 'scroll' ? '上下滚动时不可用' : '下一页首行重复上一页最后一整行'),
-                value: _s.retainPageLine, onChanged: _s.pageTurnMode == 'scroll' ? null : (value) {
-                  setState(() { _s.retainPageLine = value; _update(); });
-                }),
+              const Divider(),
+              _group(context, 'settingsTextProcessing'),
+              SwitchListTile(key: const ValueKey('auto-extract-toc'), title: Text(T('autoExtractToc')),
+                value: _s.autoExtractToc, onChanged: (value) => setState(() { _s.autoExtractToc = value; _update(); })),
               SwitchListTile(key: const ValueKey('text-correction'), title: const Text('文本修正'),
                 subtitle: const Text('合并非句换行、修复换行错位闭引号、清理不可见字符，同时调整朗读分句'),
                 value: _s.mergeNonSentenceBreaks,
@@ -4386,43 +4385,6 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     groupValue: _s.informationFilterLevel,
                     onChanged: (v) => setState(() { _s.informationFilterLevel = v!; _update(); })),
               ],
-              // 字体更换
-              InkWell(
-                onTap: _openFontPicker,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.font_download_outlined,
-                          color: Color(0xFF6498B5)),
-                      const SizedBox(width: 12),
-                      Text(T('fontReplace'),
-                          style: const TextStyle(fontSize: 14)),
-                      const Spacer(),
-                      Text(
-                        _s.fontFamily.isEmpty
-                            ? T('default')
-                            : FontManager.familyOf(_s.fontFamily),
-                        style: const TextStyle(
-                            fontSize: 13, color: Color(0xFF6498B5)),
-                      ),
-                      const Icon(Icons.chevron_right,
-                          size: 18, color: Color(0xFF6498B5)),
-                    ],
-                  ),
-                ),
-              ),
-              // 行距
-              _row(T('lineHeight'), Icons.format_line_spacing, Slider(
-                value: _s.lineHeight,
-                min: 1.2,
-                max: 2.4,
-                divisions: 12,
-                onChanged: (v) => setState(() {
-                  _s.lineHeight = v;
-                  _update();
-                }),
-              )),
             ],
           ),
         ),
@@ -4430,17 +4392,12 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     );
   }
 
-  Widget _row(String label, IconData icon, Widget slider) {
-    return Row(
-      children: [
-        Icon(icon, color: const Color(0xFF6498B5)),
-        const SizedBox(width: 12),
-        Text(label, style: const TextStyle(fontSize: 14)),
-        const SizedBox(width: 8),
-        Expanded(child: slider),
-      ],
-    );
-  }
+  Widget _group(BuildContext context, String key) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    child: Align(alignment: Alignment.centerLeft, child: Text(T(key),
+      style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Theme.of(context).colorScheme.primary))),
+  );
+
 }
 
 /// 书签列表底部弹层（删除带动画、即时刷新）

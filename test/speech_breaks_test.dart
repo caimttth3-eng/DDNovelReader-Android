@@ -10,7 +10,9 @@ Book bookWith(Paragraph paragraph) => Book(id: 'dash', title: 'dash', filePath: 
 void main() {
   test('pause settings migrate defaults, clamp and quantize, and serialize without mutable aliases', () {
     const defaults = SpeechPauseSettings();
-    expect(defaults.millisecondsFor(SpeechPauseKind.dash), 300);
+    expect(defaults.millisecondsFor(SpeechPauseKind.dash), 200);
+    expect(defaults.millisecondsFor(SpeechPauseKind.ellipsis), 200);
+    expect(defaults.millisecondsFor(SpeechPauseKind.paragraph), 300);
     expect(defaults.millisecondsFor(SpeechPauseKind.comma), 0);
     final custom = defaults.withPause(SpeechPauseKind.comma, 226).withPause(SpeechPauseKind.paragraph, 9999);
     expect(custom.millisecondsFor(SpeechPauseKind.comma), 250);
@@ -20,6 +22,26 @@ void main() {
     expect(SpeechPauseSettings.fromJson({'version': 2, 'dash': 0}), defaults);
     expect(SpeechPauseSettings.fromJson({'dash': double.nan}), defaults);
     expect(defaults.withPause(SpeechPauseKind.dash, -5).millisecondsFor(SpeechPauseKind.dash), 0);
+    final legacy = SpeechPauseSettings.fromJson({'version': 1, 'dash': 300, 'paragraph': 0, 'ellipsis': 0});
+    expect(legacy.millisecondsFor(SpeechPauseKind.dash), 300);
+    expect(legacy.millisecondsFor(SpeechPauseKind.paragraph), 0,
+      reason: 'Explicit saved pauses retain their values when new defaults change');
+    expect(legacy.millisecondsFor(SpeechPauseKind.ellipsis), 0);
+    final partial = SpeechPauseSettings.fromJson({'comma': 150});
+    expect(partial.millisecondsFor(SpeechPauseKind.dash), 200);
+    expect(partial.millisecondsFor(SpeechPauseKind.ellipsis), 200);
+    expect(partial.millisecondsFor(SpeechPauseKind.paragraph), 300);
+    expect(SpeechPauseSettings.fromJson(null), defaults);
+  });
+
+  test('new defaults add one 200ms dash or ellipsis pause and 300ms paragraph pause', () {
+    for (final ellipsis in ['……', '...']) {
+      final p = ReadingText.paragraph('甲——乙${ellipsis}丙。');
+      expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [200, 200, 300]);
+      expect(p.sentences.map((s) => s.display).join(), '甲——乙${ellipsis}丙。');
+    }
+    expect(ReadingText.paragraph('甲……——').sentences.single.pauseAfterMilliseconds, 300,
+      reason: 'Overlapping ellipsis, dash and paragraph delays take their maximum');
   });
 
   test('custom punctuation adds delays with complete UTF16 display and TTS offsets', () {
@@ -71,7 +93,8 @@ void main() {
       expect(SpeechBreaks.boundaries(number, pauses), isEmpty);
       final natural = ReadingText.paragraph(number), custom = ReadingText.paragraph(number, pauseSettings: pauses);
       expect(custom.sentences.map((s) => s.tts), natural.sentences.map((s) => s.tts));
-      expect(custom.sentences.every((s) => s.pauseAfterMilliseconds == 0), isTrue);
+      expect(custom.sentences.single.pauseAfterMilliseconds, 300,
+        reason: 'The paragraph delay remains; punctuation inside numbers adds nothing');
     }
   });
 
@@ -96,7 +119,7 @@ void main() {
     expect(p.display, text);
     expect(p.tts, '前半句后半句。');
     expect(p.sentences.map((s) => s.tts), ['前半句', '后半句。']);
-    expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [300, 0]);
+    expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [200, 300]);
     expect(p.sentenceStartTts, [0, 3]);
     expect(p.sentences.first.display, '前半句——');
     expect(p.sentences.last.displayStart, text.indexOf('后'));
@@ -108,11 +131,11 @@ void main() {
     for (final dash in ['—', '——', '————', '―', '――', '—―—']) {
       final p = ReadingText.paragraph('甲${dash}乙。');
       expect(p.sentences.map((s) => s.tts), ['甲', '乙。']);
-      expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [300, 0]);
+      expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [200, 300]);
     }
     final p = ReadingText.paragraph('甲——乙―丙。');
     expect(p.sentences.map((s) => s.tts), ['甲', '乙', '丙。']);
-    expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [300, 300, 0]);
+    expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [200, 200, 300]);
     expect(p.sentenceStartTts, [0, 1, 2]);
   });
 
@@ -126,7 +149,7 @@ void main() {
     }
     final p = ReadingText.paragraph('甲。——乙。');
     expect(p.sentences.map((s) => s.tts), ['甲。', '乙。']);
-    expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [300, 0]);
+    expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [200, 300]);
   });
 
   test('quoted speech retains quotes and offsets across its dash break', () {
@@ -152,11 +175,11 @@ void main() {
     expect(ReadingText.anchor(formatted, 0, target.$1, target.$2), 3);
   });
 
-  test('ordinary hyphens, negative numbers and dates do not create pauses', () {
+  test('ordinary hyphens, negative numbers and dates only retain the paragraph pause', () {
     final p = ReadingText.paragraph('2026-11-12 foo-bar -3');
     expect(p.tts, '2026-11-12 foo-bar -3');
     expect(p.sentences, hasLength(1));
-    expect(p.sentences.single.pauseAfterMilliseconds, 0);
+    expect(p.sentences.single.pauseAfterMilliseconds, 300);
   });
 
   test('empty and dash-only text never creates a punctuation-only speech request', () {

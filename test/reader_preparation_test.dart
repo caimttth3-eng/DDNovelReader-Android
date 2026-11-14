@@ -83,7 +83,7 @@ void main() {
       pauseSettings: const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 250));
     final custom = await ReaderPreparation.prepare(r);
     expect(custom.fingerprint, isNot(natural.fingerprint));
-    expect(custom.book.chapters.single.paragraphs.single.sentences.map((s) => s.pauseAfterMilliseconds), [250, 0]);
+    expect(custom.book.chapters.single.paragraphs.single.sentences.map((s) => s.pauseAfterMilliseconds), [250, 300]);
     expect(await ReaderPreparation.prepare(r), same(custom));
   });
 

@@ -81,6 +81,33 @@ void main() {
     expect(spoken.last['text'], '乙。');
     await emit('start', {'id': spoken.last['id']});
   });
+  test('default dash and ellipsis delays precede continuation and paragraph delay precedes completion', () async {
+    final p = ReadingText.paragraph('甲——乙……丙。');
+    expect(p.sentences.map((s) => s.pauseAfterMilliseconds), [200, 200, 300]);
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    final completed = Completer<void>(); reader.onCompleted = completed.complete;
+    queued = Completer<void>(); final firstQueued = queued!.future;
+    final initial = reader.start(p.sentences.map((s) => s.tts).toList(),
+      pauseAfterMilliseconds: p.sentences.map((s) => s.pauseAfterMilliseconds).toList());
+    await firstQueued; await emit('start', {'id': spoken.last['id']}); await initial;
+    for (var index = 0; index < 2; index++) {
+      final next = Completer<void>(); queued = next;
+      final clock = Stopwatch()..start();
+      await emit('done', {'id': spoken.last['id']});
+      expect(next.isCompleted, isFalse); expect(reader.currentIndex, index);
+      await next.future.timeout(const Duration(seconds: 3));
+      expect(clock.elapsedMilliseconds, greaterThanOrEqualTo(190));
+      expect(reader.currentIndex, index + 1);
+      await emit('start', {'id': spoken.last['id']});
+    }
+    final clock = Stopwatch()..start();
+    await emit('done', {'id': spoken.last['id']});
+    expect(completed.isCompleted, isFalse); expect(reader.state, TtsState.playing);
+    await completed.future.timeout(const Duration(seconds: 3));
+    expect(clock.elapsedMilliseconds, greaterThanOrEqualTo(290));
+    expect(reader.state, TtsState.stopped);
+  });
   test('stopping during engine initialization cannot start delayed speech', () async {
     final initialized = Completer<void>();
     final initializing = Completer<void>();

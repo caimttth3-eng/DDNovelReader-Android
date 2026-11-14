@@ -25,6 +25,7 @@ import 'package:duoduo_langdu/services/book_cache_task.dart';
 import 'package:duoduo_langdu/services/tts_cache_store.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
 import 'package:duoduo_langdu/services/annotation_store.dart';
+import 'package:duoduo_langdu/widgets/reader_brightness_control.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 void main() {
@@ -304,10 +305,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(Theme.of(tester.element(find.byType(Slider).last)).brightness, Brightness.dark);
     await capture('reader-settings-night');
-    final settingBrightness = find.byWidgetPredicate((w) => w is Slider && w.max == 1).last;
-    final settingFont = find.byWidgetPredicate((w) => w is Slider && w.max == 64).last;
-    expect(tester.getRect(settingFont).width, closeTo(tester.getRect(settingBrightness).width, 0.1));
-    expect(tester.getRect(settingFont).left, closeTo(tester.getRect(settingBrightness).left, 0.1));
+    final readingSettings = find.byType(BottomSheet).last;
+    expect(find.descendant(of: readingSettings, matching: find.byType(ReaderBrightnessControl)), findsNothing);
+    expect(find.descendant(of: readingSettings, matching: find.byWidgetPredicate((w) => w is Slider && w.max == 64)), findsNothing);
     expect(find.byWidgetPredicate((w) => w is DropdownButton<String> && w.value == 'zh-CN-XiaoxiaoNeural'), findsNothing);
     expect(find.text('缓存在线语音'), findsNothing, reason: 'Online cache belongs to the playback panel');
     expect(find.text('变速'), findsNothing, reason: 'Speech speed belongs to the playback panel');
@@ -1256,10 +1256,11 @@ void main() {
     // This settings sheet captured the light palette before the OS changes.
     AppAppearance.updateSystemBrightness(Brightness.dark); await tester.pumpAndSettle();
     expect(background(), const Color(0xFF1A1A1A));
-    final font = find.byWidgetPredicate((w) => w is Slider && w.max == 64).last;
-    tester.widget<Slider>(font).onChanged!(45); await tester.pumpAndSettle();
+    final lineHeight = find.byKey(const ValueKey('reader-line-height'));
+    tester.widget<Slider>(lineHeight).onChanged!(1.9); await tester.pumpAndSettle();
     expect(background(), const Color(0xFF1A1A1A), reason: 'Editing an old settings copy must resolve the current system theme');
-    expect((await storage.loadSettings())['fontSize'], 45); expect((await storage.loadSettings())['speechRate'], 2.4);
+    expect((await storage.loadSettings())['fontSize'], 37); expect((await storage.loadSettings())['lineHeight'], 1.9);
+    expect((await storage.loadSettings())['speechRate'], 2.4);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
@@ -1634,6 +1635,8 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
     tester.widget<Slider>(find.byKey(const ValueKey('sentence-drag-delay'))).onChanged!(0.4); await tester.pumpAndSettle();
     expect((await storage.loadSettings())['sentenceDragDelay'], 0.4);
+    final expandPauses = find.byKey(const ValueKey('pause-expand'));
+    await tester.ensureVisible(expandPauses); await tester.tap(expandPauses); await tester.pumpAndSettle();
     final pause = find.byKey(const ValueKey('pause-comma'));
     await tester.ensureVisible(pause); await tester.pumpAndSettle();
     await tester.tap(pause); await tester.pumpAndSettle();
@@ -1883,7 +1886,7 @@ void main() {
           if (target != null) {
             expect(landed.$1, target, reason: 'The actual first row must remain the selected previous-page row after the indexed list settles');
           } else {
-            expect(landed.$1, contains('第$chapter章第7段。'),
+            expect(landed.$1.replaceAll('\u200B', '').replaceAll('\uFFFC', ''), contains('第$chapter章第7段。'),
               reason: 'An uncached chapter boundary must prepare the preceding chapter final paragraph before paging');
           }
           expect(landed.$2.top, closeTo(tester.getRect(body).top, 0.25),
