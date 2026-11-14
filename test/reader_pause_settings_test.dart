@@ -113,10 +113,9 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
       final systemPause = find.byKey(const ValueKey('pause-voice-__system_tts__'));
       await scrollTo(systemPause); await tester.tap(systemPause); await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
-      expect(find.byKey(const ValueKey('pause-apply')), findsNothing);
-      final expand = find.byKey(const ValueKey('pause-expand'));
-      await scrollTo(expand); await tester.tap(expand); await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pause-slider-comma')), findsOneWidget);
+      expect(find.byKey(const ValueKey('pause-apply')), findsOneWidget);
+      expect(find.text('系统的追加停顿'), findsNothing);
       expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNull);
       await scrollTo(find.byKey(const ValueKey('pause-slider-comma')));
     }

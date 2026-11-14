@@ -80,11 +80,10 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> expandPauses(WidgetTester tester) async {
-    expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
-    expect(find.byKey(const ValueKey('pause-apply')), findsNothing);
-    final expand = find.byKey(const ValueKey('pause-expand'));
-    await scrollSheetTo(tester, expand); await tester.tap(expand); await tester.pumpAndSettle();
+  Future<void> expectOpenPauses(WidgetTester tester) async {
+    expect(find.byKey(const ValueKey('pause-slider-comma')), findsOneWidget);
+    expect(find.byKey(const ValueKey('pause-apply')), findsOneWidget);
+    expect(find.text('系统的追加停顿'), findsNothing);
     expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNull);
   }
 
@@ -123,7 +122,7 @@ void main() {
     }
     await scrollSheetTo(tester, voicePause, delta: -150);
     await tester.tap(voicePause); await tester.pumpAndSettle();
-    await expandPauses(tester);
+    await expectOpenPauses(tester);
     await editComma(tester, '0.25');
     final apply = find.byKey(const ValueKey('pause-apply'));
     await scrollSheetTo(tester, apply, delta: -150); await tester.tap(apply); await tester.pumpAndSettle();

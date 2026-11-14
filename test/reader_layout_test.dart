@@ -1643,7 +1643,8 @@ void main() {
     expect(find.byKey(const ValueKey('pause-voice-zh-CN-XiaoxiaoNeural')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('pause-voice-__system_tts__'))); await tester.pumpAndSettle();
     final expandPauses = find.byKey(const ValueKey('pause-expand'));
-    await tester.ensureVisible(expandPauses); await tester.tap(expandPauses); await tester.pumpAndSettle();
+    expect(expandPauses, findsOneWidget);
+    expect(find.text('系统的追加停顿'), findsNothing);
     final pause = find.byKey(const ValueKey('pause-comma'));
     await tester.ensureVisible(pause); await tester.pumpAndSettle();
     await tester.tap(pause); await tester.pumpAndSettle();

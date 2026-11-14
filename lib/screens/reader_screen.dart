@@ -3210,8 +3210,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       builder: (ctx) => SafeArea(child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
         child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(16), children: [
-          Text(T('voicePauseTitle', {'name': _shortVoiceLabel(voice)}), style: Theme.of(ctx).textTheme.titleMedium),
-          SpeechPauseEditor(initialPauses: _settings.speechPausesForVoice(voice),
+          SpeechPauseEditor(initialPauses: _settings.speechPausesForVoice(voice), initiallyExpanded: true,
             onApply: (selection) => Navigator.pop(ctx, selection)),
         ]))));
     if (selected == null || !mounted) return;
