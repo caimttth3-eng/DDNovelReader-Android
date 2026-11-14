@@ -7,31 +7,41 @@ import 'package:characters/characters.dart';
 class MediaSpeechText {
   final String text;
   final List<({int start, int end})> _ranges;
+  final int _contentStart;
 
   MediaSpeechText(this.text, {int maxColumns = 32})
-      : _ranges = _split(text, maxColumns < 1 ? 1 : maxColumns);
+      : _ranges = _split(text, maxColumns < 1 ? 1 : maxColumns),
+        _contentStart = text.length - text.trimLeft().length;
 
-  /// No usable range information means displaying the complete original line.
+  /// No usable range information means displaying the complete original line,
+  /// with only its paragraph-leading layout whitespace omitted.
   /// An exact end-of-text position still selects its last displayed fragment.
   String textAt(int? utf16Offset) {
     if (utf16Offset == null || utf16Offset < 0 || utf16Offset > text.length ||
-        _ranges.length < 2) return text;
-    if (utf16Offset == text.length) {
+        _ranges.length < 2) return text.substring(_contentStart);
+    // Keep all cached ranges and incoming offsets in the untouched source's
+    // UTF-16 coordinates. A range in indentation alone selects the first real
+    // text rather than publishing an empty fragment for that indentation.
+    final offset = utf16Offset < _contentStart ? _contentStart : utf16Offset;
+    if (offset == text.length) {
       final range = _ranges.last;
-      return text.substring(range.start, range.end);
+      return _displayRange(range.start, range.end);
     }
     var low = 0, high = _ranges.length;
     while (low + 1 < high) {
       final middle = (low + high) >> 1;
-      if (_ranges[middle].start <= utf16Offset) {
+      if (_ranges[middle].start <= offset) {
         low = middle;
       } else {
         high = middle;
       }
     }
     final range = _ranges[low];
-    return text.substring(range.start, range.end);
+    return _displayRange(range.start, range.end);
   }
+
+  String _displayRange(int start, int end) =>
+      text.substring(start < _contentStart ? _contentStart : start, end);
 
   static final _punctuation = RegExp(r'^[，、。；：！？…—,.;:!?]');
   static final _word = RegExp(r"^[\p{L}\p{N}_'’-]", unicode: true);

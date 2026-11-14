@@ -16,7 +16,7 @@
 
 系统媒体卡片的横向跑马灯由系统 TextView 和厂商界面控制，MediaSession / MediaItem 没有设置其滚动速度的公共字段；提高朗读倍速也不会相应提高系统文字滚速。[AOSP TextView 的 Marquee 实现](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/widget/TextView.java)使用内部速度和起始等待时间，不能将其当作应用可设置的歌词时轴。
 
-开启通知原文后，长句采用短片段随实际朗读范围切换，短句仍显示整句；仅切通知显示文本，不重新切分合成请求，不改变停顿或语音缓存。片段以约 16 个汉字的显示宽度为预算，优先在标点或英文词间分开，保留闭引号、空白和原始文字，按 grapheme 边界处理组合字符与 emoji。该预算不等于系统卡片的实际像素宽度；厂商布局、大字号或长词仍可能被截断或滚动。
+开启通知原文后，长句采用短片段随实际朗读范围切换，短句仍显示整句；仅切通知显示文本，不重新切分合成请求，不改变停顿或语音缓存。片段以约 16 个汉字的显示宽度为预算，优先在标点或英文词间分开，保留闭引号、正文内空白和原始文字（通知显示时隐藏段首排版缩进，原文及语音偏移不变），按 grapheme 边界处理组合字符与 emoji。该预算不等于系统卡片的实际像素宽度；厂商布局、大字号或长词仍可能被截断或滚动。
 
 选择片段只使用已有在线词时间戳或系统引擎的真实范围事件；仅片段变化时发布媒体元数据，无新增定时器或后台轮询，不要求开启屏幕逐词高亮。没有有效范围信息时保留完整原句，不按字数或语速猜进度。[Android onRangeStart](https://developer.android.com/reference/android/speech/tts/UtteranceProgressListener#onRangeStart(java.lang.String,int,int,int))明确该回调取决于引擎提供时间信息。
 
