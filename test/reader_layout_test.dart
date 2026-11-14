@@ -1779,6 +1779,64 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  for (final fontSize in [24.0, 64.0]) {
+    testWidgets('TOC chapter jumps followed by previous-page taps keep complete rows at font $fontSize', (tester) async {
+      tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+      final storage = AppStorage();
+      await storage.saveSettings((ReadingSettings()..fontSize = fontSize..lineHeight = 1.63..pageTurnAnimation = 'off').toJson());
+      final book = Book(id: 'toc-previous-$fontSize', title: '章节翻页边界', filePath: '', format: BookFormat.txt,
+        addedAt: DateTime(2026), chapters: List.generate(8, (c) => Chapter(title: '第${c + 1}章 山间来信',
+          paragraphs: List.generate(7, (p) => Paragraph(
+            display: '第${c + 1}章第${p + 1}段。' + List.filled(p.isEven ? 27 : 4, '晨风吹过山林，远方传来朋友的问候。').join(),
+            tts: '', sentences: const [], sentenceStartTts: const [])))));
+      final preview = GlobalKey();
+      await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(home: ReaderScreen(book: book, storage: storage))));
+      await tester.pumpAndSettle();
+      final body = find.byKey(const ValueKey('reader-body'));
+      (int, double) viewportAnchor() {
+        final visible = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value
+          .where((position) => position.itemTrailingEdge > 0 && position.itemLeadingEdge < 1).toList()
+            ..sort((a, b) => a.index.compareTo(b.index));
+        return (visible.first.index, visible.first.itemLeadingEdge);
+      }
+      void expectWholeVisibleRows() {
+        final bounds = tester.getRect(body);
+        final localClip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(bounds.size);
+        final clip = localClip.shift(bounds.topLeft);
+        final visible = <Rect>[];
+        for (final render in tester.renderObjectList<RenderParagraph>(find.descendant(of: body, matching: find.byType(RichText)))) {
+          final origin = render.localToGlobal(Offset.zero);
+          for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: render.text.toPlainText().length),
+            boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+            final row = box.toRect().shift(origin);
+            if (row.width < 0.01 || row.height < 2 || row.bottom <= clip.top + 0.5 || row.top >= clip.bottom - 0.5) continue;
+            visible.add(row);
+            expect(row.top, greaterThanOrEqualTo(clip.top - 0.5), reason: 'A TOC jump followed by previous page must not expose a clipped first row');
+            expect(row.bottom, lessThanOrEqualTo(clip.bottom + 0.5), reason: 'The previous page must end on a whole row');
+          }
+        }
+        expect(visible, isNotEmpty);
+      }
+      for (final chapter in [5, 2, 4]) {
+        await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
+        final entry = find.byKey(ValueKey('toc-entry-$chapter'));
+        await tester.ensureVisible(entry); await tester.pumpAndSettle();
+        await tester.tap(entry); await tester.pumpAndSettle();
+        expectWholeVisibleRows();
+        for (var page = 0; page < 3; page++) {
+          final before = viewportAnchor();
+          await tester.tapAt(const Offset(60, 360)); await tester.pumpAndSettle();
+          expect(viewportAnchor(), isNot(before), reason: 'Each left-side tap must really move to the previous page');
+          expectWholeVisibleRows();
+        }
+      }
+      await _captureReaderPreview(tester, preview, 'reader-toc-previous-${fontSize.toInt()}');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    });
+  }
+
   testWidgets('paging shows complete rows and optional overlap repeats exactly one boundary row', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
