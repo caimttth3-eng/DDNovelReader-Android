@@ -45,6 +45,24 @@ void main() {
     expect(parts.every((part) => !part.startsWith('”') && !part.startsWith('；')), isTrue);
   });
 
+  test('an early comma wins over cutting the next long clause in half', () {
+    const text = '甲，乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未。';
+    final parts = observedParts(text, maxColumns: 16);
+    expect(parts.first, '甲，');
+    expect(parts[1], '乙丙丁戊己庚辛壬');
+    expect(parts.join(), text);
+    expect(MediaSpeechText(text, maxColumns: 16).textAt(2), parts[1]);
+  });
+
+  test('use the last available punctuation and keep its closing quote', () {
+    const text = '甲，乙，丙丁戊己庚辛壬癸子丑。';
+    expect(observedParts(text, maxColumns: 16).first, '甲，乙，');
+    const quoted = '“甲，”乙丙丁戊己庚辛壬癸子丑寅卯辰巳。';
+    final parts = observedParts(quoted, maxColumns: 16);
+    expect(parts.first, '“甲，”');
+    expect(parts.join(), quoted);
+  });
+
   test('ordinary English words stay together and whitespace is lossless', () {
     const text = 'Alpha bravo charlie delta echo foxtrot golf hotel india.';
     final parts = observedParts(text, maxColumns: 16);

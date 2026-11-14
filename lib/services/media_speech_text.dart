@@ -67,11 +67,10 @@ class MediaSpeechText {
       while (end < clusters.length && (columns + widths[end] <= budget || end == start)) {
         columns += widths[end];
         end++;
-        // Avoid a tiny first fragment solely because a comma appears early.
-        if (columns * 2 >= budget) {
-          if (_punctuation.hasMatch(clusters[end - 1])) punctuationEnd = end;
-          if (clusters[end - 1].trim().isEmpty) whitespaceEnd = end;
-        }
+        // Any punctuation within the budget is a better boundary than
+        // cutting the next clause in half, even near the fragment's start.
+        if (_punctuation.hasMatch(clusters[end - 1])) punctuationEnd = end;
+        if (columns * 2 >= budget && clusters[end - 1].trim().isEmpty) whitespaceEnd = end;
       }
       if (end < clusters.length) {
         if (punctuationEnd > start) {
