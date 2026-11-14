@@ -1879,13 +1879,17 @@ void main() {
           final bounds = tester.getRect(body);
           final rows = laidOutRows(), complete = rows.where((row) => row.$2.top >= bounds.top - 0.5).toList();
           final previous = rows.where((row) => row.$2.bottom <= complete.first.$2.top + 0.5).toList();
-          final target = previous.isEmpty ? null : previous.firstWhere((row) => previous.last.$2.bottom - row.$2.top <= bounds.height + 0.5).$1;
+          // More preceding items can be laid out in the next frame. Only predict
+          // a first row if the current cache already covers an entire page.
+          final target = previous.isEmpty || previous.last.$2.bottom - previous.first.$2.top < bounds.height - 0.5
+            ? null : previous.firstWhere((row) => previous.last.$2.bottom - row.$2.top <= bounds.height + 0.5).$1;
+          final precedingBoundary = previous.isEmpty ? null : previous.last.$1;
           await tester.tapAt(const Offset(60, 360)); await tester.pumpAndSettle();
           expect(viewportAnchor(), isNot(before), reason: 'Each left-side tap must really move to the previous page');
           final landed = laidOutRows().firstWhere((row) => row.$2.bottom > tester.getRect(body).top + 0.5);
           if (target != null) {
             expect(landed.$1, target, reason: 'The actual first row must remain the selected previous-page row after the indexed list settles');
-          } else {
+          } else if (previous.isEmpty) {
             expect(landed.$1.replaceAll('\u200B', '').replaceAll('\uFFFC', ''), contains('第$chapter章第7段。'),
               reason: 'An uncached chapter boundary must prepare the preceding chapter final paragraph before paging');
             expect(find.descendant(of: find.byKey(const ValueKey('reader-chapter-header')),
@@ -1894,6 +1898,14 @@ void main() {
           }
           expect(landed.$2.top, closeTo(tester.getRect(body).top, 0.25),
             reason: 'The selected row must land at zero actual pixel offset, not a partial row');
+          if (precedingBoundary != null) {
+            final landedBounds = tester.getRect(body);
+            final landedClip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(landedBounds.size);
+            final fullRows = laidOutRows().where((row) => row.$2.top >= landedBounds.top - 0.5 &&
+              row.$2.bottom <= landedBounds.top + landedClip.bottom + 0.5).toList();
+            expect(fullRows.last.$1, precedingBoundary,
+              reason: 'The preceding page must end at the old page immediate predecessor without skipping or repeating a row');
+          }
           if (chapter == 5 && page == 0) {
             await _captureReaderPreview(tester, preview, 'reader-toc-previous-${fontSize.toInt()}-$dpr');
             expect(find.byKey(const ValueKey('reader-menu')), findsNothing,
