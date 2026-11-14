@@ -92,21 +92,24 @@ void main() {
     final requests = <ReaderPreparationRequest>[];
     final prepared = Completer<PreparedReadingBook>();
     ReaderPreparation.runnerForTesting = (request) { requests.add(request); return prepared.future; };
-    Future<void> scrollTo(Finder target) async {
+    Future<void> scrollTo(Finder target, {double delta = 180}) async {
       // The narrow, enlarged-text sheet lazily builds its offscreen rows.
       // Scroll its own viewport so absent controls are actually mounted.
       final scrollable = find.descendant(of: find.byType(BottomSheet), matching: find.byType(Scrollable)).last;
-      await tester.scrollUntilVisible(target, 180, scrollable: scrollable);
+      await tester.scrollUntilVisible(target, delta, scrollable: scrollable);
       await tester.pumpAndSettle();
     }
     Future<void> openMenu() async {
       await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
+      expect(find.byKey(const ValueKey('pause-apply')), findsNothing);
       final expand = find.byKey(const ValueKey('pause-expand'));
       await scrollTo(expand); await tester.tap(expand); await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNull);
       await scrollTo(find.byKey(const ValueKey('pause-slider-comma')));
     }
     await openMenu();
+    expect(find.descendant(of: find.byKey(const ValueKey('pause-comma')), matching: find.text('0.00秒')), findsOneWidget);
     final comma = find.byKey(const ValueKey('pause-slider-comma'));
     final semicolon = find.byKey(const ValueKey('pause-slider-semicolon'));
     final before = tester.getRect(comma), next = tester.getRect(semicolon);
@@ -122,12 +125,15 @@ void main() {
     final expand = find.byKey(const ValueKey('pause-expand'));
     final sheetScroll = find.descendant(of: find.byType(BottomSheet), matching: find.byType(Scrollable)).last;
     await tester.scrollUntilVisible(expand, -180, scrollable: sheetScroll); await tester.pumpAndSettle();
-    await tester.tap(expand); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pause-expand-label'))); await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
-    await tester.tap(expand); await tester.pumpAndSettle(); await scrollTo(comma);
+    expect(find.byKey(const ValueKey('pause-apply')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('pause-expand-label'))); await tester.pumpAndSettle(); await scrollTo(comma);
     expect(tester.widget<Slider>(comma).value, drafted);
     expect(requests, isEmpty);
     expect((await storage.loadSettings())['speechPauses']['comma'], 0);
+    await scrollTo(expand, delta: -180);
+    expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNotNull);
     if (Platform.isLinux) {
       await tester.runAsync(() async {
         final boundary = preview.currentContext!.findRenderObject()! as RenderRepaintBoundary;
@@ -140,21 +146,31 @@ void main() {
       });
     }
     await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
-    expect(requests, isEmpty);
+    expect(requests, isEmpty, reason: 'Dismissing playback settings discards its unapplied draft');
+    expect((await storage.loadSettings())['speechPauses']['comma'], 0);
+    expect(spoken, hasLength(1));
     await openMenu();
     await tester.tap(find.byKey(const ValueKey('pause-comma'))); await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('pause-number-comma')), '250');
+    expect(tester.widget<TextFormField>(find.byKey(const ValueKey('pause-number-comma'))).controller!.text, '0.00');
+    await tester.enterText(find.byKey(const ValueKey('pause-number-comma')), '3.50');
     await tester.tap(find.text('确定').last); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pause-number-comma')), findsOneWidget, reason: 'Seconds above 3.00 cannot be submitted');
+    await tester.enterText(find.byKey(const ValueKey('pause-number-comma')), '.25');
+    await tester.tap(find.text('确定').last); await tester.pumpAndSettle();
+    expect(find.descendant(of: find.byKey(const ValueKey('pause-comma')), matching: find.text('0.25秒')), findsOneWidget);
     final apply = find.byKey(const ValueKey('pause-apply'));
-    await scrollTo(apply); await tester.tap(apply); await tester.pumpAndSettle();
+    await scrollTo(apply, delta: -180); await tester.tap(apply); await tester.pumpAndSettle();
     expect(requests, hasLength(1)); expect(spoken, hasLength(1));
-    expect((await storage.loadSettings())['speechPauses']['comma'], 0, reason: 'The old settings remain valid until preparation succeeds');
+    expect((await storage.loadSettings())['speechPauses']['comma'], 0, reason: 'The saved setting stays valid until preparation succeeds');
     await tester.pump(const Duration(milliseconds: 16));
     expect(find.byKey(const ValueKey('reader-body')), findsOneWidget);
     expect(tester.takeException(), isNull, reason: 'The pending worker must not prevent reader painting');
     prepared.complete(ReaderPreparation.prepareSynchronously(requests.single)); await tester.pumpAndSettle();
     expect((await storage.loadSettings())['speechPauses']['comma'], 250);
     expect(spoken, hasLength(1), reason: 'Applying a paused setting must remain paused');
+    await openMenu();
+    await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
+    expect(requests, hasLength(1), reason: 'Closing without changes must not prepare the book again');
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     expect(spoken, hasLength(2));
     expect(spoken.last['text'], '庚辛壬癸。', reason: 'Re-segmentation must map the saved word into the new sentence before system resume');

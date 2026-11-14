@@ -782,7 +782,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     expect(speech.lastSentences, ['你好', '世界']);
-    expect(speech.lastPauses, [300, 0]);
+    expect(speech.lastPauses, [200, 300]);
     speech.emitSentence(1); speech.onWordChanged?.call(0, 2); await tester.pumpAndSettle();
     final paragraph = tester.widget<Text>(find.byWidgetPredicate((w) => w is Text && w.textAlign == TextAlign.justify &&
       (w.textSpan?.toPlainText().replaceAll('\u200B', '') == '你好——世界')));
@@ -1640,7 +1640,7 @@ void main() {
     final pause = find.byKey(const ValueKey('pause-comma'));
     await tester.ensureVisible(pause); await tester.pumpAndSettle();
     await tester.tap(pause); await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('pause-number-comma')), '350');
+    await tester.enterText(find.byKey(const ValueKey('pause-number-comma')), '.35');
     await tester.tap(find.text('确定').last); await tester.pumpAndSettle();
     final apply = find.byKey(const ValueKey('pause-apply'));
     await tester.ensureVisible(apply); await tester.tap(apply); await tester.pumpAndSettle();
@@ -1888,6 +1888,9 @@ void main() {
           } else {
             expect(landed.$1.replaceAll('\u200B', '').replaceAll('\uFFFC', ''), contains('第$chapter章第7段。'),
               reason: 'An uncached chapter boundary must prepare the preceding chapter final paragraph before paging');
+            expect(find.descendant(of: find.byKey(const ValueKey('reader-chapter-header')),
+              matching: find.text('第$chapter章 山间来信')), findsOneWidget,
+              reason: 'The post-layout source anchor must update the chapter header after paging across a TOC boundary');
           }
           expect(landed.$2.top, closeTo(tester.getRect(body).top, 0.25),
             reason: 'The selected row must land at zero actual pixel offset, not a partial row');

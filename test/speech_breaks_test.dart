@@ -86,14 +86,17 @@ void main() {
     expect(ReadingText.fingerprint(bookWith(custom)), isNot(ReadingText.fingerprint(bookWith(baseline))));
   });
 
-  test('extra pauses do not split numeric commas, decimal points or clock colons', () {
+  test('extra pauses do not add boundaries or silence inside numeric punctuation', () {
     final pauses = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 400)
       .withPause(SpeechPauseKind.period, 400).withPause(SpeechPauseKind.colon, 400);
     for (final number in ['3.14', '12:30', '1,000', '１２：３０']) {
       expect(SpeechBreaks.boundaries(number, pauses), isEmpty);
       final natural = ReadingText.paragraph(number), custom = ReadingText.paragraph(number, pauseSettings: pauses);
       expect(custom.sentences.map((s) => s.tts), natural.sentences.map((s) => s.tts));
-      expect(custom.sentences.single.pauseAfterMilliseconds, 300,
+      expect(custom.sentences.map((s) => s.pauseAfterMilliseconds),
+        natural.sentences.map((s) => s.pauseAfterMilliseconds));
+      expect(custom.sentences.take(custom.sentences.length - 1).every((s) => s.pauseAfterMilliseconds == 0), isTrue);
+      expect(custom.sentences.last.pauseAfterMilliseconds, 300,
         reason: 'The paragraph delay remains; punctuation inside numbers adds nothing');
     }
   });

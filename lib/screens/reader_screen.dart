@@ -171,6 +171,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   int _viewRevision = 0;
   ui.Image? _viewSnapshot;
   _ReaderLineAnchor? _reformatAnchor;
+  _ReaderLineAnchor? _visibleLineAnchor;
   int? _lineBreakFor(int c, int p) => _flowChapter == c && _flowParagraph == p ? _flowOffset : null;
   int _renderOffset(int c, int p, int offset) => ReaderTypography.layoutOffset(
     _book.chapters[c].paragraphs[p].display, offset, lineBreakAt: _lineBreakFor(c, p));
@@ -545,6 +546,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   void _installFormattedBook(Book book, String fingerprint) {
     _book = book; _cacheFingerprint = fingerprint;
+    _visibleLineAnchor = null;
     _wordMapKey = ''; _wordMap = null; _wordStart = -1; _wordEnd = -1;
     _items = _flatten(_book);
     _paragraphKeys.clear();
@@ -576,7 +578,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _ttsSentence >= 0 && _ttsSentence < _book.chapters[c].paragraphs[_para].sentences.length
         ? _book.chapters[c].paragraphs[_para].sentences[_ttsSentence].displayStart : 0);
     if (!_inReadingMode && _pendingScrollIndex == null) {
-      final top = _captureLineAnchor();
+      // Rendering a new page can invalidate paragraph layout before this build.
+      // Only read the source anchor measured after the preceding layout frame.
+      final top = _visibleLineAnchor;
       if (top != null) { c = top.chapter; anchor = top.source; }
     }
     var result = 0;
@@ -1169,6 +1173,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   void _jumpToItem(int index, {bool animate = true}) {
     _pageEndKey = null;
+    _visibleLineAnchor = null;
     if (!mounted || index < 0 || index >= _items.length) return;
     if (!_itemScrollController.isAttached) {
       WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _jumpToItem(index, animate: false); });
@@ -1183,6 +1188,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _positionViewport(int index, double alignment) async {
     if (!_itemScrollController.isAttached || !mounted) return;
+    _visibleLineAnchor = null;
     final generation = ++_navigationGeneration;
     _pendingScrollIndex = null;
     // The underlying viewport requires an anchor in [0,1]. A negative saved
@@ -1443,7 +1449,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _pageGeometryScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _pageGeometryScheduled = false;
-      if (mounted) _updatePageGeometry();
+      if (mounted) {
+        final anchor = _captureLineAnchor(), previous = _visibleLineAnchor;
+        _visibleLineAnchor = anchor;
+        if (anchor?.chapter != previous?.chapter || anchor?.source != previous?.source || anchor?.title != previous?.title) {
+          setState(() {});
+        }
+        _updatePageGeometry();
+      }
     });
   }
 
@@ -3120,20 +3133,27 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               if (chosen != null && mounted && ctx.mounted) { setState(() => _settings.keepScreenMinutes = chosen); update(() {});
                 widget.storage.saveSettings(_settings.toJson()); _syncScreenAwake(); }
             })),
-          ListTile(key: const ValueKey('pause-expand'), title: Text(T('additionalPauses')),
-            trailing: Icon(pausesExpanded ? Icons.expand_less : Icons.expand_more),
+          ListTile(key: const ValueKey('pause-expand'), title: Text(T('additionalPauses'), key: const ValueKey('pause-expand-label')),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (pausesExpanded) FilledButton(key: const ValueKey('pause-apply'),
+                onPressed: pauses == _settings.speechPauses ? null : () => Navigator.pop(ctx, pauses),
+                child: Text(T('applyPauseSettings'))),
+              Icon(pausesExpanded ? Icons.expand_less : Icons.expand_more),
+            ]),
             onTap: () => update(() => pausesExpanded = !pausesExpanded)),
           if (pausesExpanded) ...[
           Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text('${T('pauseDescription')}\n${T('pauseDraftHint')}')),
+            child: Text(T('pauseDescription'))),
           for (final kind in SpeechPauseKind.values) Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(children: [
-            SizedBox(width: 64, child: Text(T('pause-${kind.name}'))),
+            SizedBox(width: 48, child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
+              child: Text(T('pause-${kind.name}'), maxLines: 1, style: const TextStyle(fontSize: 14)))),
             SizedBox(width: 80, child: TextButton(key: ValueKey('pause-${kind.name}'),
-              child: FittedBox(fit: BoxFit.scaleDown, child: Text(T('pauseMilliseconds', {'n': '${pauses.millisecondsFor(kind)}'}))),
+              child: FittedBox(fit: BoxFit.scaleDown, child: Text(T('pauseSeconds', {'n': (pauses.millisecondsFor(kind) / 1000).toStringAsFixed(2)}),
+                style: const TextStyle(fontSize: 14))),
               onPressed: () async {
-                final value = await showDialog<int>(context: ctx, builder: (_) => _IntegerInputDialog(
-                  title: T('pause-${kind.name}'), value: pauses.millisecondsFor(kind), minimum: SpeechPauseSettings.minimum,
-                  maximum: SpeechPauseSettings.maximum, inputKey: ValueKey('pause-number-${kind.name}')));
+                final value = await showDialog<int>(context: ctx, builder: (_) => _PauseSecondsInputDialog(
+                  title: T('pause-${kind.name}'), milliseconds: pauses.millisecondsFor(kind),
+                  inputKey: ValueKey('pause-number-${kind.name}')));
                 if (value != null && ctx.mounted) update(() => pauses = pauses.withPause(kind, value));
               })),
             Expanded(child: Slider(key: ValueKey('pause-slider-${kind.name}'),
@@ -3143,9 +3163,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               value: pauses.millisecondsFor(kind).toDouble(),
               onChanged: (value) => update(() => pauses = pauses.withPause(kind, value.round())))),
           ])),
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child:
-            FilledButton(key: const ValueKey('pause-apply'), onPressed: pauses == _settings.speechPauses ? null :
-              () => Navigator.pop(ctx, pauses), child: Text(T('applyPauseSettings')))),
           ],
         ])))));
     if (selected != null && mounted && selected != _settings.speechPauses) await _applySpeechPauses(selected);
@@ -4143,6 +4160,39 @@ class _ChapterSheetState extends State<_ChapterSheet> {
 }
 
 /// 设置底部弹层
+class _PauseSecondsInputDialog extends StatefulWidget {
+  final String title;
+  final int milliseconds;
+  final Key inputKey;
+  const _PauseSecondsInputDialog({required this.title, required this.milliseconds, required this.inputKey});
+  @override
+  State<_PauseSecondsInputDialog> createState() => _PauseSecondsInputDialogState();
+}
+
+class _PauseSecondsInputDialogState extends State<_PauseSecondsInputDialog> {
+  final _form = GlobalKey<FormState>();
+  late final _controller = TextEditingController(text: (widget.milliseconds / 1000).toStringAsFixed(2));
+  @override
+  void dispose() { _controller.dispose(); super.dispose(); }
+  void _submit() {
+    if (_form.currentState!.validate()) Navigator.pop(context, (double.parse(_controller.text) * 1000).round());
+  }
+  @override
+  Widget build(BuildContext context) => AlertDialog(title: Text(widget.title),
+    content: Form(key: _form, child: TextFormField(key: widget.inputKey, controller: _controller, autofocus: true,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [TextInputFormatter.withFunction((oldValue, newValue) =>
+        RegExp(r'^\d*(?:\.\d{0,2})?$').hasMatch(newValue.text) ? newValue : oldValue)],
+      decoration: InputDecoration(helperText: T('numberRange', {'n': '0.00', 'total': '3.00'}), suffixText: T('pauseSeconds', {'n': ''})),
+      validator: (text) {
+        final seconds = double.tryParse(text ?? '');
+        return seconds == null || !seconds.isFinite || seconds < 0 || seconds > 3
+          ? T('numberRange', {'n': '0.00', 'total': '3.00'}) : null;
+      }, onFieldSubmitted: (_) => _submit())),
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(T('cancel'))),
+      FilledButton(onPressed: _submit, child: Text(T('ok')))]);
+}
+
 class _IntegerInputDialog extends StatefulWidget {
   final String title;
   final String? help;
