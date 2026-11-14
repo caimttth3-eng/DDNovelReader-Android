@@ -54,9 +54,11 @@ void main() {
       return null;
     });
   });
-  tearDown(() async {
+  tearDown(() {
     globalAudioHandler = previous; ReaderPreparation.runnerForTesting = null;
-    await handler.playbackState.close(); await handler.mediaItem.close();
+    // Rx closes can wait for delivery in a widget test's already-finished fake
+    // zone. Closing prevents further adds; explicit listeners cancel separately.
+    unawaited(handler.playbackState.close()); unawaited(handler.mediaItem.close());
   });
   Book book(String id) => Book(id: id, title: '媒体暂停继续', filePath: '', format: BookFormat.txt,
     addedAt: DateTime(2026), chapters: [Chapter(title: '第一章',
