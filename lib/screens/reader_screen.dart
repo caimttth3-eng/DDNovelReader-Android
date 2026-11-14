@@ -1258,9 +1258,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     } catch (_) { /* A page turn still works if a frame cannot be captured. */ }
     if (!mounted) { _pageImage?.dispose(); _pageImage = null; return false; }
     setState(() {
+      // Returning to the page dismisses overlay bars. In a cutout layout the
+      // toolbar can extend below the fixed header and otherwise hide its first row.
+      _showControls = false; _showQuickMenu = false;
       _pageDirection = direction; _pageReady = false;
       _outgoingPage = _pageImage == null ? null : RawImage(image: _pageImage, fit: BoxFit.fill);
     });
+    _applySystemUi();
     var moved = false;
     try {
       await WidgetsBinding.instance.endOfFrame;

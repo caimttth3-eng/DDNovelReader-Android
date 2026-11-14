@@ -194,6 +194,7 @@ void main() {
     await tester.tapAt(const Offset(30, 360));
     await tester.pumpAndSettle();
     expect(topIndex(), lessThan(nextPage));
+    await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('next-chapter')));
     await tester.pumpAndSettle();
     expect(find.text('第 2/20 章'), findsOneWidget);
@@ -595,6 +596,7 @@ void main() {
     await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(30, 360)); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     expect(speech.startedAt, greaterThan(0), reason: 'Exercise a backward page endpoint before starting speech');
     Future<void> assertCursor(int idx) async {
@@ -1323,6 +1325,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle();
     await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     final started = speech.currentTtsOffset;
     expect(started, greaterThan(0), reason: 'Starting system speech after a page turn must not read from the sentence beginning');
@@ -1692,6 +1695,7 @@ void main() {
     await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('page-outgoing-transform')), findsNothing);
     expect(tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-incoming-transform'))).translation, Offset.zero);
+    await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
     expect(tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-animation'))).value, 'off');
@@ -1829,6 +1833,9 @@ void main() {
         }
       }
       for (final chapter in [5, 2, 4]) {
+        if (find.byKey(const ValueKey('contents-handle')).evaluate().isEmpty) {
+          await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
+        }
         await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
         final entry = find.byKey(ValueKey('toc-entry-$chapter'));
         await tester.ensureVisible(entry); await tester.pumpAndSettle();
@@ -1890,6 +1897,7 @@ void main() {
     expect(before.last.$3, closeTo(viewport.top+clip.bottom, 0.5));
     await tester.tapAt(const Offset(360,360)); await tester.pumpAndSettle();
     expect(lines().first.$1, next, reason: 'Default paging starts with the next complete line');
+    await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
     final overlap = find.byKey(const ValueKey('retain-page-line'));
@@ -1899,6 +1907,7 @@ void main() {
     final retained = lines().last.$1;
     await tester.tapAt(const Offset(360,360)); await tester.pumpAndSettle();
     expect(lines().first.$1, retained);
+    await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
     tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-mode'))).onChanged!('scroll');
