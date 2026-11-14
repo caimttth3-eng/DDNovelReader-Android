@@ -1,3 +1,3 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@drawable/ic_stat_reading" />
+    tools:keep="@drawable/ic_stat_reading,@drawable/ic_media_previous,@drawable/ic_media_play,@drawable/ic_media_pause,@drawable/ic_media_next,@drawable/ic_media_stop" />

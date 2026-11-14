@@ -134,6 +134,30 @@ void main() {
     await reader.setSpeechRate(0.52); expect(player.starts, [Duration.zero, Duration.zero]);
   });
 
+  test('changed tokenization seeks a real enclosing new word instead of restarting the sentence', () async {
+    final player = _RatePlayer();
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      onWords(rate == '+0%' ? [
+        const SpeechWord(startMicros: 1500000, durationMicros: 1000000, textStart: 4, textEnd: 6, text: '戊己'),
+      ] : [
+        const SpeechWord(startMicros: 0, durationMicros: 400000, textStart: 0, textEnd: 2, text: '甲乙'),
+        const SpeechWord(startMicros: 700000, durationMicros: 1200000, textStart: 2, textEnd: 6, text: '丙丁戊己'),
+      ]);
+      return Uint8List.fromList([1]);
+    }
+    final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(0);
+    addTearDown(reader.dispose);
+    await reader.setSpeechRate(1); await reader.start(['甲乙丙丁戊己。']);
+    player.tick(1700); await flush(); expect(reader.currentWordStart, 4);
+    await reader.setSpeechRate(1.1);
+    expect(player.starts.last, const Duration(milliseconds: 700));
+    expect(reader.currentWordStart, 2); expect(reader.currentWordEnd, 6,
+      reason: 'Only the newly enclosing word can repeat; earlier words remain read');
+    await reader.pause(); expect(await reader.resume(), isTrue);
+    expect(player.starts.last, const Duration(milliseconds: 700));
+  });
+
   test('stop cancels an in-flight replacement at a finer rate', () async {
     final player = _RatePlayer(), gates = <Completer<Uint8List>>[];
     Future<Uint8List> synth(String text, {required String voice, required String rate,

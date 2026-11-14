@@ -5,6 +5,21 @@ import 'package:duoduo_langdu/services/speech_breaks.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('system media spoken text defaults off and persists only explicit boolean choices', () async {
+    SharedPreferences.setMockInitialValues({});
+    expect(ReadingSettings().showSystemMediaText, isFalse);
+    expect(ReadingSettings.fromJson(null).showSystemMediaText, isFalse);
+    for (final invalid in <Object?>[null, '', 'true', 1, {}, []]) {
+      expect(ReadingSettings.fromJson({'showSystemMediaText': invalid}).showSystemMediaText, isFalse);
+    }
+    for (final enabled in [true, false]) {
+      final settings = ReadingSettings()..showSystemMediaText = enabled..voice = '__system_tts__'..fontSize = 36;
+      await AppStorage().saveSettings(settings.toJson());
+      final restored = ReadingSettings.fromJson(await AppStorage().loadSettings());
+      expect(restored.showSystemMediaText, enabled);
+      expect(restored.voice, '__system_tts__'); expect(restored.fontSize, 36);
+    }
+  });
   test('playback and reading preferences have independent defaults and normalized persistence', () {
     final s = ReadingSettings();
     expect(s.pageTurnAnimation, 'off'); expect(s.followSystemRotation, isFalse);

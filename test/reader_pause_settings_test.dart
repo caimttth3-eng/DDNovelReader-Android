@@ -109,6 +109,15 @@ void main() {
       await scrollTo(find.byKey(const ValueKey('pause-slider-comma')));
     }
     await openMenu();
+    final mediaText = find.byKey(const ValueKey('show-system-media-text'));
+    await scrollTo(mediaText, delta: -180);
+    expect(tester.widget<SwitchListTile>(mediaText).value, isFalse);
+    await tester.tap(mediaText); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['showSystemMediaText'], isTrue);
+    await tester.tap(mediaText); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['showSystemMediaText'], isFalse);
+    expect(requests, isEmpty);
+    await scrollTo(find.byKey(const ValueKey('pause-slider-comma')));
     expect(find.descendant(of: find.byKey(const ValueKey('pause-comma')), matching: find.text('0.00秒')), findsOneWidget);
     final comma = find.byKey(const ValueKey('pause-slider-comma'));
     final semicolon = find.byKey(const ValueKey('pause-slider-semicolon'));

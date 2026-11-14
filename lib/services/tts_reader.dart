@@ -40,6 +40,7 @@ class TtsReader {
   bool get usesSystemVoice => _voice == systemVoice || _usingSystemFallback;
   static const defaultVoice = 'zh-CN-XiaoxiaoNeural';
   static const _positionReadTimeout = Duration(seconds: 2);
+  static final _leadingRangePunctuation = RegExp(r'^[\s\p{P}]+', unicode: true);
   final AudioPlayer _player;
   final OnlineSpeechSynthesizer _synthesize;
   final List<String> _sentences = [];
@@ -284,11 +285,13 @@ class TtsReader {
     if (!usesSystemVoice || _sentences[sentence].isEmpty) return 0;
     final text = _sentences[sentence];
     var offset = requested.clamp(0, text.length - 1);
-    final code = text.codeUnitAt(offset);
-    if (offset > 0 && code >= 0xDC00 && code <= 0xDFFF &&
-      text.codeUnitAt(offset - 1) >= 0xD800 && text.codeUnitAt(offset - 1) <= 0xDBFF) offset--;
+    if (_insideSurrogatePair(text, offset)) offset--;
     return offset;
   }
+
+  bool _insideSurrogatePair(String text, int offset) => offset > 0 && offset < text.length &&
+    text.codeUnitAt(offset) >= 0xDC00 && text.codeUnitAt(offset) <= 0xDFFF &&
+    text.codeUnitAt(offset - 1) >= 0xD800 && text.codeUnitAt(offset - 1) <= 0xDBFF;
 
   void _emitWord(int start, int end) {
     _lastWordStart = start; _lastWordEnd = end;
@@ -577,7 +580,15 @@ class TtsReader {
           },
           onRange: (start, end) {
             if (generation == _playGeneration && _state == TtsState.playing) {
-              _systemResumeOffset = start; _emitWord(start, end);
+              // Some engines report punctuation as a separate range. It is
+              // still spoken in its original sentence context, but is not a
+              // word from which to start a fresh utterance after pause/rate.
+              final text = _sentences[sentence];
+              if (_insideSurrogatePair(text, start) || _insideSurrogatePair(text, end)) return;
+              final prefix = _leadingRangePunctuation.matchAsPrefix(text.substring(start, end));
+              final contentStart = start + (prefix?.end ?? 0);
+              if (contentStart >= end) return;
+              _systemResumeOffset = contentStart; _emitWord(contentStart, end);
             }
           },
           onError: (error) { if (generation == _playGeneration) _fail(error); });
@@ -604,12 +615,19 @@ class TtsReader {
     // A newly synthesized rate has different timings. Resume only at the same
     // reported word's new, actual boundary; never estimate a proportional seek.
     if (retained == null && initialWordOffset >= 0) {
+      SpeechWord? containingWord;
+      SpeechWord? exactWord;
       for (final word in _activeWords) {
         if (word.textStart == initialWordOffset) {
-          resumePosition = Duration(microseconds: word.startMicros);
+          exactWord = word;
           break;
         }
+        if (word.textStart <= initialWordOffset && initialWordOffset < word.textEnd) containingWord ??= word;
       }
+      // A rate change can change tokenization. A real enclosing word boundary
+      // limits any reread to that word instead of restarting the whole sentence.
+      final boundary = exactWord ?? containingWord;
+      if (boundary != null) resumePosition = Duration(microseconds: boundary.startMicros);
     }
     if (audio.isEmpty) {
       // Keep the current sentence on failure; do not silently skip unread text.

@@ -127,6 +127,7 @@ class ReadingSettings {
   bool firstLineIndent = true;
   bool autoExtractToc = true;
   bool wordHighlightEnabled = false;
+  bool showSystemMediaText = false;
   bool informationFilter = true;
   String informationFilterLevel = 'links';
   double fontSize = 20.0;
@@ -157,6 +158,7 @@ class ReadingSettings {
         'firstLineIndent': firstLineIndent,
         'autoExtractToc': autoExtractToc,
         'wordHighlightEnabled': wordHighlightEnabled,
+        'showSystemMediaText': showSystemMediaText,
         'informationFilter': informationFilter,
         'informationFilterLevel': informationFilterLevel,
         'fontSize': fontSize,
@@ -194,6 +196,7 @@ class ReadingSettings {
     s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;
     s.autoExtractToc = json['autoExtractToc'] is bool ? json['autoExtractToc'] as bool : true;
     s.wordHighlightEnabled = json['wordHighlightEnabled'] is bool ? json['wordHighlightEnabled'] as bool : false;
+    s.showSystemMediaText = json['showSystemMediaText'] is bool ? json['showSystemMediaText'] as bool : false;
     final level = json['informationFilterLevel'];
     // Older releases persisted false+none for their default. Once migrated,
     // turning filtering off stores false+links and remains an explicit choice.

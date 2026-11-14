@@ -328,6 +328,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _tts.onWordChanged = _onTtsWordChanged;
     _tts.onCompleted = _onTtsCompleted;
     _tts.onError = _onTtsError;
+    _tts.onStateChanged = _syncSpeechPlaybackState;
     _tts.onLoadingChanged = (loading) { if (mounted && _inReadingMode && _ttsLoading != loading) setState(() => _ttsLoading = loading); };
     _book = widget.book;
     _items = [];
@@ -371,8 +372,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     print('SCREEN onHeadsetPause ttsState=${_tts.state}');
     _debugLog('SCREEN onHeadsetPause state=${_tts.state}');
     if (!mounted) return;
-    if (_tts.state == TtsState.playing) {
-      await _pauseReading();
+    if (_tts.state == TtsState.playing || _ttsLoading) {
+      await _pauseReading(force: true);
     } else if (_tts.state == TtsState.paused) {
       globalAudioHandler?.notifyPaused();
     } else {
@@ -383,6 +384,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _onHeadsetStop() async {
     if (!mounted) return;
     await _exitReadingMode();
+  }
+
+  void _syncSpeechPlaybackState() {
+    if (!mounted || !_inReadingMode) return;
+    switch (_tts.state) {
+      case TtsState.playing: globalAudioHandler?.notifyPlaying();
+      case TtsState.paused: globalAudioHandler?.notifyPaused();
+      case TtsState.stopped:
+      case TtsState.idle:
+        // Chapter completion briefly stops the old queue before starting the
+        // next chapter. The completion/error/exit paths announce a final stop.
+        if (!_isPlaying) globalAudioHandler?.notifyStopped();
+    }
   }
 
   @override
@@ -1757,13 +1771,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       await _tts.pause();
     }
     if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
-    await _loadMediaVolume();
-    if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
     globalAudioHandler?.notifyPaused();
     setState(() {
       _isPlaying = false;
       _showReadingPanel = true;
     });
+    // A background/OEM volume query must not hold the media pause command and
+    // prevent a subsequent notification play from reaching the engine.
+    unawaited(_loadMediaVolume());
     _scheduleSave();
   }
 
@@ -2206,11 +2221,18 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (chapter < 0 || chapter >= _book.chapters.length) return;
     final toc = _toc.isEmpty ? null : _toc[_currentTocIndex];
     final title = toc?.title ?? _book.chapters[chapter].title;
-    final key = '$chapter/${toc?.paragraphIndex}/${toc?.displayOffset}/$title';
-    if (_mediaTocKey == key) return;
+    String? spokenText;
+    if (_settings.showSystemMediaText && _inReadingMode && _chapter == chapter &&
+        _para >= 0 && _para < _book.chapters[chapter].paragraphs.length) {
+      final sentences = _book.chapters[chapter].paragraphs[_para].sentences;
+      if (_ttsSentence >= 0 && _ttsSentence < sentences.length) spokenText = sentences[_ttsSentence].display;
+    }
+    final key = '$chapter/${toc?.paragraphIndex}/${toc?.displayOffset}/$title/'
+      '${_settings.showSystemMediaText}/$_para/$_ttsSentence/$spokenText';
+    if (_mediaTocKey == key && globalAudioHandler?.mediaItem.value?.displaySubtitle == spokenText) return;
     _mediaTocKey = key;
     globalAudioHandler?.updateBookChapter(bookId: _book.id, bookTitle: _book.title,
-      chapterTitle: title, chapterIndex: chapter);
+      chapterTitle: title, chapterIndex: chapter, spokenText: spokenText);
   }
 
   void _onTtsSentenceChanged(int idx, {bool follow = true}) {
@@ -3111,6 +3133,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           SwitchListTile(key: const ValueKey('word-highlight'), title: Text(T('wordHighlight')),
             value: _settings.wordHighlightEnabled, onChanged: (value) {
               setState(() => _settings.wordHighlightEnabled = value); update(() {}); widget.storage.saveSettings(_settings.toJson());
+            }),
+          SwitchListTile(key: const ValueKey('show-system-media-text'), title: Text(T('showSystemMediaText')),
+            value: _settings.showSystemMediaText, onChanged: (value) {
+              setState(() => _settings.showSystemMediaText = value); update(() {}); widget.storage.saveSettings(_settings.toJson());
+              _updateMediaChapter(_chapter);
             }),
           ListTile(key: const ValueKey('reading-prefetch'), title: Text(T('prefetchSentences', {'n': '${_settings.prefetchSentences}'})),
             subtitle: Text(T('prefetchDescription')), trailing: const Icon(Icons.tune),

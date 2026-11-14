@@ -273,6 +273,107 @@ void main() {
     expect(spoken, isEmpty);
     await client.dispose();
   });
+  test('punctuation-only ranges never turn a resume or rate change into a punctuation utterance', () async {
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    final words = <(int, int)>[]; reader.onWordChanged = (s, e) => words.add((s, e));
+    queued = Completer<void>(); final firstQueued = queued!.future;
+    final first = reader.start(['甲乙，丙丁。']);
+    await firstQueued; final firstId = spoken.last['id'];
+    await emit('start', {'id': firstId}); await first;
+    await emit('range', {'id': firstId, 'start': 0, 'end': 2});
+    await emit('range', {'id': firstId, 'start': 2, 'end': 3});
+    expect(reader.currentTtsOffset, 0); expect(words.last, (0, 2));
+    await reader.pause(); await reader.setSpeechRate(1.1);
+    queued = Completer<void>(); final againQueued = queued!.future;
+    final again = reader.resume(); await againQueued;
+    expect(spoken.last['text'], '甲乙，丙丁。',
+      reason: 'Keep punctuation inside its original word context, without deleting it');
+    expect(spoken.last['rate'], 1.1);
+    final againId = spoken.last['id'];
+    await emit('start', {'id': againId}); expect(await again, isTrue);
+    await emit('range', {'id': againId, 'start': 3, 'end': 5});
+    await emit('range', {'id': againId, 'start': 5, 'end': 6});
+    expect(reader.currentTtsOffset, 3); expect(words.last, (3, 5));
+    await reader.pause();
+    queued = Completer<void>(); final finalQueued = queued!.future;
+    final resumed = reader.resume(); await finalQueued;
+    expect(spoken.last['text'], '丙丁。', reason: 'Do not synthesize the final period by itself');
+    await emit('start', {'id': spoken.last['id']}); expect(await resumed, isTrue);
+  });
+  test('pause and resume while a rate replacement is stopping retain the word cursor and reject old ranges', () async {
+    Completer<void>? stopGate;
+    final stopEntered = Completer<void>();
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+      calls.add(call);
+      if (call.method == 'initialize') return 'phone-default-engine';
+      if (call.method == 'stop' && stopGate != null) {
+        if (!stopEntered.isCompleted) stopEntered.complete();
+        await stopGate!.future;
+      }
+      if (call.method == 'speak') { spoken.add(call.arguments as Map); queued?.complete(); queued = null; }
+      return null;
+    });
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    queued = Completer<void>(); final firstQueued = queued!.future;
+    final first = reader.start(['甲乙丙丁戊己。']);
+    await firstQueued; final oldId = spoken.last['id'];
+    await emit('start', {'id': oldId}); await first;
+    await emit('range', {'id': oldId, 'start': 2, 'end': 4});
+    stopGate = Completer<void>();
+    final changingRate = reader.setSpeechRate(1.1); await stopEntered.future;
+    final pausing = reader.pause();
+    queued = Completer<void>(); final resumedQueued = queued!.future;
+    final resuming = reader.resume();
+    await emit('range', {'id': oldId, 'start': 0, 'end': 2});
+    stopGate!.complete(); await changingRate; await pausing; await resumedQueued;
+    expect(spoken.last['rate'], 1.1); expect(spoken.last['text'], '丙丁戊己。');
+    expect(reader.currentTtsOffset, 2);
+    await emit('start', {'id': spoken.last['id']}); expect(await resuming, isTrue);
+    await emit('range', {'id': oldId, 'start': 4, 'end': 6});
+    expect(reader.currentTtsOffset, 2, reason: 'A cancelled utterance cannot relocate resumed playback');
+    await emit('range', {'id': spoken.last['id'], 'start': 2, 'end': 4});
+    expect(reader.currentTtsOffset, 4); expect(reader.state, TtsState.playing);
+  });
+  test('mixed punctuation and content ranges resume at content after rate and screen-style pause', () async {
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    final words = <(int, int)>[]; reader.onWordChanged = (s, e) => words.add((s, e));
+    queued = Completer<void>(); final firstQueued = queued!.future;
+    final first = reader.start(['甲，乙。']); await firstQueued;
+    final oldId = spoken.last['id']; await emit('start', {'id': oldId}); await first;
+    await emit('range', {'id': oldId, 'start': 1, 'end': 3});
+    expect(reader.currentTtsOffset, 2); expect(words.last, (2, 3));
+    queued = Completer<void>(); final rateQueued = queued!.future;
+    final changed = reader.setSpeechRate(1.1); await rateQueued;
+    expect(spoken.last['text'], '乙。'); expect(spoken.last['rate'], 1.1);
+    final id = spoken.last['id']; await emit('start', {'id': id}); await changed;
+    await emit('range', {'id': oldId, 'start': 0, 'end': 1});
+    expect(reader.currentTtsOffset, 2);
+    await reader.pause();
+    queued = Completer<void>(); final resumedQueued = queued!.future;
+    final resumed = reader.resume(); await resumedQueued;
+    expect(spoken.last['text'], '乙。'); expect(spoken.last['rate'], 1.1);
+    await emit('start', {'id': spoken.last['id']}); expect(await resumed, isTrue);
+  });
+  test('mixed range content normalization preserves UTF16 boundaries and ignores split surrogate ranges', () async {
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    queued = Completer<void>(); final firstQueued = queued!.future;
+    final first = reader.start(['甲， \u{20000}乙。']); await firstQueued;
+    final id = spoken.last['id']; await emit('start', {'id': id}); await first;
+    await emit('range', {'id': id, 'start': 1, 'end': 6});
+    expect(reader.currentTtsOffset, 3); expect(reader.currentWordStart, 3); expect(reader.currentWordEnd, 6);
+    await emit('range', {'id': id, 'start': 4, 'end': 5});
+    await emit('range', {'id': id, 'start': 3, 'end': 4});
+    expect(reader.currentTtsOffset, 3); expect(reader.currentWordEnd, 6);
+    await reader.pause();
+    queued = Completer<void>(); final resumedQueued = queued!.future;
+    final resumed = reader.resume(); await resumedQueued;
+    expect(spoken.last['text'], '\u{20000}乙。');
+    await emit('start', {'id': spoken.last['id']}); expect(await resumed, isTrue);
+  });
   test('unconfigured system engine reports engine failure without skipping text', () async {
     messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
       throw PlatformException(code: 'no_engine');
