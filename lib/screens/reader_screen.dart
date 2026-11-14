@@ -13,7 +13,6 @@ import '../i18n.dart';
 import '../services/app_appearance.dart';
 import '../services/reading_text.dart';
 import '../services/reader_preparation.dart';
-import '../services/speech_breaks.dart';
 import '../services/reader_screen_awake.dart';
 import '../services/book_parser.dart';
 import '../services/reader_typography.dart';
@@ -21,6 +20,8 @@ import '../services/text_cleaner.dart';
 import '../widgets/reader_icon.dart';
 import '../widgets/reader_brightness_control.dart';
 import '../widgets/reader_gestures.dart';
+import '../widgets/speech_pause_editor.dart';
+import '../services/media_speech_text.dart';
 import '../models/annotation.dart';
 import '../models/book.dart';
 import '../models/progress.dart';
@@ -201,6 +202,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   ReadingSettings _settings = ReadingSettings();
   bool _settingsLoaded = false;
   bool _applyingSpeechPauses = false;
+  bool? _pendingSpeechFallback;
   (int, int, int, int)? _speechPauseResumeCursor;
 
   // 控制 UI 显隐
@@ -244,6 +246,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   // TTS 正在朗读的章节（与 _chapter 可能因滚动不同步）
   int _ttsChapter = 0;
   String? _mediaTocKey;
+  String _mediaSpeechCursorKey = '';
+  int? _mediaSpeechOffset;
+  MediaSpeechText? _mediaSpeechText;
   // TTS 合成加载中（点击播放/恢复后等待首句出声；期间防误触）
   bool _ttsLoading = false;
 
@@ -315,14 +320,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         if (status == AnimationStatus.completed && _autoActive && !_autoPaused) _advanceAutoPage();
       });
     _tts = widget.ttsReader ?? TtsReader();
-    _tts.onVoiceModeChanged = (fallback) {
-      if (!mounted) return;
-      setState(() {});
-      if (_settingsLoaded) {
-        _settings.systemFallbackActive = fallback;
-        widget.storage.saveSettings(_settings.toJson());
-      }
-    };
+    _tts.onVoiceModeChanged = _onSpeechVoiceModeChanged;
     _networkSubscription = NetworkConnectivity().availability.listen(_tts.setNetworkAvailable);
     _tts.onSentenceChanged = _onTtsSentenceChanged;
     _tts.onWordChanged = _onTtsWordChanged;
@@ -546,13 +544,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   // ---------- 设置 ----------
 
   String _formatSignature(ReadingSettings s) =>
-      '${s.mergeNonSentenceBreaks}/${s.firstLineIndent}/${s.informationFilter}/${s.informationFilterLevel}/${s.speechPauses.cacheKey}';
+      '${s.mergeNonSentenceBreaks}/${s.firstLineIndent}/${s.informationFilter}/${s.informationFilterLevel}/${s.effectiveSpeechPauses.cacheKey}';
 
   void _formatBook() {
     _textSignature = _formatSignature(_settings);
     final book = ReadingText.format(widget.book, merge: _settings.mergeNonSentenceBreaks,
       indent: _settings.firstLineIndent,
-      pauseSettings: _settings.speechPauses,
+      pauseSettings: _settings.effectiveSpeechPauses,
       filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none');
     _installFormattedBook(book, 'words1-${ReadingText.fingerprint(book)}');
     _rebuildToc();
@@ -637,7 +635,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(raw));
     final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
       merge: _settings.mergeNonSentenceBreaks, indent: _settings.firstLineIndent,
-      pauseSettings: _settings.speechPauses,
+      pauseSettings: _settings.effectiveSpeechPauses,
       filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none',
       autoExtractToc: _settings.autoExtractToc));
     await _viewportReady;
@@ -2225,7 +2223,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (_settings.showSystemMediaText && _inReadingMode && _chapter == chapter &&
         _para >= 0 && _para < _book.chapters[chapter].paragraphs.length) {
       final sentences = _book.chapters[chapter].paragraphs[_para].sentences;
-      if (_ttsSentence >= 0 && _ttsSentence < sentences.length) spokenText = sentences[_ttsSentence].display;
+      if (_ttsSentence >= 0 && _ttsSentence < sentences.length) {
+        final sentence = sentences[_ttsSentence];
+        final cursorKey = '$_textSignature/$_chapter/$_para/$_ttsSentence';
+        if (_mediaSpeechCursorKey != cursorKey) {
+          _mediaSpeechCursorKey = cursorKey; _mediaSpeechOffset = null;
+        }
+        if (_mediaSpeechText?.text != sentence.display) _mediaSpeechText = MediaSpeechText(sentence.display);
+        spokenText = _mediaSpeechText!.textAt(_mediaSpeechOffset);
+      }
     }
     final key = '$chapter/${toc?.paragraphIndex}/${toc?.displayOffset}/$title/'
       '${_settings.showSystemMediaText}/$_para/$_ttsSentence/$spokenText';
@@ -2300,6 +2306,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     var left = (base + _wordMap!.displayOffsetOfTts(start)).clamp(base, sentence.displayEnd);
     final right = (base + _wordMap!.displayOffsetOfTts(end)).clamp(left, sentence.displayEnd);
     while (left < right && para.display[left].trim().isEmpty) { left++; }
+    _mediaSpeechCursorKey = key;
+    _mediaSpeechOffset = left - base;
     setState(() { _wordStart = left; _wordEnd = right; });
     _updateMediaChapter(_chapter);
     _ensureWordVisible(left);
@@ -3123,9 +3131,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _openPlaybackSettings() async {
     if (_applyingSpeechPauses) return;
-    var pauses = _settings.speechPauses;
-    var pausesExpanded = false;
-    final selected = await showModalBottomSheet<SpeechPauseSettings>(context: context, isScrollControlled: true,
+    final pauseVoice = _settings.speechPauseVoice;
+    final selected = await showModalBottomSheet<SpeechPauseSelection>(context: context, isScrollControlled: true,
       builder: (context) => StatefulBuilder(builder: (ctx, update) => SafeArea(child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
         child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(16), children: [
@@ -3160,39 +3167,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               if (chosen != null && mounted && ctx.mounted) { setState(() => _settings.keepScreenMinutes = chosen); update(() {});
                 widget.storage.saveSettings(_settings.toJson()); _syncScreenAwake(); }
             })),
-          ListTile(key: const ValueKey('pause-expand'), title: Text(T('additionalPauses'), key: const ValueKey('pause-expand-label')),
-            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-              if (pausesExpanded) FilledButton(key: const ValueKey('pause-apply'),
-                onPressed: pauses == _settings.speechPauses ? null : () => Navigator.pop(ctx, pauses),
-                child: Text(T('applyPauseSettings'))),
-              Icon(pausesExpanded ? Icons.expand_less : Icons.expand_more),
-            ]),
-            onTap: () => update(() => pausesExpanded = !pausesExpanded)),
-          if (pausesExpanded) ...[
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(T('pauseDescription'))),
-          for (final kind in SpeechPauseKind.values) Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(children: [
-            SizedBox(width: 48, child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
-              child: Text(T('pause-${kind.name}'), maxLines: 1, style: const TextStyle(fontSize: 14)))),
-            SizedBox(width: 80, child: TextButton(key: ValueKey('pause-${kind.name}'),
-              child: FittedBox(fit: BoxFit.scaleDown, child: Text(T('pauseSeconds', {'n': (pauses.millisecondsFor(kind) / 1000).toStringAsFixed(2)}),
-                style: const TextStyle(fontSize: 14))),
-              onPressed: () async {
-                final value = await showDialog<int>(context: ctx, builder: (_) => _PauseSecondsInputDialog(
-                  title: T('pause-${kind.name}'), milliseconds: pauses.millisecondsFor(kind),
-                  inputKey: ValueKey('pause-number-${kind.name}')));
-                if (value != null && ctx.mounted) update(() => pauses = pauses.withPause(kind, value));
-              })),
-            Expanded(child: Slider(key: ValueKey('pause-slider-${kind.name}'),
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              min: SpeechPauseSettings.minimum.toDouble(), max: SpeechPauseSettings.maximum.toDouble(),
-              divisions: (SpeechPauseSettings.maximum - SpeechPauseSettings.minimum) ~/ SpeechPauseSettings.step,
-              value: pauses.millisecondsFor(kind).toDouble(),
-              onChanged: (value) => update(() => pauses = pauses.withPause(kind, value.round())))),
-          ])),
-          ],
+          SpeechPauseEditor(voiceId: pauseVoice,
+            initialPauses: _settings.speechPausesForVoice(pauseVoice), globalPauses: _settings.speechPauses,
+            onApply: (selection) => Navigator.pop(ctx, selection)),
         ])))));
-    if (selected != null && mounted && selected != _settings.speechPauses) await _applySpeechPauses(selected);
+    if (selected != null && mounted) await _applySpeechPauseSelection(selected);
   }
 
   void _syncScreenAwake() {
@@ -3203,55 +3182,132 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       scope: _inReadingMode ? 'voice' : 'reading');
   }
 
-  Future<void> _applySpeechPauses(SpeechPauseSettings pauses) async {
-    if (_applyingSpeechPauses || _book.chapters.isEmpty) return;
+  Future<void> _openVoiceSpeechPauses(String voice) async {
+    if (_applyingSpeechPauses) return;
+    final selected = await showModalBottomSheet<SpeechPauseSelection>(context: context, isScrollControlled: true,
+      builder: (ctx) => SafeArea(child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
+        child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(16), children: [
+          Text(T('voicePauseTitle', {'name': _shortVoiceLabel(voice)}), style: Theme.of(ctx).textTheme.titleMedium),
+          SpeechPauseEditor(voiceId: voice, initialPauses: _settings.speechPausesForVoice(voice),
+            globalPauses: _settings.speechPauses, initiallyExpanded: true,
+            onApply: (selection) => Navigator.pop(ctx, selection)),
+        ])))));
+    if (selected != null && mounted) await _applySpeechPauseSelection(selected);
+  }
+
+  Future<void> _applySpeechPauseSelection(SpeechPauseSelection selection) async {
+    final desired = ReadingSettings.fromJson(_settings.toJson());
+    switch (selection.action) {
+      case SpeechPauseAction.currentVoice: desired.setVoiceSpeechPauses(selection.voiceId, selection.pauses);
+      case SpeechPauseAction.global: desired.applyGlobalSpeechPauses(selection.pauses);
+      case SpeechPauseAction.resetGlobal: desired.resetGlobalSpeechPauses();
+    }
+    await _applySpeechConfiguration(desired);
+  }
+
+  void _commitPauseConfiguration(ReadingSettings desired, {required bool updateVoice}) {
+    _settings.speechPauses = desired.speechPauses;
+    _settings.perVoiceSpeechPauses..clear()..addAll(desired.perVoiceSpeechPauses);
+    if (updateVoice) {
+      _settings.voice = desired.voice;
+      _settings.systemFallbackActive = desired.systemFallbackActive;
+    }
+  }
+
+  void _onSpeechVoiceModeChanged(bool fallback) {
+    if (!mounted) return;
+    if (!_settingsLoaded || _settings.systemFallbackActive == fallback) { setState(() {}); return; }
+    final desired = ReadingSettings.fromJson(_settings.toJson())..systemFallbackActive = fallback;
+    if (_applyingSpeechPauses) {
+      _pendingSpeechFallback = fallback;
+      if (fallback && _inReadingMode && _isPlaying && _formatSignature(desired) != _textSignature) {
+        unawaited(_tts.pause());
+      }
+      return;
+    }
+    if (fallback && !_applyingSpeechPauses && _inReadingMode && _isPlaying &&
+        _formatSignature(desired) != _textSignature) {
+      // pause() invalidates the pending fallback synchronously. The old queue
+      // cannot start system speech with the online voice's split boundaries.
+      unawaited(_applySpeechConfiguration(desired, updateVoice: true,
+        setEngineVoice: false, resumeAfter: true));
+    } else {
+      setState(() => _settings.systemFallbackActive = fallback);
+      widget.storage.saveSettings(_settings.toJson());
+    }
+  }
+
+  /// Commit pause/voice changes only after their effective split is prepared.
+  /// Raw source anchors preserve the displayed line and the paused word.
+  Future<bool> _applySpeechConfiguration(ReadingSettings desired, {bool updateVoice = false,
+    bool setEngineVoice = true, bool? resumeAfter}) async {
+    if (_applyingSpeechPauses || _book.chapters.isEmpty) return false;
+    final needsPreparation = _textSignature != _formatSignature(desired);
+    if (!needsPreparation && !updateVoice) {
+      setState(() => _commitPauseConfiguration(desired, updateVoice: false));
+      await widget.storage.saveSettings(_settings.toJson());
+      return true;
+    }
     final previous = _book, line = _captureLineAnchor(), c = _chapter.clamp(0, _book.chapters.length - 1);
-    if (previous.chapters[c].paragraphs.isEmpty) return;
+    if (previous.chapters[c].paragraphs.isEmpty) return false;
     _applyingSpeechPauses = true;
     final p = _para.clamp(0, previous.chapters[c].paragraphs.length - 1);
     final paragraph = previous.chapters[c].paragraphs[p];
     final at = _wordStart >= 0 ? _wordStart : paragraph.sentences.isEmpty ? 0 :
       paragraph.sentences[_ttsSentence.clamp(0, paragraph.sentences.length - 1)].displayStart;
-    final anchor = ReadingText.anchor(previous, c, p, at), wasPlaying = _isPlaying;
+    final anchor = ReadingText.anchor(previous, c, p, at), wasPlaying = resumeAfter ?? _isPlaying;
     final signature = _formatSignature(_settings);
     final generation = ++_playbackGeneration;
     try {
       if (_inReadingMode) {
         await _tts.pause();
-        if (!mounted || _leavingReader || generation != _playbackGeneration) return;
-        setState(() => _isPlaying = false);
+        if (!mounted || _leavingReader || generation != _playbackGeneration) return false;
+        setState(() { _isPlaying = false; _ttsLoading = false; });
         globalAudioHandler?.notifyPaused();
       }
-      if (!mounted || _leavingReader || generation != _playbackGeneration) return;
-      final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
-        merge: _settings.mergeNonSentenceBreaks, indent: _settings.firstLineIndent, pauseSettings: pauses,
-        filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none', autoExtractToc: _settings.autoExtractToc));
-      if (!mounted || _leavingReader || generation != _playbackGeneration || signature != _formatSignature(_settings)) return;
-      prepared.attachSourceMaps();
+      if (!mounted || _leavingReader || generation != _playbackGeneration) return false;
+      final prepared = needsPreparation ? await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
+        merge: desired.mergeNonSentenceBreaks, indent: desired.firstLineIndent, pauseSettings: desired.effectiveSpeechPauses,
+        filter: desired.informationFilter ? desired.informationFilterLevel : 'none', autoExtractToc: desired.autoExtractToc)) : null;
+      if (!mounted || _leavingReader || generation != _playbackGeneration || signature != _formatSignature(_settings)) return false;
+      prepared?.attachSourceMaps();
       setState(() {
-        _settings.speechPauses = pauses; _textSignature = _formatSignature(_settings);
-        _installFormattedBook(prepared.book, prepared.fingerprint);
-        _toc = prepared.toc; _tocAnchors = prepared.tocAnchors; _tocIsChapterTitle = prepared.chapterTitles;
-        _flowChapter = null; _flowParagraph = null; _flowOffset = null;
+        _commitPauseConfiguration(desired, updateVoice: updateVoice);
+        _textSignature = _formatSignature(_settings);
+        if (prepared != null) {
+          _installFormattedBook(prepared.book, prepared.fingerprint);
+          _toc = prepared.toc; _tocAnchors = prepared.tocAnchors; _tocIsChapterTitle = prepared.chapterTitles;
+          _flowChapter = null; _flowParagraph = null; _flowOffset = null;
+        }
         final location = ReadingText.locate(_book, c, anchor);
         _chapter = c; _para = location.$1;
         _ttsSentence = ReadingText.sentenceAt(_book.chapters[c].paragraphs[_para], location.$2);
         _wordStart = location.$2; _wordEnd = location.$2; _ttsChapter = -1;
         _speechPauseResumeCursor = (_chapter, _para, _ttsSentence, location.$2);
       });
-      _remapAnnotations(previous); _refreshTtsCache();
+      if (updateVoice && setEngineVoice) _tts.setVoice(_settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice);
+      if (prepared != null) _remapAnnotations(previous);
+      _refreshTtsCache(); _updateMediaChapter(_chapter);
       await widget.storage.saveSettings(_settings.toJson());
-      await _restoreLineAnchor(line);
-      if (mounted && !_leavingReader && generation == _playbackGeneration && wasPlaying) {
+      if (prepared != null) await _restoreLineAnchor(line);
+      if (mounted && !_leavingReader && generation == _playbackGeneration && wasPlaying && _inReadingMode) {
         await _startTtsFrom(_chapter, _para, _ttsSentence, displayOffset: _wordStart);
       }
+      return true;
     } catch (error) {
       if (mounted && !_leavingReader && generation == _playbackGeneration) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(T('parseFail', {'err': '$error'}))));
         if (wasPlaying && _inReadingMode) await _resumeReading();
       }
+      return false;
     } finally {
       _applyingSpeechPauses = false;
+      final pendingFallback = _pendingSpeechFallback;
+      _pendingSpeechFallback = null;
+      if (pendingFallback != null && mounted && !_leavingReader) {
+        _onSpeechVoiceModeChanged(_tts.usingSystemFallback);
+      }
     }
   }
 
@@ -3395,86 +3451,82 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     );
   }
 
-  /// 切换朗读音源：默认语言组置顶，其余语言按组分列
+  Widget _voicePauseButton(String voice, StateSetter update, BuildContext sheet) => IconButton(
+    key: ValueKey('pause-voice-$voice'), tooltip: T('voicePauseTitle', {'name': _shortVoiceLabel(voice)}),
+    icon: Stack(clipBehavior: Clip.none, children: [
+      const Icon(Icons.hourglass_empty),
+      if (_settings.hasVoiceSpeechPauses(voice)) Positioned(right: -1, top: -1,
+        child: Semantics(label: T('voicePauseCustomized'), child: Container(key: ValueKey('pause-customized-$voice'),
+          width: 6, height: 6, decoration: const BoxDecoration(color: Color(0xFF6498B5), shape: BoxShape.circle)))),
+    ]), onPressed: () async {
+      await _openVoiceSpeechPauses(voice);
+      if (sheet.mounted) update(() {});
+    });
+
+  /// Voice settings and cache actions stay attached to stable voice IDs.
   Future<void> _openVoiceSelector() async {
-    final voices = sortedEdgeVoices();
-    final items = <Widget>[ListTile(
-      leading: Icon(_settings.voice == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
-      title: Text(T('systemTts')),
-      onTap: () => Navigator.pop(context, TtsReader.systemVoice)), const Divider()];
-    String? lastLang;
-    for (final v in voices) {
-      if (v.langCode != lastLang) {
-        lastLang = v.langCode;
-        items.add(Padding(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
-          child: Text(
-            _groupLabel(v.langCode),
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ));
-      }
-      items.add(ListTile(
-        dense: true,
-        leading: Icon(
-          v.id == _settings.voice
-              ? Icons.radio_button_checked
-              : Icons.radio_button_off,
-          color: const Color(0xFF6498B5),
-        ),
-        title: Text(_voiceLabel(v.id)),
-        trailing: IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
-          icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
-        onTap: () => Navigator.pop(context, v.id),
-      ));
-    }
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(T('voiceTitle'),
-                  style:
-                      const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            ),
-            const Divider(height: 1),
-            Flexible(child: ListView(shrinkWrap: true, children: items)),
-          ],
-        ),
-      ),
-    );
-    if (selected == null) return;
-    _settings.voice = selected;
-    _settings.systemFallbackActive = false;
-    _tts.setVoice(selected);
-    widget.storage.saveSettings(_settings.toJson());
-    // 切换音源后从当前句重新开始（新音色需要重新合成）
-    if (_inReadingMode) {
-      _startTtsFrom(_chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
-    }
-    setState(() {});
+    if (_applyingSpeechPauses) return;
+    final selected = await showModalBottomSheet<String>(context: context,
+      builder: (ctx) => StatefulBuilder(builder: (sheet, update) {
+        final voices = sortedEdgeVoices();
+        final active = _settings.speechPauseVoice;
+        final items = <Widget>[ListTile(
+          leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
+          title: Text(T('systemTts')),
+          trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
+          onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)), const Divider()];
+        String? lastLang;
+        for (final v in voices) {
+          if (v.langCode != lastLang) {
+            lastLang = v.langCode;
+            items.add(Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+              child: Text(_groupLabel(v.langCode), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: Theme.of(sheet).colorScheme.onSurfaceVariant))));
+          }
+          items.add(ListTile(dense: true,
+            leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
+              color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              _voicePauseButton(v.id, update, sheet),
+              IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
+                icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
+            ]), onTap: () => Navigator.pop(ctx, v.id)));
+        }
+        return SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(padding: const EdgeInsets.all(16), child: Text(T('voiceTitle'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+          const Divider(height: 1), Flexible(child: ListView(shrinkWrap: true, children: items)),
+        ]));
+      }));
+    if (selected == null || !mounted) return;
+    final desired = ReadingSettings.fromJson(_settings.toJson())..voice = selected..systemFallbackActive = false;
+    await _applySpeechConfiguration(desired, updateVoice: true, resumeAfter: _inReadingMode);
   }
 
   /// 全书语音缓存管理：任务控制（开始/暂停/继续/取消）+ 缓存占用 + 清除
   Future<void> _openBookCache({String? cacheVoice}) async {
+    if (_applyingSpeechPauses) return;
     final voice = cacheVoice ?? _effectiveVoice;
     if (voice == TtsReader.systemVoice) { _showToast(T('cacheOnlineOnly')); return; }
     // Keep every operation bound to the selected online voice/rate, even if a
     // temporary offline fallback or another settings change occurs later.
     final rate = _settings.speechRate;
-    final cacheKey = '${_book.id}/$_cacheFingerprint/$voice/${rate.toStringAsFixed(2)}';
-    final store = TtsCacheStore(_book.id, voice, rate, textFingerprint: _cacheFingerprint);
+    final targetSettings = ReadingSettings.fromJson(_settings.toJson())..voice = voice..systemFallbackActive = false;
+    final prepared = _formatSignature(targetSettings) != _textSignature
+      ? await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
+          merge: targetSettings.mergeNonSentenceBreaks, indent: targetSettings.firstLineIndent,
+          pauseSettings: targetSettings.effectiveSpeechPauses,
+          filter: targetSettings.informationFilter ? targetSettings.informationFilterLevel : 'none',
+          autoExtractToc: targetSettings.autoExtractToc)) : null;
+    if (!mounted || _leavingReader) return;
+    prepared?.attachSourceMaps();
+    final cacheBook = prepared?.book ?? _book, fingerprint = prepared?.fingerprint ?? _cacheFingerprint;
+    final cacheKey = '${cacheBook.id}/$fingerprint/$voice/${rate.toStringAsFixed(2)}';
+    final store = TtsCacheStore(cacheBook.id, voice, rate, textFingerprint: fingerprint);
     final task = activeBookCaches[cacheKey] ??
         (activeBookCaches[cacheKey] = BookCacheTask(
-              book: _book,
-              bookId: _book.id,
+              book: cacheBook,
+              bookId: cacheBook.id,
               store: store,
             ));
     // 重进页面/进程重启后任务实例为空：先从磁盘恢复已有缓存，避免"整本缓存为 0"
@@ -3668,27 +3720,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 从"目前进度"开始缓存：以当前朗读位置（或当前阅读章节）为起点，
   /// 只缓存该句/该章之后的句子。
   void _startCacheFromCurrent(BookCacheTask task) {
-    int? fromChapter;
-    int? fromOffset;
-    if (_ttsChapter >= 0 && _ttsChapter < _book.chapters.length) {
-      final offs =
-          chapterTtsSentenceOffsets(_book.chapters[_ttsChapter]);
-      // _ttsSentence 是段内句子序号，累加段前句子数得到章内全局序号
-      var global = _ttsSentence;
-      for (var pi = 0; pi < _para; pi++) {
-        global += _book.chapters[_ttsChapter]
-            .paragraphs[pi]
-            .sentences
-            .length;
-      }
-      if (global >= 0 && global < offs.length) {
-        fromChapter = _ttsChapter;
-        fromOffset = offs[global];
-      }
-    }
-    fromChapter ??= _chapter.clamp(0, _book.chapters.length - 1);
-    fromOffset ??= 0;
-    task.start(resume: false, fromChapter: fromChapter, fromOffset: fromOffset);
+    if (_book.chapters.isEmpty || task.book.chapters.isEmpty) return;
+    final c = _chapter.clamp(0, min(_book.chapters.length, task.book.chapters.length) - 1);
+    final p = _para.clamp(0, _book.chapters[c].paragraphs.length - 1);
+    final paragraph = _book.chapters[c].paragraphs[p];
+    final at = _wordStart >= 0 ? _wordStart : _ttsSentence >= 0 && _ttsSentence < paragraph.sentences.length
+      ? paragraph.sentences[_ttsSentence].displayStart : 0;
+    final anchor = ReadingText.anchor(_book, c, p, at);
+    final target = ReadingText.locate(task.book, c, anchor);
+    final targetParagraph = task.book.chapters[c].paragraphs[target.$1];
+    final sentence = ReadingText.sentenceAt(targetParagraph, target.$2);
+    var global = sentence;
+    for (var pi = 0; pi < target.$1; pi++) { global += task.book.chapters[c].paragraphs[pi].sentences.length; }
+    final offsets = chapterTtsSentenceOffsets(task.book.chapters[c]);
+    task.start(resume: false, fromChapter: c, fromOffset: global >= 0 && global < offsets.length ? offsets[global] : 0);
   }
 
   Widget _buildTapZones({required Widget child}) {
@@ -4187,39 +4232,6 @@ class _ChapterSheetState extends State<_ChapterSheet> {
 }
 
 /// 设置底部弹层
-class _PauseSecondsInputDialog extends StatefulWidget {
-  final String title;
-  final int milliseconds;
-  final Key inputKey;
-  const _PauseSecondsInputDialog({required this.title, required this.milliseconds, required this.inputKey});
-  @override
-  State<_PauseSecondsInputDialog> createState() => _PauseSecondsInputDialogState();
-}
-
-class _PauseSecondsInputDialogState extends State<_PauseSecondsInputDialog> {
-  final _form = GlobalKey<FormState>();
-  late final _controller = TextEditingController(text: (widget.milliseconds / 1000).toStringAsFixed(2));
-  @override
-  void dispose() { _controller.dispose(); super.dispose(); }
-  void _submit() {
-    if (_form.currentState!.validate()) Navigator.pop(context, (double.parse(_controller.text) * 1000).round());
-  }
-  @override
-  Widget build(BuildContext context) => AlertDialog(title: Text(widget.title),
-    content: Form(key: _form, child: TextFormField(key: widget.inputKey, controller: _controller, autofocus: true,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [TextInputFormatter.withFunction((oldValue, newValue) =>
-        RegExp(r'^\d*(?:\.\d{0,2})?$').hasMatch(newValue.text) ? newValue : oldValue)],
-      decoration: InputDecoration(helperText: T('numberRange', {'n': '0.00', 'total': '3.00'}), suffixText: T('pauseSeconds', {'n': ''})),
-      validator: (text) {
-        final seconds = double.tryParse(text ?? '');
-        return seconds == null || !seconds.isFinite || seconds < 0 || seconds > 3
-          ? T('numberRange', {'n': '0.00', 'total': '3.00'}) : null;
-      }, onFieldSubmitted: (_) => _submit())),
-    actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(T('cancel'))),
-      FilledButton(onPressed: _submit, child: Text(T('ok')))]);
-}
-
 class _IntegerInputDialog extends StatefulWidget {
   final String title;
   final String? help;

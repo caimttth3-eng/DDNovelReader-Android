@@ -16,6 +16,7 @@ import 'package:duoduo_langdu/services/network_connectivity.dart';
 import 'package:duoduo_langdu/services/reading_text.dart';
 import 'package:duoduo_langdu/services/reader_preparation.dart';
 import 'package:duoduo_langdu/services/system_tts.dart';
+import 'package:duoduo_langdu/services/media_speech_text.dart';
 
 Future<void> completeAction(WidgetTester tester, Future<void> action) async {
   var done = false;
@@ -200,6 +201,66 @@ void main() {
     unawaited(subscription.cancel()); debugPrint('MEDIA_TEXT cancel'); expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     debugPrint('MEDIA_TEXT end');
+  }, timeout: const Timeout(Duration(seconds: 45)));
+
+  testWidgets('long media text follows real ranges without word highlighting and survives pause gaps', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    const text = '清晨山间的风吹过树林，沿着溪流走过石桥的人们看见远山薄雾，朋友带来一封远方的来信。';
+    final source = Book(id: 'long-media-fragments', title: '长句媒体原文', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [ReadingText.paragraph(text)])]);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..firstLineIndent = false
+      ..wordHighlightEnabled = false..showSystemMediaText = true).toJson());
+    final speech = _MediaSpeech(), items = <String?>[];
+    final subscription = handler.mediaItem.listen((item) { items.add(item?.displaySubtitle); });
+    addTearDown(() { unawaited(subscription.cancel()); });
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    expect(handler.mediaItem.value!.displaySubtitle, text,
+      reason: 'Before the first real range, the notification must not guess a speaking position');
+    final slicing = MediaSpeechText(text);
+    speech.onWordChanged?.call(0, 2); await tester.pumpAndSettle();
+    final first = handler.mediaItem.value!.displaySubtitle!;
+    expect(first, slicing.textAt(0)); expect(first, isNot(text)); expect(text.startsWith(first), isTrue);
+    final countAtFirst = items.length;
+    speech.onWordChanged?.call(2, 4); await tester.pumpAndSettle();
+    expect(handler.mediaItem.value!.displaySubtitle, first);
+    expect(items.length, countAtFirst, reason: 'Another word inside one fragment must not republish media metadata');
+
+    final middleOffset = text.indexOf('人们');
+    speech.onWordChanged?.call(middleOffset, middleOffset + 2); await tester.pumpAndSettle();
+    final middle = handler.mediaItem.value!.displaySubtitle!;
+    expect(middle, slicing.textAt(middleOffset)); expect(middle, isNot(first)); expect(middle, isNot(text));
+    expect(text.indexOf(middle), greaterThan(text.indexOf(first)));
+    final countAtMiddle = items.length;
+    speech.onWordChanged?.call(-1, -1); await tester.pumpAndSettle();
+    expect(handler.mediaItem.value!.displaySubtitle, middle);
+    expect(items.length, countAtMiddle, reason: 'A silence/no-word range must keep the last real fragment');
+    await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
+    expect(handler.mediaItem.value!.displaySubtitle, middle); expect(handler.playbackState.value.playing, isFalse);
+    await completeAction(tester, handler.play()); await tester.pumpAndSettle();
+    speech.emitSentence(0); await tester.pumpAndSettle();
+    expect(speech.starts, 1); expect(speech.resumes, 1);
+    expect(handler.mediaItem.value!.displaySubtitle, middle,
+      reason: 'Re-announcing the current sentence on resume must not send its beginning again');
+    expect(items.length, countAtMiddle);
+
+    final finalOffset = text.indexOf('远方');
+    speech.onWordChanged?.call(finalOffset, finalOffset + 2); await tester.pumpAndSettle();
+    final last = handler.mediaItem.value!.displaySubtitle!;
+    expect(last, slicing.textAt(finalOffset)); expect(last, isNot(middle)); expect(last, isNot(text));
+    expect(text.indexOf(last), greaterThan(text.indexOf(middle)));
+    await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+    final toggle = find.byKey(const ValueKey('show-system-media-text'));
+    await tester.ensureVisible(toggle); await tester.pumpAndSettle(); await tester.tap(toggle); await tester.pumpAndSettle();
+    expect(handler.mediaItem.value!.displaySubtitle, isNull); expect(handler.mediaItem.value!.artist, '第一章');
+    expect(handler.mediaItem.value!.extras!.containsKey('spokenText'), isFalse);
+    expect(ReadingSettings.fromJson(await storage.loadSettings()).wordHighlightEnabled, isFalse);
+    await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
+    unawaited(subscription.cancel()); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));
 
   testWidgets('real system speech keeps its word through a delayed central pause, speed change and central resume', (tester) async {

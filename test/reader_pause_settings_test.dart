@@ -175,7 +175,8 @@ void main() {
     expect(find.byKey(const ValueKey('reader-body')), findsOneWidget);
     expect(tester.takeException(), isNull, reason: 'The pending worker must not prevent reader painting');
     prepared.complete(ReaderPreparation.prepareSynchronously(requests.single)); await tester.pumpAndSettle();
-    expect((await storage.loadSettings())['speechPauses']['comma'], 250);
+    expect((await storage.loadSettings())['speechPauses']['comma'], 0);
+    expect((await storage.loadSettings())['perVoiceSpeechPauses'][TtsReader.systemVoice]['comma'], 250);
     expect(spoken, hasLength(1), reason: 'Applying a paused setting must remain paused');
     await openMenu();
     await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
