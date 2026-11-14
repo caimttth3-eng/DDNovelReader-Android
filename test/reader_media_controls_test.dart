@@ -106,7 +106,10 @@ void main() {
     addTearDown(() { if (!speech.pendingStart!.isCompleted) speech.pendingStart!.complete(); });
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('pending-media'), storage: AppStorage(), ttsReader: speech)));
     await tester.pumpAndSettle();
-    final starting = handler.play(); await tester.pump(); await tester.pump(const Duration(milliseconds: 16));
+    final starting = handler.play();
+    for (var frame = 0; frame < 120 && speech.starts == 0; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
     expect(speech.starts, 1);
     final pausing = handler.pause(); await tester.pumpAndSettle();
     expect(speech.state, TtsState.paused); expect(handler.playbackState.value.playing, isFalse);
@@ -149,19 +152,22 @@ void main() {
   }, timeout: const Timeout(Duration(seconds: 45)));
 
   testWidgets('system media text follows displayed sentences and toggles immediately without word-level updates', (tester) async {
+    debugPrint('MEDIA_TEXT start');
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..firstLineIndent = false).toJson());
     final speech = _MediaSpeech(), items = <String?>[];
     final subscription = handler.mediaItem.listen((item) { items.add(item?.displaySubtitle); });
-    addTearDown(subscription.cancel);
+    addTearDown(() { unawaited(subscription.cancel()); });
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('media-text'), storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     expect(handler.mediaItem.value!.artist, '第一章'); expect(handler.mediaItem.value!.displaySubtitle, isNull);
     await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+    debugPrint('MEDIA_TEXT open');
     final toggle = find.byKey(const ValueKey('show-system-media-text'));
     await tester.ensureVisible(toggle); await tester.pumpAndSettle(); await tester.tap(toggle); await tester.pumpAndSettle();
+    debugPrint('MEDIA_TEXT toggle-on');
     expect(handler.mediaItem.value!.displaySubtitle, '清晨山间的风吹过树林。');
     expect(handler.mediaItem.value!.artist, '清晨山间的风吹过树林。');
     await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
@@ -172,20 +178,25 @@ void main() {
     speech.onWordChanged?.call(0, 2); speech.onWordChanged?.call(2, 4); await tester.pumpAndSettle();
     expect(items.length, count, reason: 'Real word ticks must not re-emit unchanged sentence metadata');
     await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
+    debugPrint('MEDIA_TEXT second-pause');
     await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
     await tester.ensureVisible(toggle); await tester.pumpAndSettle(); await tester.tap(toggle); await tester.pumpAndSettle();
+    debugPrint('MEDIA_TEXT toggle-off');
     expect(handler.mediaItem.value!.artist, '第一章'); expect(handler.mediaItem.value!.displaySubtitle, isNull);
     expect(handler.mediaItem.value!.extras!.containsKey('spokenText'), isFalse);
     await tester.tap(toggle); await tester.pumpAndSettle();
     expect(handler.mediaItem.value!.displaySubtitle, '朋友带来一封远方的来信。');
     await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle(); await completeAction(tester, handler.stop()); await tester.pumpAndSettle();
+    debugPrint('MEDIA_TEXT stop');
     expect(handler.mediaItem.value!.title, '媒体暂停继续'); expect(handler.mediaItem.value!.artist, '第一章');
     expect(handler.mediaItem.value!.displaySubtitle, isNull); expect(handler.mediaItem.value!.extras!.containsKey('spokenText'), isFalse);
-    await subscription.cancel(); expect(tester.takeException(), isNull);
+    unawaited(subscription.cancel()); debugPrint('MEDIA_TEXT cancel'); expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    debugPrint('MEDIA_TEXT end');
   }, timeout: const Timeout(Duration(seconds: 45)));
 
   testWidgets('real system speech keeps its word through a delayed central pause, speed change and central resume', (tester) async {
+    debugPrint('MEDIA_REAL start');
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final spoken = <Map>[], stopEntered = Completer<void>();
@@ -222,6 +233,7 @@ void main() {
     expect(spoken, hasLength(1));
     final originalId = spoken.single['id'];
     await emit('range', {'id': originalId, 'start': 2, 'end': 4}); await tester.pumpAndSettle();
+    debugPrint('MEDIA_REAL word');
     String highlightedWord() {
       final words = <String>[];
       void visit(InlineSpan span) {
@@ -243,10 +255,12 @@ void main() {
     await emit('range', {'id': originalId, 'start': 0, 'end': 2}); await tester.pump();
     expect(highlightedWord(), '丙丁'); expect(speech.currentTtsOffset, 2);
     stopGate!.complete(); stopGate = null; await tester.pumpAndSettle();
+    debugPrint('MEDIA_REAL pause');
     expect(find.byKey(const ValueKey('reading-rate-plus')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reading-rate-plus'))); await tester.pumpAndSettle();
     expect(speech.speechRate, 1.1); expect(spoken, hasLength(1)); expect(highlightedWord(), '丙丁');
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
+    debugPrint('MEDIA_REAL resume');
     expect(spoken, hasLength(2)); expect(spoken.last['rate'], 1.1);
     expect(spoken.last['text'], '丙丁戊己，庚辛壬癸。', reason: 'The real engine request must start at the saved word, not an earlier viewport line');
     expect(speech.currentTtsOffset, 2); expect(highlightedWord(), '丙丁');
