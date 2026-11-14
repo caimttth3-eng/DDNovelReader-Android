@@ -65,7 +65,7 @@ jobs:
         env:
           DDNOVEL_SIGNING_PROPERTIES: ${{ steps.signing.outputs.properties_path }}
         run: |
-          flutter build apk --release --target-platform android-arm64 --split-debug-info=build/debug-symbols --analyze-size
+          flutter build apk --release --target-platform android-arm64 --split-debug-info=build/debug-symbols
           python3 scripts/apk_size_report.py --apk build/app/outputs/flutter-apk/app-release.apk --output build/apk-size-report.json
           python3 -c 'import glob,zipfile; p=glob.glob("build/app/outputs/apk/release/*.apk"); assert len(p)==1,p; z=zipfile.ZipFile(p[0]); a={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert a=={"arm64-v8a"},a; print("Verified native ABIs:", sorted(a))'
       - name: Check APK signature and checksum
@@ -108,7 +108,6 @@ jobs:
         with:
           name: DDNovelReader-build-analysis
           path: |
-            build/*code-size-analysis*.json
             build/apk-size-report.json
             build/debug-symbols/*
           if-no-files-found: warn

@@ -16,7 +16,7 @@
 
 1.2.22 ARM64 安装包基准为 20,456,877 字节，其中原生库占 19,285,152 字节：Flutter 引擎 11,346,352 字节，Dart 编译应用 7,799,768 字节；其余主要为较小的插件库、DEX 与资源。
 
-已启用单 ARM64、R8 代码压缩、资源裁剪及图标树裁剪。本次增加 `--split-debug-info`，将调试符号单独作为构建产物保存，同时使用 `--analyze-size` 和 `scripts/apk_size_report.py` 输出真实体积报告；调试符号和分析报告不装进 APK。安装包仍使用原生库直接加载方式。
+已启用单 ARM64、R8 代码压缩、资源裁剪及图标树裁剪。本次增加 `--split-debug-info`，将调试符号单独作为构建产物保存，并使用 `scripts/apk_size_report.py` 输出真实体积报告；调试符号和分析报告不装进 APK。当前 Flutter 不允许将 `--analyze-size` 与 `--split-debug-info` 同时使用，因此以签名 APK 的 ZIP 条目统计实际体积。安装包仍使用原生库直接加载方式。
 
 GitHub 的 `DDNovelReader-build-analysis` 产物包含尺寸 JSON 与对应版本的独立调试符号，便于比较与后续崩溃定位。具体缩减量以实际签名成品为准。
 
