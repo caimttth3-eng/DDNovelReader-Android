@@ -7,6 +7,13 @@ class BookProgress {
   /// 段落内偏移（按 display 字符），用于续读精确定位
   int offsetInParagraph;
   double percent;
+  int? chapterAnchor;
+  int? viewportItem;
+  double viewportAlignment;
+  String layoutSignature;
+  bool atChapterTitle;
+  int? flowChapter;
+  int? flowAnchor;
 
   BookProgress({
     required this.bookId,
@@ -14,6 +21,13 @@ class BookProgress {
     this.paragraphIndex = 0,
     this.offsetInParagraph = 0,
     this.percent = 0,
+    this.chapterAnchor,
+    this.viewportItem,
+    this.viewportAlignment = 0,
+    this.layoutSignature = '',
+    this.atChapterTitle = false,
+    this.flowChapter,
+    this.flowAnchor,
   });
 
   Map<String, dynamic> toJson() => {
@@ -22,6 +36,13 @@ class BookProgress {
         'paragraphIndex': paragraphIndex,
         'offsetInParagraph': offsetInParagraph,
         'percent': percent,
+        'chapterAnchor': chapterAnchor,
+        'viewportItem': viewportItem,
+        'viewportAlignment': viewportAlignment,
+        'layoutSignature': layoutSignature,
+        'atChapterTitle': atChapterTitle,
+        'flowChapter': flowChapter,
+        'flowAnchor': flowAnchor,
       };
 
   factory BookProgress.fromJson(Map<String, dynamic> json) => BookProgress(
@@ -30,6 +51,13 @@ class BookProgress {
         paragraphIndex: json['paragraphIndex'] as int? ?? 0,
         offsetInParagraph: json['offsetInParagraph'] as int? ?? 0,
         percent: (json['percent'] as num?)?.toDouble() ?? 0,
+        chapterAnchor: json['chapterAnchor'] as int?,
+        viewportItem: json['viewportItem'] as int?,
+        viewportAlignment: (json['viewportAlignment'] as num?)?.toDouble() ?? 0,
+        layoutSignature: json['layoutSignature'] as String? ?? '',
+        atChapterTitle: json['atChapterTitle'] as bool? ?? false,
+        flowChapter: json['flowChapter'] as int?,
+        flowAnchor: json['flowAnchor'] as int?,
       );
 
   BookProgress copyWith({
@@ -44,6 +72,13 @@ class BookProgress {
         paragraphIndex: paragraphIndex ?? this.paragraphIndex,
         offsetInParagraph: offsetInParagraph ?? this.offsetInParagraph,
         percent: percent ?? this.percent,
+        chapterAnchor: chapterAnchor,
+        viewportItem: viewportItem,
+        viewportAlignment: viewportAlignment,
+        layoutSignature: layoutSignature,
+        atChapterTitle: atChapterTitle,
+        flowChapter: flowChapter,
+        flowAnchor: flowAnchor,
       );
 }
 

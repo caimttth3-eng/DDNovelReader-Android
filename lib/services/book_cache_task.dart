@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../models/book.dart';
+import '../models/speech_word.dart';
 import 'edge_tts.dart';
 import 'tts_cache_store.dart';
 
@@ -266,17 +267,19 @@ class BookCacheTask {
         continue;
       }
       final Uint8List audio;
+      List<SpeechWord> words = [];
       try {
         audio = await edgeSynth(
           text,
           voice: store.voice,
           rate: edgeRateStr(store.rate),
+          onWords: (value) => words = value,
         );
       } catch (_) {
         continue; // 网络/合成失败：不标记完成，留待续传重试
       }
       if (audio.isEmpty) continue;
-      await store.write(ci, off, audio);
+      await store.write(ci, off, audio, words: words);
       _markDone(idx);
     }
     _finalizeWorker();

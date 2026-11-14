@@ -1,0 +1,125 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [master, 'codex/**']
+  workflow_dispatch:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.50.0'
+          cache: true
+      - name: Restore dependencies
+        run: flutter pub get
+      - name: Test fixed signing helpers
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Check Dart sources
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - name: Test reader interactions
+        timeout-minutes: 8
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-noto-cjk
+          flutter test --reporter expanded
+      - name: Upload UI previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DDNovelReader-ui-previews
+          path: build/ui-previews/*.png
+          if-no-files-found: warn
+      - name: Probe online voice service
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        run: DD_READER_LIVE_TTS=1 flutter test test/edge_live_test.dart --reporter expanded
+      - name: Restore Gradle wrapper
+        run: |
+          flutter create --platforms=android --project-name wrapper_seed /tmp/wrapper_seed
+          cp /tmp/wrapper_seed/android/gradlew android/gradlew
+          cp /tmp/wrapper_seed/android/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
+          chmod +x android/gradlew
+      - name: Prepare fixed signing or explicit unsigned build
+        id: signing
+        env:
+          DDNOVEL_SIGNING_JSON: ${{ github.event_name != 'pull_request' && secrets.DDNOVEL_SIGNING_JSON || '' }}
+        run: python3 scripts/prepare_signing.py --output-directory "$RUNNER_TEMP/ddnovel-signing"
+      - name: Build APK
+        id: build
+        env:
+          DDNOVEL_SIGNING_PROPERTIES: ${{ steps.signing.outputs.properties_path }}
+        run: |
+          flutter build apk --release --target-platform android-arm64 --split-debug-info=build/debug-symbols
+          python3 scripts/apk_size_report.py --apk build/app/outputs/flutter-apk/app-release.apk --output build/apk-size-report.json
+          python3 -c 'import glob,zipfile; p=glob.glob("build/app/outputs/apk/release/*.apk"); assert len(p)==1,p; z=zipfile.ZipFile(p[0]); a={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert a=={"arm64-v8a"},a; print("Verified native ABIs:", sorted(a))'
+      - name: Check APK signature and checksum
+        id: verify
+        env:
+          FIXED_SIGNING: ${{ steps.signing.outputs.signing_available }}
+        run: |
+          mkdir -p build/distribution
+          echo 'UNVERIFIED: do not install or distribute until certificate verification succeeds' > build/distribution/SIGNING_STATUS.txt
+          cp android/signing-certificate.sha256 build/distribution/signing-certificate.sha256
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          test -n "$APKSIGNER"
+          if [ "$FIXED_SIGNING" = true ]; then
+            APK=build/distribution/app-release.apk
+            cp build/app/outputs/flutter-apk/app-release.apk "$APK"
+            (cd build/distribution && sha256sum *.apk > SHA256SUMS.txt)
+            "$APKSIGNER" verify --verbose --print-certs "$APK"
+            python3 scripts/sign_apk.py --verify-only --apk "$APK" --apksigner "$APKSIGNER"
+            echo 'SIGNED: fixed certificate verified' > build/distribution/SIGNING_STATUS.txt
+          else
+            APK=build/distribution/app-release-unsigned.apk
+            SOURCE=$(find build/app/outputs/apk/release -name '*-unsigned.apk' -print -quit)
+            test -n "$SOURCE"
+            cp "$SOURCE" "$APK"
+            (cd build/distribution && sha256sum *.apk > SHA256SUMS.txt)
+            if "$APKSIGNER" verify "$APK" >/dev/null 2>&1; then
+              echo 'ERROR: expected an unsigned APK, but found a signature.' >&2
+              exit 1
+            fi
+            echo 'UNSIGNED: install only after local fixed-key signing; see docs/signing.md' > build/distribution/SIGNING_STATUS.txt
+          fi
+          cp android/signing-certificate.sha256 build/distribution/signing-certificate.sha256
+          (cd build/distribution && sha256sum *.apk > SHA256SUMS.txt)
+      - name: Remove temporary signing secrets
+        if: always()
+        run: python3 scripts/prepare_signing.py --cleanup --output-directory "$RUNNER_TEMP/ddnovel-signing"
+      - name: Upload size analysis and separate debug symbols
+        if: always() && steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DDNovelReader-build-analysis
+          path: |
+            build/apk-size-report.json
+            build/debug-symbols/*
+          if-no-files-found: warn
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.build.outcome == 'success'
+        with:
+          name: ${{ steps.verify.outcome == 'success' && 'DDNovelReader-gestures-apk' || 'DDNovelReader-unverified-apk' }}
+          path: |
+            build/distribution/*.apk
+            build/distribution/SHA256SUMS.txt
+            build/distribution/SIGNING_STATUS.txt
+            build/distribution/signing-certificate.sha256
+          if-no-files-found: error
+          retention-days: 90

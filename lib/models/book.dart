@@ -33,6 +33,8 @@ extension BookFormatX on BookFormat {
 class Sentence {
   final String display;
   final String tts;
+  /// Explicit silence after this spoken segment, without changing its audio.
+  final int pauseAfterMilliseconds;
 
   /// 在所属段落的 display 文本中的起止偏移（用于高亮定位）
   final int displayStart;
@@ -43,6 +45,7 @@ class Sentence {
     this.tts, {
     this.displayStart = 0,
     this.displayEnd = 0,
+    this.pauseAfterMilliseconds = 0,
   });
 }
 

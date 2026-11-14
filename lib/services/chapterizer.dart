@@ -2,6 +2,59 @@
 /// 移植自 Windows 版 chapterizer.py 的三重检测逻辑。
 library;
 
+/// A heading index over the unchanged source, not a request to split its text.
+class DetectedChapterTitle {
+  final String title;
+  final int offset;
+  const DetectedChapterTitle(this.title, this.offset);
+}
+
+/// Conservative line rules inspired by Legado's TXT TOC families. Ambiguous
+/// numbered lists require multiple ascending entries separated by body text.
+/// The legacy makeChapters pipeline stays unchanged for saved coordinates.
+List<DetectedChapterTitle> detectChapterTitles(String text) {
+  const numbers = r'0-9０-９零〇○一二三四五六七八九十百千万两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟';
+  final chinese = RegExp('^第[ \\t　]{0,4}[$numbers]{1,12}[ \\t　]{0,4}(?:章|章節|章节|節(?!課)|节(?!课)|卷|集(?![合和])|部(?![分赛賽游])|篇(?!张)|回(?![合来來事去])|話|话)');
+  final volume = RegExp('^[卷章][$numbers]{1,12}');
+  final english = RegExp(r'^(?:chapter|section|part|episode)\s*(?:\d{1,5}|[IVXLCDM]{1,12})(?=$|[\s:：.\-—])', caseSensitive: false);
+  final special = RegExp(r'^(?:楔子|序章|序言|前言|引子|引言|尾声|尾聲|后记|後記|番外|终章|終章|大结局|大結局|完结篇|完結篇)(?=$|[\s:：、\-—])');
+  final numeric = RegExp(r'^(\d{1,5})[ \t　]*[、:：.．\-—_ ][ \t　]*\S.{0,29}$');
+  final plainChinese = RegExp('^[$numbers]{1,8}[、:：．. ][ \\t　]*\\S.{0,29}\$');
+  final result = <DetectedChapterTitle>[];
+  final numbered = <(DetectedChapterTitle, int, int)>[];
+  var lineIndex = 0;
+  for (final line in RegExp(r'[^\r\n]+').allMatches(text)) {
+    final original = line.group(0)!;
+    final trimmed = original.trim();
+    final offset = line.start + original.length - original.trimLeft().length;
+    var title = trimmed.replaceFirst(RegExp(r'^\uFEFF'), '');
+    if (title.startsWith('【') && title.endsWith('】')) title = title.substring(1, title.length - 1).trim();
+    if (title.isEmpty || title.length > 60 || RegExp(r'https?://|www\.|[。；;“”]|\.{3,}|…{2,}', caseSensitive: false).hasMatch(title)) { lineIndex++; continue; }
+    final head = chinese.firstMatch(title) ?? volume.firstMatch(title) ?? english.firstMatch(title) ?? special.firstMatch(title);
+    if (head != null) {
+      final suffix = title.substring(head.end);
+      if (!RegExp(r'^(?:的|是|中|里|裡|讲述|講述|已经|已經|之后|之後|之前|的时候|的時候|结束了|結束了)').hasMatch(suffix)) {
+        result.add(DetectedChapterTitle(title, offset));
+      }
+    } else {
+      final match = numeric.firstMatch(title);
+      if (match != null) numbered.add((DetectedChapterTitle(title, offset), int.parse(match.group(1)!), lineIndex));
+      else if (plainChinese.hasMatch(title)) numbered.add((DetectedChapterTitle(title, offset), -1, lineIndex));
+    }
+    lineIndex++;
+  }
+  for (var i = 0; i < numbered.length; i++) {
+    bool supports(int j) => j >= 0 && j < numbered.length &&
+      (numbered[i].$3 - numbered[j].$3).abs() > 1 &&
+      ((numbered[i].$2 == -1 && numbered[j].$2 == -1) ||
+       (numbered[i].$2 >= 0 && numbered[j].$2 >= 0 &&
+        (i < j ? numbered[i].$2 < numbered[j].$2 : numbered[i].$2 > numbered[j].$2)));
+    if (supports(i - 1) || supports(i + 1)) result.add(numbered[i].$1);
+  }
+  result.sort((a, b) => a.offset.compareTo(b.offset));
+  return result;
+}
+
 final RegExp _numRe = RegExp(r'[0-9０-９零〇○一二三四五六七八九十百千万两]+');
 final String _unit = '[章节回卷部集篇]';
 
@@ -135,7 +188,7 @@ List<(String, String)>? splitChapters(String text) {
   final chapters = <(String, String)>[];
   // 第一章标题之前的文字归入"简介"章
   final intro =
-      lines.sublist(0, heads[0].$1).join('\n').trim();
+      lines.sublist(0, heads[0].$1).join('\n').trimRight();
   if (intro.isNotEmpty) {
     chapters.add(('简介', intro));
   }
@@ -147,7 +200,7 @@ List<(String, String)>? splitChapters(String text) {
       start++;
     }
     final end = (k + 1 < heads.length) ? heads[k + 1].$1 : lines.length;
-    final body = lines.sublist(start, end).join('\n').trim();
+    final body = lines.sublist(start, end).join('\n').trimRight();
     if (body.isNotEmpty) {
       chapters.add((heads[k].$2, body));
     }
@@ -161,14 +214,14 @@ List<(String, String)>? splitChapters(String text) {
 List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000}) {
   var paras = text
       .split(RegExp(r'\n\s*\n'))
-      .map((p) => p.trim())
+      .map((p) => p.trimRight())
       .where((p) => p.isNotEmpty)
       .toList();
   if (paras.length <= 1) {
     // 没有空行分隔段落时，退化为按每行聚合
     paras = text
         .split('\n')
-        .map((l) => l.trim())
+        .map((l) => l.trimRight())
         .where((l) => l.isNotEmpty)
         .toList();
   }
@@ -213,24 +266,10 @@ List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000}) {
 String normalizeBody(String text) {
   if (text.isEmpty) return '';
   text = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-  text = text.replaceAll('\u3000', '  ');
   text = text.replaceAll('\ufeff', '');
-  text = text.replaceAll(RegExp(r'[ \t]+\n'), '\n'); // 行尾空格
-  text = text.replaceAll(RegExp(r'\n{2,}'), '\n'); // 折叠空行
-  text = text.trim();
-  if (text.contains('\n')) {
-    final paras = text
-        .split('\n')
-        .map((p) => p.trim())
-        .where((p) => p.isNotEmpty)
-        .toList();
-    return paras.join('\n');
-  }
-  final lines = text
-      .split('\n')
-      .map((l) => l.trimRight())
-      .where((l) => l.trim().isNotEmpty)
-      .toList();
+  final lines = text.split('\n').map((line) => line.trimRight()).toList();
+  while (lines.isNotEmpty && lines.first.trim().isEmpty) { lines.removeAt(0); }
+  while (lines.isNotEmpty && lines.last.trim().isEmpty) { lines.removeLast(); }
   return lines.join('\n');
 }
 
@@ -243,4 +282,3 @@ List<(String, String)> makeChapters(String text) {
   final fb = fallbackSplit(text);
   return fb.map((c) => (c.$1, normalizeBody(c.$2))).toList();
 }
-

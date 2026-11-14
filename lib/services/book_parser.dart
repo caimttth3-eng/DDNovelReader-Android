@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -9,11 +10,133 @@ import '../models/book.dart';
 import 'chapterizer.dart';
 import 'text_cleaner.dart';
 
+typedef _BookParseRequest = ({String id, String filePath, String title,
+  BookFormat format, DateTime addedAt, TextCleaner cleaner});
+typedef _BookParseKey = ({String id, String filePath, String title,
+  BookFormat format, DateTime addedAt, int size, DateTime modified, DateTime changed});
+
+class _PendingBookParse {
+  int latestCall;
+  late final Future<Book> future;
+  _PendingBookParse(this.latestCall);
+}
+
+// Keep the worker closure outside BookParser.parse's scope: only this small
+// request crosses isolates, never an accidental caller/UI object graph.
+Future<Book> _parseBookInBackground(_BookParseRequest request) => Isolate.run(
+  () => BookParser(cleaner: request.cleaner)._parseFile(
+    id: request.id, filePath: request.filePath, title: request.title,
+    format: request.format, addedAt: request.addedAt),
+  debugName: 'book-parser',
+);
+
+class BookTocEntry {
+  final String title;
+  final int chapterIndex;
+  final int paragraphIndex;
+  final int displayOffset;
+  const BookTocEntry({required this.title, required this.chapterIndex,
+    required this.paragraphIndex, this.displayOffset = 0});
+}
+
 /// 书籍解析器：支持 TXT / EPUB / PDF / DOCX，并自动分章。
 class BookParser {
+  // A predictable upper bound rather than retaining an arbitrarily large
+  // novel after the reader is closed. This is not an exact heap-byte estimate.
+  static const maxCachedDisplayCharacters = 4000000;
   final TextCleaner _cleaner;
+  final bool _cacheEnabled;
+  static (_BookParseKey, Book)? _cached;
+  // Only active caller requests live here; completed books are bounded to one.
+  static final Map<_BookParseKey, _PendingBookParse> _pending = {};
+  static int _latestCall = 0;
 
-  BookParser({TextCleaner? cleaner}) : _cleaner = cleaner ?? const TextCleaner();
+  static bool fitsMemoryCache(Book book) => book.totalDisplayLength <= maxCachedDisplayCharacters;
+
+  BookParser({TextCleaner? cleaner}) : _cleaner = cleaner ?? const TextCleaner(),
+    _cacheEnabled = cleaner == null;
+
+  static void clearMemoryCache() {
+    ++_latestCall;
+    _cached = null;
+    _pending.clear();
+  }
+
+  static Future<_BookParseKey> _cacheKey(_BookParseRequest request) async {
+    final stat = await File(request.filePath).stat();
+    if (stat.type != FileSystemEntityType.file) {
+      throw FileSystemException('Book file is unavailable', request.filePath);
+    }
+    return (id: request.id, filePath: request.filePath, title: request.title,
+      format: request.format, addedAt: request.addedAt, size: stat.size,
+      modified: stat.modified, changed: stat.changed);
+  }
+
+  /// A view over stable source coordinates. It deliberately does not regroup
+  /// chapters or remove headings, preserving progress, annotations and audio.
+  static List<BookTocEntry> extractToc(Book source, {bool autoExtractToc = true}) {
+    final whitespace = RegExp(r'\s');
+    List<BookTocEntry> fallbackIndex() {
+    final fallback = <BookTocEntry>[];
+    var count = 0, next = 0;
+    for (var c = 0; c < source.chapters.length; c++) {
+      final paragraphs = source.chapters[c].paragraphs;
+      for (var p = 0; p < paragraphs.length; p++) {
+        final text = paragraphs[p].display;
+        for (var offset = 0; offset < text.length; offset++) {
+          final code = text.codeUnitAt(offset);
+          if (whitespace.hasMatch(text[offset]) || (code >= 0xDC00 && code <= 0xDFFF)) continue;
+          if (count >= next) {
+            fallback.add(BookTocEntry(title: '第 ${fallback.length + 1} 节', chapterIndex: c,
+              paragraphIndex: p, displayOffset: offset));
+            next = count + 5000;
+          }
+          count++;
+        }
+      }
+    }
+    return fallback;
+    }
+    if (!autoExtractToc) return fallbackIndex();
+    final entries = <BookTocEntry>[];
+    for (var c = 0; c < source.chapters.length; c++) {
+      final chapter = source.chapters[c];
+      final joined = chapter.paragraphs.map((p) => p.display).join('\n');
+      final detected = detectChapterTitles(joined);
+      final synthetic = RegExp(r'^(?:第\s*\d+\s*节|正文|简介)$').hasMatch(chapter.title.trim());
+      final existing = !synthetic && (detectChapterTitles(chapter.title).isNotEmpty || source.format == BookFormat.epub);
+      if (existing && chapter.paragraphs.isNotEmpty) {
+        entries.add(BookTocEntry(title: chapter.title, chapterIndex: c, paragraphIndex: 0));
+      }
+      var p = 0, base = 0;
+      for (final heading in detected) {
+        while (p < chapter.paragraphs.length - 1 && base + chapter.paragraphs[p].display.length < heading.offset) {
+          base += chapter.paragraphs[p].display.length + 1; p++;
+        }
+        final offset = (heading.offset - base).clamp(0, chapter.paragraphs[p].display.length);
+        if (entries.isNotEmpty && entries.last.chapterIndex == c && entries.last.paragraphIndex == p &&
+          entries.last.title == heading.title && (entries.last.displayOffset == offset ||
+            (entries.last.displayOffset == 0 && chapter.paragraphs[p].display.substring(0, offset).trim().isEmpty))) continue;
+        entries.add(BookTocEntry(title: heading.title, chapterIndex: c, paragraphIndex: p, displayOffset: offset));
+      }
+    }
+    if (entries.isEmpty) return fallbackIndex();
+    BookTocEntry? firstContent;
+    for (var c = 0; c < source.chapters.length && firstContent == null; c++) {
+      for (var p = 0; p < source.chapters[c].paragraphs.length; p++) {
+        final match = RegExp(r'\S').firstMatch(source.chapters[c].paragraphs[p].display);
+        if (match != null) { firstContent = BookTocEntry(title: '正文', chapterIndex: c, paragraphIndex: p, displayOffset: match.start); break; }
+      }
+    }
+    if (firstContent != null) {
+      final first = entries.first, start = firstContent;
+      if (first.chapterIndex != start.chapterIndex || first.paragraphIndex != start.paragraphIndex || first.displayOffset > start.displayOffset) {
+        entries.insert(0, BookTocEntry(title: '正文', chapterIndex: start.chapterIndex,
+          paragraphIndex: start.paragraphIndex, displayOffset: start.displayOffset));
+      }
+    }
+    return entries;
+  }
 
   /// 章节标题匹配：中文「第X章/节/回/卷」或英文 Chapter N
   static final RegExp chapterTitleRe = RegExp(
@@ -22,6 +145,62 @@ class BookParser {
 
   /// 解析文件
   Future<Book> parse({
+    required String id,
+    required String filePath,
+    required String title,
+    required BookFormat format,
+    required DateTime addedAt,
+  }) async {
+    final call = _cacheEnabled ? ++_latestCall : -1;
+    final request = (id: id, filePath: filePath, title: title,
+      format: format, addedAt: addedAt, cleaner: _cleaner);
+    try {
+      // File decoding, archive/XML extraction, chapter scans and sentence
+      // cleaning all run in the worker, including continuations after I/O.
+      // Book is a plain Dart graph; Isolate.run transfers its result on exit.
+      if (!_cacheEnabled) return await _parseBookInBackground(request);
+      final key = await _cacheKey(request);
+      final cached = _cached;
+      if (cached != null && cached.$1 == key) return cached.$2;
+      final existing = _pending[key];
+      if (existing != null) {
+        if (call > existing.latestCall) existing.latestCall = call;
+        return await existing.future;
+      }
+      final pending = _PendingBookParse(call);
+      _pending[key] = pending;
+      pending.future = () async {
+        try {
+          final book = await _parseBookInBackground(request);
+          if (book.parseOk && pending.latestCall == _latestCall &&
+              identical(_pending[key], pending)) {
+            if (!fitsMemoryCache(book)) {
+              _cached = null;
+              return book;
+            }
+            // An editor/replacement may have changed the file during parsing.
+            // The caller can use its result, but the next open must reparse.
+            try {
+              if (await _cacheKey(request) == key && pending.latestCall == _latestCall &&
+                  identical(_pending[key], pending)) _cached = (key, book);
+            } on FileSystemException {
+              // Successfully read bytes remain usable even if the source was
+              // removed before this final validation. Never retain that book.
+            }
+          }
+          return book;
+        } finally {
+          if (identical(_pending[key], pending)) _pending.remove(key);
+        }
+      }();
+      return await pending.future;
+    } catch (e) {
+      return Book.failed(id: id, title: title, filePath: filePath,
+        format: format, addedAt: addedAt, error: e.toString());
+    }
+  }
+
+  Future<Book> _parseFile({
     required String id,
     required String filePath,
     required String title,
@@ -351,8 +530,8 @@ class BookParser {
   List<Paragraph> _toParagraphs(String body) {
     final blocks = body
         .split(RegExp(r'\n\s*\n'))
-        .map((b) => b.replaceAll('\n', ' ').trim())
-        .where((b) => b.isNotEmpty)
+        .map((b) => b.trimRight())
+        .where((b) => b.trim().isNotEmpty)
         .toList();
     if (blocks.isEmpty) return const [];
     return blocks.map((b) => _buildParagraph(b)).toList();

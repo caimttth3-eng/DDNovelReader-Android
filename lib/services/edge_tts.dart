@@ -15,6 +15,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../i18n.dart';
+import '../models/speech_word.dart';
 
 const String _trustedClientToken = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const String _secMsGecVersion = '2-143.0.3650.75';
@@ -23,6 +24,21 @@ const String _voiceList =
 
 /// 时钟偏差（秒），403 时通过服务器 Date 头校准
 double _clockSkew = 0.0;
+
+class EdgeTtsException implements Exception {
+  final String kind;
+  final int? status;
+  const EdgeTtsException(this.kind, {this.status});
+  @override
+  String toString() => 'Edge TTS: $kind${status == null ? '' : ' (HTTP $status)'}';
+}
+
+class EdgeSynthCancelToken {
+  bool cancelled = false;
+  void Function()? _abort;
+  void cancel() { cancelled = true; _abort?.call(); }
+  void check() { if (cancelled) throw const EdgeTtsException('cancelled'); }
+}
 
 /// 可用音色（分语言）。zhName=中文界面显示名；enName=其他语言界面显示名。
 class EdgeVoice {
@@ -469,7 +485,7 @@ Future<void> _syncClock() async {
       await res.drain<void>();
       if (date != null) {
         final server = HttpDate.parse(date).millisecondsSinceEpoch / 1000.0;
-        _clockSkew = server - _nowUnix();
+        _clockSkew = server - DateTime.now().toUtc().millisecondsSinceEpoch / 1000.0;
       }
     } finally {
       client.close();
@@ -487,16 +503,23 @@ String edgeRateStr(double rate) {
 /// 合成单句文本为 MP3 字节。
 /// 内部含一次 403 时钟同步重试。
 Future<Uint8List> edgeSynth(String text,
-    {String voice = 'zh-CN-XiaoxiaoNeural', String rate = '+0%'}) async {
+    {String voice = 'zh-CN-XiaoxiaoNeural', String rate = '+0%',
+    void Function(List<SpeechWord>)? onWords, EdgeSynthCancelToken? cancelToken}) async {
+  final token = cancelToken ?? EdgeSynthCancelToken();
   for (var attempt = 0; attempt < 2; attempt++) {
-    final result = await _synthOnce(text, voice: voice, rate: rate);
-    if (result != null && result.isNotEmpty) return result;
-    if (attempt == 0) {
-      // 可能 403（时钟偏差）→ 同步时钟重试
+    token.check();
+    try {
+      final words = SpeechWordCollector(text);
+      final result = await _synthOnce(text, voice: voice, rate: rate, words: words, token: token);
+      token.check();
+      if (result == null || result.isEmpty) throw const EdgeTtsException('no_audio');
+      onWords?.call(words.words); return result;
+    } on EdgeTtsException catch (error) {
+      if (error.status != 403 || attempt > 0 || token.cancelled) rethrow;
       await _syncClock();
     }
   }
-  return Uint8List(0);
+  throw const EdgeTtsException('no_audio');
 }
 
 /// 从音频二进制帧中提取 MP3 payload。
@@ -512,7 +535,8 @@ List<int> _extractAudioPayload(List<int> data) {
 }
 
 Future<Uint8List?> _synthOnce(String text,
-    {required String voice, required String rate}) async {
+    {required String voice, required String rate, required SpeechWordCollector words,
+    required EdgeSynthCancelToken token}) async {
   final connId = _connectId();
   final gec = _generateSecMsGec();
   final uri = Uri(
@@ -530,7 +554,19 @@ Future<Uint8List?> _synthOnce(String text,
   final client = HttpClient()..autoUncompress = false;
   client.connectionTimeout = const Duration(seconds: 15);
   WebSocket? ws;
+  Socket? transport;
+  Completer<Uint8List?>? waiting;
+  token._abort = () {
+    // destroy() can synchronously finish the incoming stream. Publish the
+    // intentional cancellation first so onDone cannot replace it with a
+    // connection failure (and incorrectly trigger offline fallback).
+    if (waiting != null && !waiting!.isCompleted) waiting!.completeError(const EdgeTtsException('cancelled'));
+    client.close(force: true);
+    if (ws != null) unawaited(ws!.close().then<void>((_) {}, onError: (Object _) {}));
+    transport?.destroy();
+  };
   try {
+    token.check();
     final request = await client.getUrl(uri).timeout(const Duration(seconds: 15));
     _wssHeaders().forEach((k, v) {
       request.headers.set(k, v);
@@ -541,81 +577,113 @@ Future<Uint8List?> _synthOnce(String text,
         base64.encode(List<int>.generate(16, (_) => Random.secure().nextInt(256))));
 
     final response = await request.close().timeout(const Duration(seconds: 15));
+    token.check();
     if (response.statusCode != 101) {
       await response.drain<void>();
-      return null;
+      throw EdgeTtsException('service', status: response.statusCode);
     }
     final detached = await response.detachSocket();
+    transport = detached;
+    token.check();
     ws = WebSocket.fromUpgradedSocket(detached, serverSide: false);
-  } catch (_) {
-    return null;
+  } on EdgeTtsException { rethrow; }
+  on TimeoutException { throw const EdgeTtsException('timeout'); }
+  catch (_) {
+    token.check();
+    throw const EdgeTtsException('connection');
   } finally {
-    client.close();
+    client.close(force: ws == null);
+    if (ws == null) { transport?.destroy(); token._abort = null; }
   }
 
+  final socket = ws!;
   final audioBuf = BytesBuilder();
   var gotAudio = false;
   final done = Completer<Uint8List?>();
+  waiting = done;
   final timer = Timer(const Duration(seconds: 20), () {
-    if (!done.isCompleted) done.complete(null);
+    if (!done.isCompleted) done.completeError(const EdgeTtsException('timeout'));
   });
 
   void finish() {
     if (!done.isCompleted) done.complete(gotAudio ? audioBuf.toBytes() : null);
   }
 
-  ws.listen(
+  final subscription = socket.listen(
     (data) {
+      if (done.isCompleted) return;
       if (data is List<int>) {
-        // 服务端二进制帧为纯音频 payload（无文本头），直接全部作为音频
+        // 提取协议头之后的 MP3 payload。
         final audio = _extractAudioPayload(data);
         if (audio.isNotEmpty) {
           audioBuf.add(audio);
           gotAudio = true;
         }
       } else if (data is String) {
-        if (data.contains('Path:turn.end')) {
+        final separator = data.indexOf('\r\n\r\n');
+        final headers = separator < 0 ? data : data.substring(0, separator);
+        final paths = headers.split('\r\n').where((line) => line.startsWith('Path:'));
+        final path = paths.isEmpty ? null : paths.first.substring(5).trim();
+        if (path == 'audio.metadata') {
+          if (separator >= 0) words.addMetadata(data.substring(separator + 4));
+        }
+        if (path == 'turn.end') {
           finish();
         }
       }
     },
-    onDone: () {
-      finish();
-    },
-    onError: (Object e) {
-      finish();
-    },
+    // Audio bytes alone do not prove the synthesis completed. A broken socket
+    // must not publish/cache a truncated sentence as successful speech.
+    onDone: () { if (!done.isCompleted) done.completeError(const EdgeTtsException('connection')); },
+    onError: (Object e) { if (!done.isCompleted) done.completeError(const EdgeTtsException('connection')); },
   );
 
-  // 发送 speech.config
-  final config = 'X-Timestamp:$_jsDate\r\n'
-      'Content-Type:application/json; charset=utf-8\r\n'
-      'Path:speech.config\r\n\r\n'
-      '{"context":{"synthesis":{"audio":{"metadataoptions":'
-      '{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},'
-      '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n';
-  ws.add(config);
-
-  // 发送 SSML（带 X-RequestId，否则服务端 1002 关闭）
-  final escaped = text
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&apos;');
-  final ssml = 'X-RequestId:$connId\r\n'
-      'Content-Type:application/ssml+xml\r\n'
-      'X-Timestamp:${_isoTs()}Z\r\n'
-      'Path:ssml\r\n\r\n'
-      "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>"
-      "<voice name='$voice'><prosody pitch='+0Hz' rate='$rate' volume='+0%'>"
-      '$escaped</prosody></voice></speak>';
-  ws.add(ssml);
-
-  final result = await done.future;
-  timer.cancel();
   try {
-    await ws.close();
-  } catch (_) {}
-  return result;
+    token.check();
+    // 发送 speech.config
+    final config = 'X-Timestamp:${_jsDate()}\r\n'
+        'Content-Type:application/json; charset=utf-8\r\n'
+        'Path:speech.config\r\n\r\n'
+        '{"context":{"synthesis":{"audio":{"metadataoptions":'
+        '{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},'
+        '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n';
+    socket.add(config);
+
+    // 发送 SSML（带 X-RequestId，否则服务端 1002 关闭）
+    final escaped = text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
+    final ssml = 'X-RequestId:$connId\r\n'
+        'Content-Type:application/ssml+xml\r\n'
+        'X-Timestamp:${_isoTs()}Z\r\n'
+        'Path:ssml\r\n\r\n'
+        "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>"
+        "<voice name='$voice'><prosody pitch='+0Hz' rate='$rate' volume='+0%'>"
+        '$escaped</prosody></voice></speak>';
+    socket.add(ssml);
+
+    return await done.future;
+  } finally {
+    timer.cancel(); token._abort = null;
+    // turn.end already establishes that all audio/word metadata arrived.
+    // Do not hold those ready bytes behind a peer's close handshake: a slow
+    // close would serialize an extra two seconds into every prefetch request.
+    unawaited(_closeEdgeTransport(socket, transport!, subscription));
+  }
+}
+
+Future<void> _closeEdgeTransport(WebSocket socket, Socket transport,
+    StreamSubscription<dynamic> subscription) async {
+  try { await socket.close().timeout(const Duration(seconds: 2)); }
+  catch (_) { /* A peer need not acknowledge the close handshake. */ }
+  finally {
+    // A timeout on WebSocket.close alone does not close the underlying TCP
+    // socket. Force-release it so background cleanup stays resource-bounded.
+    transport.destroy();
+    try { await subscription.cancel().timeout(const Duration(seconds: 2)); }
+    catch (_) { /* TCP has already been released. */ }
+  }
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/progress.dart';
+import 'speech_breaks.dart';
 
 /// 本地持久化：
 ///  - 书架书籍列表（BookMeta）
@@ -108,33 +109,144 @@ class AppStorage {
 
 /// 阅读偏好（含默认值）
 class ReadingSettings {
-  double brightness = 1.0;
+  static const defaultPrefetchSentences = 8;
+  static const minPrefetchSentences = 0;
+  static const maxPrefetchSentences = 100;
+  double brightness = 0.25;
+  bool automaticBrightness = true;
+  int autoPageSeconds = 20;
+  String pageTurnMode = 'tap';
+  String pageTurnAnimation = 'off';
+  bool followSystemRotation = false;
+  double sentenceDragDelay = 0.2;
+  int keepScreenMinutes = 0;
+  int readingScreenSeconds = 0;
+  SpeechPauseSettings speechPauses = const SpeechPauseSettings();
+  final Map<String, SpeechPauseSettings> perVoiceSpeechPauses = {};
+  bool retainPageLine = false;
+  bool mergeNonSentenceBreaks = true;
+  bool firstLineIndent = true;
+  bool autoExtractToc = true;
+  bool wordHighlightEnabled = false;
+  bool showSystemMediaText = false;
+  bool informationFilter = true;
+  String informationFilterLevel = 'links';
   double fontSize = 20.0;
   double lineHeight = 1.6;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
+  int prefetchSentences = defaultPrefetchSentences;
+  bool systemFallbackActive = false;
   String voice = '';
+  String themeMode = 'system';
   int themeIndex = 0; // 书页背景主题索引
+  int dayThemeIndex = 0;
   String fontFamily = ''; // 用户自选字体 family 名，空=系统默认
+
+  // Keep stable voice IDs rather than translated/display names. An unset
+  // online selection is the same Xiaoxiao voice used by the reader.
+  static const defaultPauseVoice = 'zh-CN-XiaoxiaoNeural';
+  static const systemPauseVoice = '__system_tts__';
+  static String _pauseVoiceKey(String value) =>
+    value.trim().isEmpty ? defaultPauseVoice : value.trim();
+  String get speechPauseVoice => systemFallbackActive ? systemPauseVoice : _pauseVoiceKey(voice);
+  SpeechPauseSettings get effectiveSpeechPauses => speechPausesForVoice(speechPauseVoice);
+  SpeechPauseSettings speechPausesForVoice(String voiceId) =>
+    _pauseVoiceKey(voiceId) == systemPauseVoice
+      ? perVoiceSpeechPauses[systemPauseVoice] ?? speechPauses
+      : const SpeechPauseSettings();
+  bool hasVoiceSpeechPauses(String voiceId) => _pauseVoiceKey(voiceId) == systemPauseVoice &&
+    perVoiceSpeechPauses.containsKey(systemPauseVoice);
+  void setVoiceSpeechPauses(String voiceId, SpeechPauseSettings pauses) =>
+    perVoiceSpeechPauses[_pauseVoiceKey(voiceId)] = pauses;
+  void clearVoiceSpeechPauses(String voiceId) => perVoiceSpeechPauses.remove(_pauseVoiceKey(voiceId));
+
+  // Legacy global and online overrides remain serialized for compatibility.
+  // Only the system voice may consume customized pauses. Its explicit profile
+  // wins over the older, pre-profile setting so upgrades never discard it.
 
   Map<String, dynamic> toJson() => {
         'brightness': brightness,
+        'brightnessControlVersion': 2,
+        'automaticBrightness': automaticBrightness,
+        'autoPageSeconds': autoPageSeconds,
+        'pageTurnMode': pageTurnMode,
+        'pageTurnAnimation': pageTurnAnimation,
+        'followSystemRotation': followSystemRotation,
+        'sentenceDragDelay': sentenceDragDelay,
+        'keepScreenMinutes': keepScreenMinutes,
+        'readingScreenSeconds': readingScreenSeconds,
+        'speechPauses': speechPauses.toJson(),
+        'perVoiceSpeechPauses': {for (final entry in perVoiceSpeechPauses.entries) entry.key: entry.value.toJson()},
+        'retainPageLine': retainPageLine,
+        'textCorrection': mergeNonSentenceBreaks,
+        'firstLineIndent': firstLineIndent,
+        'autoExtractToc': autoExtractToc,
+        'wordHighlightEnabled': wordHighlightEnabled,
+        'showSystemMediaText': showSystemMediaText,
+        'informationFilter': informationFilter,
+        'informationFilterLevel': informationFilterLevel,
         'fontSize': fontSize,
         'lineHeight': lineHeight,
         'speechRate': speechRate,
+        'prefetchSentences': prefetchSentences,
+        'systemFallbackActive': systemFallbackActive,
         'voice': voice,
+        'themeMode': themeMode,
         'themeIndex': themeIndex,
+        'dayThemeIndex': dayThemeIndex,
         'fontFamily': fontFamily,
       };
 
   static ReadingSettings fromJson(Map<String, dynamic>? json) {
     final s = ReadingSettings();
     if (json == null) return s;
-    s.brightness = (json['brightness'] as num?)?.toDouble() ?? s.brightness;
-    s.fontSize = (json['fontSize'] as num?)?.toDouble() ?? s.fontSize;
+    // Old versions defaulted to full brightness. Migrate them to system control.
+    if (json['brightnessControlVersion'] == 2) {
+      s.brightness = ((json['brightness'] as num?)?.toDouble() ?? 0.25).clamp(0, 1);
+      s.automaticBrightness = json['automaticBrightness'] as bool? ?? true;
+    }
+    s.autoPageSeconds = ((json['autoPageSeconds'] as num?)?.toInt() ?? 20).clamp(1, 120);
+    final mode = json['pageTurnMode'];
+    s.pageTurnAnimation = json['pageTurnAnimation'] == 'slide' ? 'slide' : 'off';
+    s.followSystemRotation = json['followSystemRotation'] as bool? ?? false;
+    s.sentenceDragDelay = ((((json['sentenceDragDelay'] as num?)?.toDouble() ?? 0.2).clamp(0, 0.5) * 10).round() / 10);
+    s.keepScreenMinutes = ((json['keepScreenMinutes'] as num?)?.toInt() ?? 0).clamp(0, 120);
+    final readingSeconds = (json['readingScreenSeconds'] as num?)?.toInt();
+    s.readingScreenSeconds = [0, 60, 120, 300, 600, 1800].contains(readingSeconds) ? readingSeconds! : 0;
+    s.speechPauses = SpeechPauseSettings.fromJson(json['speechPauses']);
+    final voicePauses = json['perVoiceSpeechPauses'];
+    if (voicePauses is Map) {
+      for (final entry in voicePauses.entries) {
+        final value = entry.value;
+        if (entry.key is! String || value is! Map || (value['version'] != null && value['version'] != 1)) continue;
+        if (!SpeechPauseKind.values.any((kind) => value[kind.name] is num && (value[kind.name] as num).isFinite)) continue;
+        s.setVoiceSpeechPauses(entry.key as String, SpeechPauseSettings.fromJson(value));
+      }
+    }
+    s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'tap';
+    s.retainPageLine = json['retainPageLine'] as bool? ?? false;
+    s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
+    s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;
+    s.autoExtractToc = json['autoExtractToc'] is bool ? json['autoExtractToc'] as bool : true;
+    s.wordHighlightEnabled = json['wordHighlightEnabled'] is bool ? json['wordHighlightEnabled'] as bool : false;
+    s.showSystemMediaText = json['showSystemMediaText'] is bool ? json['showSystemMediaText'] as bool : false;
+    final level = json['informationFilterLevel'];
+    // Older releases persisted false+none for their default. Once migrated,
+    // turning filtering off stores false+links and remains an explicit choice.
+    final legacyDefault = json['informationFilter'] == false && (level == null || level == 'none');
+    s.informationFilter = legacyDefault || (json['informationFilter'] as bool? ?? true);
+    s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'links';
+    s.fontSize = ((json['fontSize'] as num?)?.toDouble() ?? s.fontSize).clamp(14, 64);
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
-    s.speechRate = (json['speechRate'] as num?)?.toDouble() ?? s.speechRate;
+    s.speechRate = (((json['speechRate'] as num?)?.toDouble() ?? s.speechRate).clamp(0.5, 3.0) * 10).round() / 10;
+    s.prefetchSentences = ((json['prefetchSentences'] as num?)?.toInt() ?? defaultPrefetchSentences)
+      .clamp(minPrefetchSentences, maxPrefetchSentences);
     s.voice = json['voice'] as String? ?? '';
+    s.systemFallbackActive = json['systemFallbackActive'] as bool? ?? false;
+    final themeMode = json['themeMode'];
+    s.themeMode = ['system', 'dark', 'light'].contains(themeMode) ? themeMode as String : 'system';
     s.themeIndex = (json['themeIndex'] as num?)?.toInt() ?? 0;
+    s.dayThemeIndex = (json['dayThemeIndex'] as num?)?.toInt() ?? 0;
     s.fontFamily = json['fontFamily'] as String? ?? '';
     return s;
   }

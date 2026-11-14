@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
+import '../models/speech_word.dart';
 
 /// 恢复的进度记录（total 与当前任务不符即作废；from* 记录缓存起点）
 typedef CacheProgress = ({
@@ -30,8 +31,9 @@ class TtsCacheStore {
   final String bookId;
   final String voice;
   final double rate;
+  final String? textFingerprint;
 
-  TtsCacheStore(this.bookId, this.voice, this.rate);
+  TtsCacheStore(this.bookId, this.voice, this.rate, {this.textFingerprint});
 
   /// 缓存目录 key：语速按两位小数定值，与合成参数一一对应
   String get rateKey => rate.toStringAsFixed(2);
@@ -52,6 +54,7 @@ class TtsCacheStore {
       _safe(bookId),
       _safe(voice),
       rateKey,
+      if (textFingerprint != null) 'text-${_safe(textFingerprint!)}',
     ].join(Platform.pathSeparator));
     if (!await d.exists()) await d.create(recursive: true);
     return d;
@@ -100,15 +103,29 @@ class TtsCacheStore {
   }
 
   /// 原子写入：先写 `.tmp` 再 rename 发布
-  Future<void> write(int ci, int off, Uint8List audio) async {
+  Future<void> write(int ci, int off, Uint8List audio, {List<SpeechWord>? words}) async {
     try {
       final d = await dir();
       final finalPath = '${d.path}${Platform.pathSeparator}${fileName(ci, off)}';
       final tmpPath = '$finalPath.tmp';
       final tmp = File(tmpPath);
+      if (words != null) {
+        final metadata = File('$finalPath.words.json.tmp');
+        await metadata.writeAsString(jsonEncode(words.map((w) => w.toJson()).toList()), flush: true);
+        await metadata.rename('$finalPath.words.json');
+      }
       await tmp.writeAsBytes(audio, flush: true);
       await tmp.rename(finalPath);
     } catch (_) {}
+  }
+
+  Future<List<SpeechWord>> readWords(int ci, int off) async {
+    try {
+      final file = File('${await _pathOf(ci, off)}.words.json');
+      if (!await file.exists()) return [];
+      final raw = jsonDecode(await file.readAsString()) as List<dynamic>;
+      return raw.map((w) => SpeechWord.fromJson(w as Map<String, dynamic>)).toList();
+    } catch (_) { return []; }
   }
 
   // ---------- 进度持久化 ----------
