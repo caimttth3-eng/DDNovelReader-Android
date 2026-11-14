@@ -1784,12 +1784,21 @@ void main() {
   });
 
   for (final fontSize in [24.0, 64.0]) {
-    testWidgets('TOC chapter jumps followed by previous-page taps keep complete rows at font $fontSize', (tester) async {
-      tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    for (final dpr in [1.0, 2.75]) {
+    testWidgets('TOC chapter jumps followed by previous-page taps keep complete rows at font $fontSize DPR $dpr', (tester) async {
+      tester.view.devicePixelRatio = dpr;
+      tester.view.physicalSize = dpr == 1 ? const Size(390, 844) : const Size(1080, 2400);
       tester.view.viewPadding = const FakeViewPadding(top: 40);
       addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
+      const fontPath = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc';
+      if (File(fontPath).existsSync()) {
+        final loader = FontLoader('PagingCjk');
+        loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
+        await loader.load();
+      }
       final storage = AppStorage();
-      await storage.saveSettings((ReadingSettings()..fontSize = fontSize..lineHeight = 1.63..pageTurnAnimation = 'off').toJson());
+      await storage.saveSettings((ReadingSettings()..fontSize = fontSize..lineHeight = 1.63..pageTurnAnimation = 'off'
+        ..fontFamily = File(fontPath).existsSync() ? 'PagingCjk' : '').toJson());
       final book = Book(id: 'toc-previous-$fontSize', title: '章节翻页边界', filePath: '', format: BookFormat.txt,
         addedAt: DateTime(2026), chapters: List.generate(8, (c) => Chapter(title: '第${c + 1}章 山间来信',
           paragraphs: List.generate(7, (p) => Paragraph(
@@ -1804,6 +1813,24 @@ void main() {
           .where((position) => position.itemTrailingEdge > 0 && position.itemLeadingEdge < 1).toList()
             ..sort((a, b) => a.index.compareTo(b.index));
         return (visible.first.index, visible.first.itemLeadingEdge);
+      }
+      List<(String, Rect)> laidOutRows() {
+        final bounds = tester.getRect(body), result = <(String, Rect)>[];
+        for (final render in tester.renderObjectList<RenderParagraph>(find.descendant(of: body, matching: find.byType(RichText)))) {
+          final origin = render.localToGlobal(Offset.zero);
+          if (origin.dy - bounds.top > bounds.height * 2 || origin.dy + render.size.height < bounds.top - bounds.height) continue;
+          final text = render.text.toPlainText(), lines = <int, Rect>{};
+          for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
+            boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+            final rect = box.toRect();
+            if (rect.width < 0.01 || rect.height < 2) continue;
+            final start = render.getPositionForOffset(Offset(-10000, rect.center.dy)).offset;
+            lines[start] = lines[start]?.expandToInclude(rect) ?? rect;
+          }
+          for (final line in lines.entries) { result.add(('$text/${line.key}', line.value.shift(origin))); }
+        }
+        result.sort((a, b) => a.$2.top.compareTo(b.$2.top));
+        return result;
       }
       void expectWholeVisibleRows({bool checkToolbar = false}) {
         final bounds = tester.getRect(body);
@@ -1843,10 +1870,20 @@ void main() {
         expectWholeVisibleRows();
         for (var page = 0; page < 3; page++) {
           final before = viewportAnchor();
+          final bounds = tester.getRect(body);
+          final rows = laidOutRows(), complete = rows.where((row) => row.$2.top >= bounds.top - 0.5).toList();
+          final previous = rows.where((row) => row.$2.bottom <= complete.first.$2.top + 0.5).toList();
+          expect(previous, isNotEmpty);
+          final end = previous.last.$2.bottom;
+          final target = previous.firstWhere((row) => end - row.$2.top <= bounds.height + 0.5).$1;
           await tester.tapAt(const Offset(60, 360)); await tester.pumpAndSettle();
           expect(viewportAnchor(), isNot(before), reason: 'Each left-side tap must really move to the previous page');
+          final landed = laidOutRows().firstWhere((row) => row.$2.bottom > tester.getRect(body).top + 0.5);
+          expect(landed.$1, target, reason: 'The actual first row must remain the selected previous-page row after the indexed list settles');
+          expect(landed.$2.top, closeTo(tester.getRect(body).top, 0.25),
+            reason: 'The selected row must land at zero actual pixel offset, not a partial row');
           if (chapter == 5 && page == 0) {
-            await _captureReaderPreview(tester, preview, 'reader-toc-previous-${fontSize.toInt()}');
+            await _captureReaderPreview(tester, preview, 'reader-toc-previous-${fontSize.toInt()}-$dpr');
             expect(find.byKey(const ValueKey('reader-menu')), findsNothing,
               reason: 'Returning to reading by paging must dismiss the toolbar overlay over the first row');
           }
@@ -1857,6 +1894,7 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     });
+    }
   }
 
   testWidgets('paging shows complete rows and optional overlap repeats exactly one boundary row', (tester) async {
