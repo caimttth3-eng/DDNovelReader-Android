@@ -5,6 +5,72 @@ import 'package:duoduo_langdu/services/speech_breaks.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('legacy global pauses remain the inherited policy without creating voice overrides', () {
+    final previous = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 450);
+    final settings = ReadingSettings.fromJson({'speechPauses': previous.toJson()});
+    expect(settings.perVoiceSpeechPauses, isEmpty);
+    expect(settings.effectiveSpeechPauses, previous);
+    for (final voice in ['', ReadingSettings.defaultPauseVoice, 'zh-CN-YunxiNeural', ReadingSettings.systemPauseVoice]) {
+      expect(settings.speechPausesForVoice(voice), previous);
+      expect(settings.hasVoiceSpeechPauses(voice), isFalse);
+    }
+  });
+  test('voice pause policies persist by stable ID and system fallback uses the system policy', () async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = ReadingSettings()..voice = 'zh-CN-YunxiNeural';
+    final online = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 550);
+    final system = const SpeechPauseSettings().withPause(SpeechPauseKind.paragraph, 850);
+    settings.setVoiceSpeechPauses('zh-CN-YunxiNeural', online);
+    settings.setVoiceSpeechPauses(ReadingSettings.systemPauseVoice, system);
+    settings.setVoiceSpeechPauses('', settings.speechPauses);
+    await AppStorage().saveSettings(settings.toJson());
+    final restored = ReadingSettings.fromJson(await AppStorage().loadSettings());
+    expect(restored.effectiveSpeechPauses, online);
+    expect(restored.hasVoiceSpeechPauses(ReadingSettings.defaultPauseVoice), isTrue,
+      reason: 'An explicit choice keeps its dot even when it equals the current global policy');
+    restored.systemFallbackActive = true;
+    expect(restored.speechPauseVoice, ReadingSettings.systemPauseVoice);
+    expect(restored.effectiveSpeechPauses, system);
+    expect(restored.voice, 'zh-CN-YunxiNeural', reason: 'Fallback must not overwrite the selected online voice');
+    restored.systemFallbackActive = false;
+    restored.voice = ReadingSettings.systemPauseVoice;
+    expect(restored.effectiveSpeechPauses, system);
+    restored.voice = '';
+    expect(restored.effectiveSpeechPauses, restored.speechPauses);
+    expect(restored.hasVoiceSpeechPauses(''), isTrue);
+  });
+  test('global apply and reset preserve voice choices while inherited voices follow global defaults', () {
+    final settings = ReadingSettings();
+    final custom = const SpeechPauseSettings().withPause(SpeechPauseKind.dash, 700);
+    final global = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 400);
+    settings.setVoiceSpeechPauses('zh-CN-XiaoxiaoNeural', custom);
+    settings.applyGlobalSpeechPauses(global);
+    expect(settings.speechPausesForVoice('zh-CN-XiaoxiaoNeural'), custom);
+    expect(settings.speechPausesForVoice('zh-CN-YunxiNeural'), global);
+    settings.resetGlobalSpeechPauses();
+    expect(settings.speechPausesForVoice('zh-CN-XiaoxiaoNeural'), custom);
+    expect(settings.speechPausesForVoice('zh-CN-YunxiNeural'), const SpeechPauseSettings());
+    settings.clearVoiceSpeechPauses('zh-CN-XiaoxiaoNeural');
+    expect(settings.hasVoiceSpeechPauses('zh-CN-XiaoxiaoNeural'), isFalse);
+    expect(settings.speechPausesForVoice('zh-CN-XiaoxiaoNeural'), const SpeechPauseSettings());
+  });
+  test('malformed voice pause entries are ignored and valid stored values are normalized', () {
+    final settings = ReadingSettings.fromJson({'perVoiceSpeechPauses': {
+      'bad-null': null, 'bad-list': [], 'bad-string': '400',
+      'bad-version': {'version': 2, 'comma': 300},
+      'bad-fields': {'version': 1, 'comma': '300'},
+      'bad-number': {'version': 1, 'comma': double.infinity},
+      42: {'version': 1, 'comma': 300},
+      'zh-CN-YunxiNeural': {'version': 1, 'comma': 327, 'dash': 9000},
+    }});
+    expect(settings.perVoiceSpeechPauses.keys, ['zh-CN-YunxiNeural']);
+    final policy = settings.speechPausesForVoice('zh-CN-YunxiNeural');
+    expect(policy.millisecondsFor(SpeechPauseKind.comma), 350);
+    expect(policy.millisecondsFor(SpeechPauseKind.dash), 3000);
+    final copy = ReadingSettings.fromJson(settings.toJson());
+    copy.clearVoiceSpeechPauses('zh-CN-YunxiNeural');
+    expect(settings.hasVoiceSpeechPauses('zh-CN-YunxiNeural'), isTrue);
+  });
   test('system media spoken text defaults off and persists only explicit boolean choices', () async {
     SharedPreferences.setMockInitialValues({});
     expect(ReadingSettings().showSystemMediaText, isFalse);

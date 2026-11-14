@@ -55,7 +55,7 @@ class BookSnapshotCache {
     final generation = ++_generation;
     final key = <Object>[meta.id, meta.title, meta.filePath, meta.format, meta.addedAt.toIso8601String(),
       settings.mergeNonSentenceBreaks, settings.firstLineIndent,
-      settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc, settings.speechPauses.cacheKey];
+      settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc, settings.effectiveSpeechPauses.cacheKey];
     try {
       if (_memory != null && _same(_memoryKey, key)) {
         final current = await _stat(meta.filePath);
@@ -86,7 +86,7 @@ class BookSnapshotCache {
       final stamp = lookup._stamp!, key = [...lookup._key];
       if (settings != null) key.replaceRange(5, 10, [settings.mergeNonSentenceBreaks, settings.firstLineIndent,
         settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc,
-        settings.speechPauses.cacheKey]);
+        settings.effectiveSpeechPauses.cacheKey]);
       if (lookup.snapshot != null && !lookup._needsPublish && _same(key, lookup._key)) return;
       _activeWriteGeneration = lookup._generation;
       try {

@@ -45,6 +45,32 @@ void main() {
       .any((s) => s.pauseAfterMilliseconds == 750), isTrue);
   });
 
+  test('snapshot keys follow effective voice pauses and ignore inactive overrides', () async {
+    final lookup = await cache.lookup(meta, settings);
+    await cache.save(lookup, source, prepared);
+    settings.setVoiceSpeechPauses('zh-CN-YunxiNeural',
+      const SpeechPauseSettings().withPause(SpeechPauseKind.dash, 950));
+    expect((await cache.lookup(meta, settings)).snapshot, isNotNull,
+      reason: 'Changing a different voice must not invalidate the current prepared book');
+    settings.voice = 'zh-CN-YunxiNeural';
+    expect((await cache.lookup(meta, settings)).snapshot, isNull);
+    final changed = ReaderPreparation.prepareSynchronously(ReaderPreparationRequest(source,
+      merge: true, indent: true, filter: 'links', autoExtractToc: true,
+      pauseSettings: settings.effectiveSpeechPauses));
+    await cache.save(await cache.lookup(meta, settings), source, changed, settings: settings);
+    cache.clearMemoryCache();
+    final hit = (await cache.lookup(meta, settings)).snapshot!;
+    expect(hit.prepared.book.chapters.expand((c) => c.paragraphs).expand((p) => p.sentences)
+      .any((s) => s.pauseAfterMilliseconds == 950), isTrue);
+    settings.systemFallbackActive = true;
+    expect((await cache.lookup(meta, settings)).snapshot, isNull,
+      reason: 'System fallback inherits global pauses instead of the online voice override');
+    settings.setVoiceSpeechPauses(ReadingSettings.systemPauseVoice,
+      const SpeechPauseSettings().withPause(SpeechPauseKind.dash, 950));
+    expect((await cache.lookup(meta, settings)).snapshot, isNotNull,
+      reason: 'Voices with identical effective pauses can reuse the same prepared graph');
+  });
+
   test('disk round trip restores source, sentences, pause, TOC and exact source mapping', () async {
     final lookup = await cache.lookup(meta, settings);
     expect(lookup.snapshot, isNull);

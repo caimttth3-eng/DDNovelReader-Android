@@ -122,6 +122,7 @@ class ReadingSettings {
   int keepScreenMinutes = 0;
   int readingScreenSeconds = 0;
   SpeechPauseSettings speechPauses = const SpeechPauseSettings();
+  final Map<String, SpeechPauseSettings> perVoiceSpeechPauses = {};
   bool retainPageLine = false;
   bool mergeNonSentenceBreaks = true;
   bool firstLineIndent = true;
@@ -141,6 +142,26 @@ class ReadingSettings {
   int dayThemeIndex = 0;
   String fontFamily = ''; // 用户自选字体 family 名，空=系统默认
 
+  // Keep stable voice IDs rather than translated/display names. An unset
+  // online selection is the same Xiaoxiao voice used by the reader.
+  static const defaultPauseVoice = 'zh-CN-XiaoxiaoNeural';
+  static const systemPauseVoice = '__system_tts__';
+  static String _pauseVoiceKey(String value) =>
+    value.trim().isEmpty ? defaultPauseVoice : value.trim();
+  String get speechPauseVoice => systemFallbackActive ? systemPauseVoice : _pauseVoiceKey(voice);
+  SpeechPauseSettings get effectiveSpeechPauses => speechPausesForVoice(speechPauseVoice);
+  SpeechPauseSettings speechPausesForVoice(String voiceId) =>
+    perVoiceSpeechPauses[_pauseVoiceKey(voiceId)] ?? speechPauses;
+  bool hasVoiceSpeechPauses(String voiceId) => perVoiceSpeechPauses.containsKey(_pauseVoiceKey(voiceId));
+  void setVoiceSpeechPauses(String voiceId, SpeechPauseSettings pauses) =>
+    perVoiceSpeechPauses[_pauseVoiceKey(voiceId)] = pauses;
+  void clearVoiceSpeechPauses(String voiceId) => perVoiceSpeechPauses.remove(_pauseVoiceKey(voiceId));
+
+  // Global changes affect inherited voices only. Explicit per-voice choices
+  // survive both global application and the factory reset requested by the UI.
+  void applyGlobalSpeechPauses(SpeechPauseSettings pauses) { speechPauses = pauses; }
+  void resetGlobalSpeechPauses() { speechPauses = const SpeechPauseSettings(); }
+
   Map<String, dynamic> toJson() => {
         'brightness': brightness,
         'brightnessControlVersion': 2,
@@ -153,6 +174,7 @@ class ReadingSettings {
         'keepScreenMinutes': keepScreenMinutes,
         'readingScreenSeconds': readingScreenSeconds,
         'speechPauses': speechPauses.toJson(),
+        'perVoiceSpeechPauses': {for (final entry in perVoiceSpeechPauses.entries) entry.key: entry.value.toJson()},
         'retainPageLine': retainPageLine,
         'textCorrection': mergeNonSentenceBreaks,
         'firstLineIndent': firstLineIndent,
@@ -190,6 +212,15 @@ class ReadingSettings {
     final readingSeconds = (json['readingScreenSeconds'] as num?)?.toInt();
     s.readingScreenSeconds = [0, 60, 120, 300, 600, 1800].contains(readingSeconds) ? readingSeconds! : 0;
     s.speechPauses = SpeechPauseSettings.fromJson(json['speechPauses']);
+    final voicePauses = json['perVoiceSpeechPauses'];
+    if (voicePauses is Map) {
+      for (final entry in voicePauses.entries) {
+        final value = entry.value;
+        if (entry.key is! String || value is! Map || (value['version'] != null && value['version'] != 1)) continue;
+        if (!SpeechPauseKind.values.any((kind) => value[kind.name] is num && (value[kind.name] as num).isFinite)) continue;
+        s.setVoiceSpeechPauses(entry.key as String, SpeechPauseSettings.fromJson(value));
+      }
+    }
     s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'tap';
     s.retainPageLine = json['retainPageLine'] as bool? ?? false;
     s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
