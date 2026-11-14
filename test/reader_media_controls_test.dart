@@ -20,6 +20,7 @@ Future<void> completeAction(WidgetTester tester, Future<void> action) async {
   var done = false;
   Object? failure;
   action.then((_) { done = true; }, onError: (Object error) { failure = error; done = true; });
+  await tester.runAsync(() => Future<void>.delayed(Duration.zero));
   for (var frame = 0; frame < 120 && !done; frame++) {
     await tester.pump(const Duration(milliseconds: 16));
   }
@@ -32,7 +33,7 @@ void main() {
   final messenger = binding.defaultBinaryMessenger;
   late TtsAudioHandler handler;
   TtsAudioHandler? previous;
-  setUp(() {
+  setUp(() async {
     SharedPreferences.setMockInitialValues({});
     ReaderPreparation.runnerForTesting = (request) async => ReaderPreparation.prepareSynchronously(request);
     AppAppearance.setThemeMode('light');
@@ -53,6 +54,9 @@ void main() {
       }
       return null;
     });
+    // Resolve constructor-created futures in their real setup zone before
+    // widget tests attach media-command continuations in FakeAsync.
+    await Future<void>.delayed(Duration.zero);
   });
   tearDown(() {
     globalAudioHandler = previous; ReaderPreparation.runnerForTesting = null;
@@ -108,6 +112,7 @@ void main() {
     await tester.pumpAndSettle();
     final starting = handler.play();
     for (var frame = 0; frame < 120 && speech.starts == 0; frame++) {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
       await tester.pump(const Duration(milliseconds: 16));
     }
     expect(speech.starts, 1);
@@ -229,7 +234,12 @@ void main() {
       addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [ReadingText.paragraph(text)])]);
     final speech = TtsReader();
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
-    await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读'));
+    for (var frame = 0; frame < 120 && spoken.isEmpty; frame++) {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await tester.pumpAndSettle();
     expect(spoken, hasLength(1));
     final originalId = spoken.single['id'];
     await emit('range', {'id': originalId, 'start': 2, 'end': 4}); await tester.pumpAndSettle();
