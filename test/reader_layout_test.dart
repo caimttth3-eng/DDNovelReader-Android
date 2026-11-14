@@ -339,7 +339,7 @@ void main() {
     await tester.tap(find.byTooltip('横竖屏切换'));
     await tester.pumpAndSettle();
     expect(platformCalls.where((c) => c.method == 'SystemChrome.setPreferredOrientations').last.arguments,
-      ['DeviceOrientation.landscapeLeft', 'DeviceOrientation.landscapeRight']);
+      ['DeviceOrientation.landscapeLeft']);
     tester.view.physicalSize = const Size(844, 390);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu')));

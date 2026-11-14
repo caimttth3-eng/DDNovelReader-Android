@@ -4,6 +4,11 @@ import 'package:flutter/services.dart';
 /// One writer for the selected reading or speech inactivity policy.
 /// Expiration releases Android's override; Android decides when to lock.
 class ReaderScreenAwake {
+  static final Set<ReaderScreenAwake> _instances = {};
+  /// The application listener also sees touches inside Navigator overlays.
+  static void notifyUserInteraction() {
+    for (final instance in _instances.toList()) { instance.interaction(); }
+  }
   final Future<void> Function(bool) _write;
   Duration? _timeout;
   bool _active = false, _foreground = false;
@@ -12,7 +17,9 @@ class ReaderScreenAwake {
   bool? _requested;
   Timer? _timer;
   Future<void> _writes = Future<void>.value();
-  ReaderScreenAwake({Future<void> Function(bool)? write}) : _write = write ?? _nativeWrite;
+  ReaderScreenAwake({Future<void> Function(bool)? write}) : _write = write ?? _nativeWrite {
+    _instances.add(this);
+  }
   static Future<void> _nativeWrite(bool enabled) => const MethodChannel('com.ddnovelreader/volume_keys')
     .invokeMethod<void>('setKeepScreenOn', enabled);
   Future<void> get settled => _writes;
@@ -51,7 +58,7 @@ class ReaderScreenAwake {
 
   Future<void> dispose() {
     if (_disposed) return _writes;
-    _disposed = true; _timer?.cancel(); _timer = null;
+    _disposed = true; _instances.remove(this); _timer?.cancel(); _timer = null;
     _sync();
     return _writes;
   }

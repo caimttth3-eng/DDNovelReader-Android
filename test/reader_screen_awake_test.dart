@@ -3,6 +3,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:duoduo_langdu/services/reader_screen_awake.dart';
 
 void main() {
+  testWidgets('global overlay interactions reset only active foreground timers and ignore disposed controllers', (tester) async {
+    final visibleWrites = <bool>[], backgroundWrites = <bool>[];
+    final visible = ReaderScreenAwake(write: (v) async { visibleWrites.add(v); });
+    final background = ReaderScreenAwake(write: (v) async { backgroundWrites.add(v); });
+    visible.configure(timeout: const Duration(seconds: 60), active: true, foreground: true, scope: 'reading');
+    background.configure(timeout: const Duration(seconds: 60), active: true, foreground: false, scope: 'voice');
+    await tester.pump(const Duration(seconds: 50));
+    ReaderScreenAwake.notifyUserInteraction();
+    await tester.pump(const Duration(seconds: 50));
+    expect(visibleWrites, [true]); expect(backgroundWrites, [false]);
+    await tester.pump(const Duration(seconds: 10));
+    expect(visibleWrites, [true, false]); expect(backgroundWrites, [false]);
+    await visible.dispose();
+    ReaderScreenAwake.notifyUserInteraction(); await tester.pump(const Duration(minutes: 2));
+    expect(visibleWrites, [true, false]); expect(backgroundWrites, [false]);
+    // The same registered controller remains eligible after entering foreground.
+    background.configure(timeout: const Duration(seconds: 60), active: false, foreground: true, scope: 'voice');
+    ReaderScreenAwake.notifyUserInteraction(); await tester.pump(const Duration(minutes: 2));
+    expect(backgroundWrites, [false], reason: 'An inactive visible reader also ignores global touches');
+    await background.dispose();
+  });
   testWidgets('system mode adds no timeout override', (tester) async {
     final writes = <bool>[];
     final awake = ReaderScreenAwake(write: (v) async { writes.add(v); });

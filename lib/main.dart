@@ -11,6 +11,7 @@ import 'services/app_storage.dart';
 import 'services/book_parser.dart';
 import 'services/book_snapshot_cache.dart';
 import 'services/reader_preparation.dart';
+import 'services/reader_screen_awake.dart';
 import 'services/tts_audio_handler.dart';
 
 Future<void> main() async {
@@ -88,6 +89,12 @@ class _DuoduoLangduAppState extends State<DuoduoLangduApp> with WidgetsBindingOb
     return ValueListenableBuilder<bool>(
       valueListenable: AppAppearance.nightMode,
       builder: (context, night, child) => MaterialApp(
+      builder: (context, child) => Listener(
+        onPointerDown: (_) => ReaderScreenAwake.notifyUserInteraction(),
+        onPointerMove: (_) => ReaderScreenAwake.notifyUserInteraction(),
+        onPointerUp: (_) => ReaderScreenAwake.notifyUserInteraction(),
+        child: child ?? const SizedBox.shrink(),
+      ),
       title: '多多朗读',
       debugShowCheckedModeBanner: false,
       locale: AppI18n.current.locale,
