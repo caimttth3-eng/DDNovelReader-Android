@@ -154,7 +154,8 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));
 
-  testWidgets('natural chapter completion clears the old final word before a new short title', (tester) async {
+  for (final oldOffset in [9, 596]) {
+  testWidgets('natural chapter completion clears old word offset ' + oldOffset.toString() + ' before a new short title', (tester) async {
     final before = List.filled(60, '甲乙丙丁戊己庚辛壬癸').join() + '。';
     const title = '第 3 章 一寸金03';
     final book = Book(id: 'natural-cross-chapter-title', title: '自然跨章', filePath: '', format: BookFormat.txt,
@@ -165,9 +166,14 @@ void main() {
     final speech = await open(tester, book);
     await start(tester); expect(spoken, hasLength(1));
     final oldId = spoken.single['id'];
-    await emit(tester, 'range', {'id': oldId, 'start': before.length - 5, 'end': before.length - 1});
+    await emit(tester, 'range', {'id': oldId, 'start': oldOffset, 'end': oldOffset + 2});
     await tester.pumpAndSettle();
-    expect(speech.currentTtsOffset, greaterThan(title.length), reason: 'Exercise a real previous-chapter word offset that cannot belong to the new title');
+    expect(speech.currentTtsOffset, oldOffset); expect(speech.currentWordStart, oldOffset);
+    if (oldOffset == 9) {
+      expect(oldOffset, lessThan(title.length), reason: 'A valid old offset must expose stale cross-chapter reuse independently of invalid-offset protection');
+    } else {
+      expect(oldOffset, greaterThan(title.length), reason: 'Also retain the invalid old-offset boundary regression');
+    }
     await emit(tester, 'done', {'id': oldId});
     await _until(tester, () => spoken.length >= 2, 'The previous chapter must naturally complete into the new title');
     await tester.pumpAndSettle();
@@ -179,6 +185,8 @@ void main() {
     await tester.pumpAndSettle(); expect(spoken, hasLength(2)); expect(speech.currentTtsOffset, 0);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));
+  }
+
   testWidgets('natural paragraph completion reads an entire short title once while following scroll', (tester) async {
     final before = List.filled(60, '甲乙丙丁戊己庚辛壬癸').join() + '。';
     const title = '第 3 章 一寸金03';
