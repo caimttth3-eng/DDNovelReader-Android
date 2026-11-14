@@ -1,6 +1,6 @@
 /// TTS 朗读服务：基于 Edge TTS 在线合成 + 后台预取队列。
 /// 逐句朗读 + 逐句高亮回调 + 暂停/继续/停止 + 定时停止。
-/// 预取后续句子（默认提前 8 句），合成期间播放零卡顿。
+/// 预取后续句子（默认提前 8 句），缓存命中时无需再次在线合成。
 library;
 
 import 'dart:async';
@@ -40,6 +40,7 @@ class TtsReader {
   bool get usesSystemVoice => _voice == systemVoice || _usingSystemFallback;
   static const defaultVoice = 'zh-CN-XiaoxiaoNeural';
   static const _positionReadTimeout = Duration(seconds: 2);
+  static const _loadingIndicatorDelay = Duration(milliseconds: 150);
   static final _leadingRangePunctuation = RegExp(r'^[\s\p{P}]+', unicode: true);
   final AudioPlayer _player;
   final OnlineSpeechSynthesizer _synthesize;
@@ -70,6 +71,7 @@ class TtsReader {
   List<int> _pauseAfterMilliseconds = [];
   final Stopwatch _delayClock = Stopwatch()..start();
   Timer? _sentenceDelay;
+  Timer? _loadingDelay;
   Duration _delayDeadline = Duration.zero;
   Duration _remainingDelay = Duration.zero;
   bool _awaitingSentenceAdvance = false;
@@ -105,6 +107,25 @@ class TtsReader {
   int get currentWordEnd => _lastWordEnd;
   int get currentTtsOffset => usesSystemVoice ? _systemResumeOffset : 0;
   int get prefetchSentences => _prefetchSentences;
+
+  void _startLoading(int generation) {
+    _loadingDelay?.cancel();
+    // An in-memory/disk hit still prepares a new native audio source. Do not
+    // describe every fast sentence transition as a network/synthesis load.
+    _loadingDelay = Timer(_loadingIndicatorDelay, () {
+      _loadingDelay = null;
+      if (!_disposed && generation == _playGeneration && _state == TtsState.playing) {
+        onLoadingChanged?.call(true);
+      }
+    });
+  }
+
+  void _stopLoading() {
+    _loadingDelay?.cancel(); _loadingDelay = null;
+    // Reader routes can explicitly display loading before calling start/resume.
+    // Always send the settled false state even if the delayed true never ran.
+    onLoadingChanged?.call(false);
+  }
 
   /// Restore the saved effective mode after restoring the selected voice.
   /// Connectivity changes and chapter starts never clear this sticky choice.
@@ -215,6 +236,7 @@ class TtsReader {
 
   void _invalidateAudio() {
     _playGeneration++;
+    _stopLoading();
     _activeAudioIndex = -1;
     _clearResume();
     _cancelRequests(); _prefetchCache.clear(); _wordCache.clear();
@@ -379,7 +401,7 @@ class TtsReader {
     _activeAudioIndex = -1;
     _resumePosition = hadAudio ? _position : Duration.zero;
     _setState(TtsState.paused);
-    onLoadingChanged?.call(false);
+    _stopLoading();
     _cancelRequests();
     return _pausing = _runPlayer(() async {
       if (_disposed || generation != _playGeneration) return;
@@ -428,7 +450,7 @@ class TtsReader {
   Future<void> _stopInternal() async {
     final generation = ++_playGeneration;
     _activeAudioIndex = -1; _activeWords = []; _clearResume();
-    onLoadingChanged?.call(false); _cancelRequests();
+    _stopLoading(); _cancelRequests();
     _emitWord(-1, -1);
     await _runPlayer(() async {
       if (_disposed || generation != _playGeneration) return;
@@ -561,7 +583,7 @@ class TtsReader {
     }
     final generation = ++_playGeneration;
     final sentence = _index;
-    lastFailure = null; onLoadingChanged?.call(true);
+    lastFailure = null; _startLoading(generation);
     _activeAudioIndex = -1; _activeWords = [];
     if (!continueSentence) {
       _clearResume();
@@ -593,7 +615,7 @@ class TtsReader {
           },
           onError: (error) { if (generation == _playGeneration) _fail(error); });
         if (_disposed || generation != _playGeneration) return false;
-        onLoadingChanged?.call(false); return true;
+        _stopLoading(); return true;
       } on SystemSpeechCancelled { return false; }
       catch (error) { if (!_disposed && generation == _playGeneration) _fail(error); return false; }
     }
@@ -652,7 +674,7 @@ class TtsReader {
         _activeAudioIndex = sentence; _position = resumePosition;
         _rateResumeWordOffset = -1;
         if (continueSentence || initialWordOffset >= 0) _updateWord(resumePosition);
-        onLoadingChanged?.call(false);
+        _stopLoading();
         if (_prefetchIndex < sentence) _prefetchIndex = sentence;
         _startPrefetch();
         return true;
@@ -674,7 +696,7 @@ class TtsReader {
     lastFailure = error;
     _playGeneration++; _cancelRequests();
     _activeAudioIndex = -1; _activeWords = []; _clearResume();
-    _setState(TtsState.stopped); onLoadingChanged?.call(false); onError?.call();
+    _setState(TtsState.stopped); _stopLoading(); onError?.call();
   }
 
   /// 后台预取：从当前句之后开始，提前合成若干句
@@ -694,11 +716,10 @@ class TtsReader {
         // 计算下一个要预取的位置
         final nextToPrefetch = _prefetchIndex + 1;
         final maxPrefetch = _index + _prefetchSentences;
-        if (nextToPrefetch > maxPrefetch ||
-            nextToPrefetch >= _sentences.length) {
-          await Future.delayed(const Duration(milliseconds: 200));
-          continue;
-        }
+        // A full window has no work. Starting the next sentence, resuming or
+        // resizing the window starts another worker; no periodic wake-up is
+        // needed, and refilling must not wait for an old 200 ms polling sleep.
+        if (nextToPrefetch > maxPrefetch || nextToPrefetch >= _sentences.length) return;
         _prefetchIndex = nextToPrefetch;
         // Replanning must not temporarily remove reusable audio from memory:
         // a second resize could otherwise synthesize that same sentence again.
@@ -710,8 +731,8 @@ class TtsReader {
           _prefetchCache[nextToPrefetch] = audio;
         }
         _prunePrefetch();
-        // 避免连发过多请求
-        await Future.delayed(const Duration(milliseconds: 80));
+        // Keep a single synthesis request in flight, but immediately prepare
+        // its successor. Short sentences should not pay an extra 80 ms each.
       }
     } catch (_) {} finally {
       if (worker == _prefetchGeneration) _prefetching = false;
@@ -733,6 +754,7 @@ class TtsReader {
 
   Future<void> dispose() async {
     _disposed = true; _contentGeneration++; _playGeneration++;
+    _stopLoading();
     _sentenceDelay?.cancel(); _delayClock.stop();
     _cancelRequests(); await _networkEvents.close(); await _system.dispose();
     await _positionSubscription?.cancel();
