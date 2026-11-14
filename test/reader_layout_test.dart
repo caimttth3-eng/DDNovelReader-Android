@@ -1782,7 +1782,8 @@ void main() {
   for (final fontSize in [24.0, 64.0]) {
     testWidgets('TOC chapter jumps followed by previous-page taps keep complete rows at font $fontSize', (tester) async {
       tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
-      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+      tester.view.viewPadding = const FakeViewPadding(top: 40);
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
       final storage = AppStorage();
       await storage.saveSettings((ReadingSettings()..fontSize = fontSize..lineHeight = 1.63..pageTurnAnimation = 'off').toJson());
       final book = Book(id: 'toc-previous-$fontSize', title: '章节翻页边界', filePath: '', format: BookFormat.txt,
@@ -1800,7 +1801,7 @@ void main() {
             ..sort((a, b) => a.index.compareTo(b.index));
         return (visible.first.index, visible.first.itemLeadingEdge);
       }
-      void expectWholeVisibleRows() {
+      void expectWholeVisibleRows({bool checkToolbar = false}) {
         final bounds = tester.getRect(body);
         final localClip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(bounds.size);
         final clip = localClip.shift(bounds.topLeft);
@@ -1817,6 +1818,15 @@ void main() {
           }
         }
         expect(visible, isNotEmpty);
+        if (checkToolbar) {
+          final menu = find.byKey(const ValueKey('reader-menu'));
+          if (menu.evaluate().isNotEmpty) {
+            final toolbarBottom = tester.getRect(menu).bottom + 4;
+            for (final row in visible) {
+              expect(row.top, greaterThanOrEqualTo(toolbarBottom - 0.5), reason: 'A previous-page first row must not be hidden behind the retained top toolbar');
+            }
+          }
+        }
       }
       for (final chapter in [5, 2, 4]) {
         await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
@@ -1828,7 +1838,12 @@ void main() {
           final before = viewportAnchor();
           await tester.tapAt(const Offset(60, 360)); await tester.pumpAndSettle();
           expect(viewportAnchor(), isNot(before), reason: 'Each left-side tap must really move to the previous page');
-          expectWholeVisibleRows();
+          if (chapter == 5 && page == 0) {
+            await _captureReaderPreview(tester, preview, 'reader-toc-previous-${fontSize.toInt()}');
+            expect(find.byKey(const ValueKey('reader-menu')), findsNothing,
+              reason: 'Returning to reading by paging must dismiss the toolbar overlay over the first row');
+          }
+          expectWholeVisibleRows(checkToolbar: true);
         }
       }
       await _captureReaderPreview(tester, preview, 'reader-toc-previous-${fontSize.toInt()}');
