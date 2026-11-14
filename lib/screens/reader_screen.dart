@@ -199,6 +199,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   ReadingSettings _settings = ReadingSettings();
   bool _settingsLoaded = false;
+  bool _applyingSpeechPauses = false;
+  (int, int, int, int)? _speechPauseResumeCursor;
 
   // 控制 UI 显隐
   bool _showControls = true;
@@ -1726,8 +1728,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     setState(() { _isPlaying = true; _showReadingPanel = false; });
     if (_ttsChapter != _chapter) {
       // 暂停期间滑到了其他章节：TtsReader 内部仍是旧章句子，需重新加载
+      final cursor = _speechPauseResumeCursor;
       await _startTtsFrom(
-          _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+          _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0,
+          displayOffset: cursor != null && cursor.$1 == _chapter && cursor.$2 == _para && cursor.$3 == _ttsSentence ? cursor.$4 : null);
       if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
       _stopTtsLoading();
       globalAudioHandler?.notifyPlaying();
@@ -2070,6 +2074,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Future<void> _startTtsFrom(int c, int p, int s, {int? displayOffset}) async {
+    _speechPauseResumeCursor = null;
     if (c >= _book.chapters.length) {
       _exitFullscreen();
       setState(() {
@@ -3025,7 +3030,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Future<void> _openPlaybackSettings() async {
-    await showModalBottomSheet<void>(context: context, isScrollControlled: true,
+    if (_applyingSpeechPauses) return;
+    var pauses = _settings.speechPauses;
+    final selected = await showModalBottomSheet<SpeechPauseSettings>(context: context, isScrollControlled: true,
       builder: (context) => StatefulBuilder(builder: (ctx, update) => SafeArea(child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
         child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(16), children: [
@@ -3055,16 +3062,31 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               if (chosen != null && mounted && ctx.mounted) { setState(() => _settings.keepScreenMinutes = chosen); update(() {});
                 widget.storage.saveSettings(_settings.toJson()); _syncScreenAwake(); }
             })),
-          ListTile(title: Text(T('additionalPauses')), subtitle: Text(T('pauseDescription'))),
-          for (final kind in SpeechPauseKind.values) ...[
-            Text('${T('pause-${kind.name}')} · ${T('pauseMilliseconds', {'n': '${_settings.speechPauses.millisecondsFor(kind)}'})}'),
-            Slider(key: ValueKey('pause-${kind.name}'), value: _settings.speechPauses.millisecondsFor(kind).toDouble(),
-              min: 0, max: 3000, divisions: 60, onChanged: (value) {
-                setState(() => _settings.speechPauses = _settings.speechPauses.withPause(kind, value.round())); update(() {});
-                widget.storage.saveSettings(_settings.toJson());
-              }, onChangeEnd: (_) => _applySpeechPauses()),
-          ],
+          ListTile(title: Text(T('additionalPauses')), subtitle: Text('${T('pauseDescription')}\n${T('pauseDraftHint')}')),
+          for (final kind in SpeechPauseKind.values) Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(children: [
+            Expanded(child: Text(T('pause-${kind.name}'))),
+            IconButton(key: ValueKey('pause-${kind.name}-minus'), icon: const Icon(Icons.remove), padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 48),
+              onPressed: pauses.millisecondsFor(kind) == SpeechPauseSettings.minimum ? null :
+                () => update(() => pauses = pauses.withPause(kind, pauses.millisecondsFor(kind) - SpeechPauseSettings.step))),
+            SizedBox(width: 96, child: TextButton(key: ValueKey('pause-${kind.name}'),
+              child: FittedBox(fit: BoxFit.scaleDown, child: Text(T('pauseMilliseconds', {'n': '${pauses.millisecondsFor(kind)}'}))),
+              onPressed: () async {
+                final value = await showDialog<int>(context: ctx, builder: (_) => _IntegerInputDialog(
+                  title: T('pause-${kind.name}'), value: pauses.millisecondsFor(kind), minimum: SpeechPauseSettings.minimum,
+                  maximum: SpeechPauseSettings.maximum, inputKey: ValueKey('pause-number-${kind.name}')));
+                if (value != null && ctx.mounted) update(() => pauses = pauses.withPause(kind, value));
+              })),
+            IconButton(key: ValueKey('pause-${kind.name}-plus'), icon: const Icon(Icons.add), padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 48),
+              onPressed: pauses.millisecondsFor(kind) == SpeechPauseSettings.maximum ? null :
+                () => update(() => pauses = pauses.withPause(kind, pauses.millisecondsFor(kind) + SpeechPauseSettings.step))),
+          ])),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child:
+            FilledButton(key: const ValueKey('pause-apply'), onPressed: pauses == _settings.speechPauses ? null :
+              () => Navigator.pop(ctx, pauses), child: Text(T('applyPauseSettings')))),
         ])))));
+    if (selected != null && mounted && selected != _settings.speechPauses) await _applySpeechPauses(selected);
   }
 
   void _syncScreenAwake() {
@@ -3075,25 +3097,55 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       scope: _inReadingMode ? 'voice' : 'reading');
   }
 
-  Future<void> _applySpeechPauses() async {
-    final previous = _book, line = _captureLineAnchor(), c = _chapter;
-    final paragraph = previous.chapters[c].paragraphs[_para];
-    final at = _wordStart >= 0 ? _wordStart : paragraph.sentences.isEmpty ? 0 : paragraph.sentences[max(0, _ttsSentence)].displayStart;
-    final anchor = ReadingText.anchor(previous, c, _para, at), wasPlaying = _isPlaying;
+  Future<void> _applySpeechPauses(SpeechPauseSettings pauses) async {
+    if (_applyingSpeechPauses || _book.chapters.isEmpty) return;
+    final previous = _book, line = _captureLineAnchor(), c = _chapter.clamp(0, _book.chapters.length - 1);
+    if (previous.chapters[c].paragraphs.isEmpty) return;
+    _applyingSpeechPauses = true;
+    final p = _para.clamp(0, previous.chapters[c].paragraphs.length - 1);
+    final paragraph = previous.chapters[c].paragraphs[p];
+    final at = _wordStart >= 0 ? _wordStart : paragraph.sentences.isEmpty ? 0 :
+      paragraph.sentences[_ttsSentence.clamp(0, paragraph.sentences.length - 1)].displayStart;
+    final anchor = ReadingText.anchor(previous, c, p, at), wasPlaying = _isPlaying;
+    final signature = _formatSignature(_settings);
     final generation = ++_playbackGeneration;
-    if (_inReadingMode) await _tts.pause();
-    if (!mounted || _leavingReader || generation != _playbackGeneration) return;
-    setState(() {
-      _formatBook(); _flowChapter = null; _flowParagraph = null; _flowOffset = null;
-      final location = ReadingText.locate(_book, c, anchor);
-      _chapter = c; _para = location.$1;
-      _ttsSentence = ReadingText.sentenceAt(_book.chapters[c].paragraphs[_para], location.$2);
-      _wordStart = location.$2; _wordEnd = location.$2; _ttsChapter = -1; _isPlaying = false;
-    });
-    _remapAnnotations(previous); _refreshTtsCache();
-    await _restoreLineAnchor(line);
-    if (mounted && !_leavingReader && generation == _playbackGeneration && wasPlaying) {
-      await _startTtsFrom(_chapter, _para, _ttsSentence, displayOffset: _wordStart);
+    try {
+      if (_inReadingMode) {
+        await _tts.pause();
+        if (!mounted || _leavingReader || generation != _playbackGeneration) return;
+        setState(() => _isPlaying = false);
+        globalAudioHandler?.notifyPaused();
+      }
+      if (!mounted || _leavingReader || generation != _playbackGeneration) return;
+      final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
+        merge: _settings.mergeNonSentenceBreaks, indent: _settings.firstLineIndent, pauseSettings: pauses,
+        filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none', autoExtractToc: _settings.autoExtractToc));
+      if (!mounted || _leavingReader || generation != _playbackGeneration || signature != _formatSignature(_settings)) return;
+      prepared.attachSourceMaps();
+      setState(() {
+        _settings.speechPauses = pauses; _textSignature = _formatSignature(_settings);
+        _installFormattedBook(prepared.book, prepared.fingerprint);
+        _toc = prepared.toc; _tocAnchors = prepared.tocAnchors; _tocIsChapterTitle = prepared.chapterTitles;
+        _flowChapter = null; _flowParagraph = null; _flowOffset = null;
+        final location = ReadingText.locate(_book, c, anchor);
+        _chapter = c; _para = location.$1;
+        _ttsSentence = ReadingText.sentenceAt(_book.chapters[c].paragraphs[_para], location.$2);
+        _wordStart = location.$2; _wordEnd = location.$2; _ttsChapter = -1;
+        _speechPauseResumeCursor = (_chapter, _para, _ttsSentence, location.$2);
+      });
+      _remapAnnotations(previous); _refreshTtsCache();
+      await widget.storage.saveSettings(_settings.toJson());
+      await _restoreLineAnchor(line);
+      if (mounted && !_leavingReader && generation == _playbackGeneration && wasPlaying) {
+        await _startTtsFrom(_chapter, _para, _ttsSentence, displayOffset: _wordStart);
+      }
+    } catch (error) {
+      if (mounted && !_leavingReader && generation == _playbackGeneration) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(T('parseFail', {'err': '$error'}))));
+        if (wasPlaying && _inReadingMode) await _resumeReading();
+      }
+    } finally {
+      _applyingSpeechPauses = false;
     }
   }
 

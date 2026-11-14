@@ -62,6 +62,7 @@ class TtsReader {
   Duration _position = Duration.zero;
   Duration _resumePosition = Duration.zero;
   int _systemResumeOffset = 0;
+  int _rateResumeWordOffset = -1;
   Future<void>? _pausing;
   Future<void> _playerOperations = Future<void>.value();
   int _resumeSerial = 0;
@@ -225,7 +226,35 @@ class TtsReader {
   /// 设置语速（0.1~3.0，映射到 Edge rate 百分比 +200%）
   Future<void> setSpeechRate(double rate) async {
     final value = rate.clamp(0.1, 3.0);
-    if (value != _speechRate) { _speechRate = value; _invalidateAudio(); }
+    if (_disposed || value == _speechRate) return;
+    _speechRate = value;
+    // An already completed sentence keeps its remaining punctuation silence.
+    // Only the upcoming audio needs rebuilding in that case.
+    if (_awaitingSentenceAdvance) {
+      _cancelRequests(); _prefetchCache.clear(); _wordCache.clear();
+      _prefetchIndex = _index;
+      return;
+    }
+    final systemOffset = _systemResumeOffset;
+    final wordOffset = _lastWordStart >= 0 ? _lastWordStart : _rateResumeWordOffset;
+    _invalidateAudio();
+    if (_state == TtsState.paused) {
+      _systemResumeOffset = systemOffset;
+      _rateResumeWordOffset = wordOffset;
+      return;
+    }
+    if (_state != TtsState.playing || _index < 0 || _index >= _sentences.length) return;
+    // Invalidating caches alone leaves the old audio speaking at the old rate
+    // and disables its completion callback. Replace that audio immediately.
+    final stopping = _stopInternal();
+    final generation = _playGeneration;
+    // Keep the cursor available to a second slider change or pause while the
+    // first replacement is still stopping/loading.
+    _systemResumeOffset = systemOffset;
+    _rateResumeWordOffset = wordOffset;
+    await stopping;
+    if (_disposed || generation != _playGeneration || _state != TtsState.playing) return;
+    await _playCurrent(continueSentence: true, initialWordOffset: wordOffset);
   }
 
   double get speechRate => _speechRate;
@@ -248,6 +277,7 @@ class TtsReader {
     _awaitingSentenceAdvance = false; _remainingDelay = Duration.zero;
     _retainedAudio = null; _retainedWords = []; _retainedAudioIndex = -1;
     _position = Duration.zero; _resumePosition = Duration.zero; _systemResumeOffset = 0;
+    _rateResumeWordOffset = -1;
   }
 
   int _systemOffset(int sentence, int requested) {
@@ -379,7 +409,7 @@ class TtsReader {
     // Completed prefetches remain useful, including while offline.
     _prefetchIndex = _index;
     _prefetchCompletes = 0;
-    return _playCurrent(continueSentence: continueSentence);
+    return _playCurrent(continueSentence: continueSentence, initialWordOffset: _rateResumeWordOffset);
   }
 
   /// 停止并回到起始
@@ -519,7 +549,7 @@ class TtsReader {
 
   /// 播放当前句（优先用预取缓存，否则查盘/现合成）。
   /// 返回 true=已进入播放；false=失败或章节结束（失败时会先触发 onError）。
-  Future<bool> _playCurrent({bool continueSentence = false, int initialTtsOffset = 0}) async {
+  Future<bool> _playCurrent({bool continueSentence = false, int initialTtsOffset = 0, int initialWordOffset = -1}) async {
     if (_disposed) return false;
     if (_state != TtsState.playing) return false;
     if (_index < 0 || _index >= _sentences.length) {
@@ -560,7 +590,7 @@ class TtsReader {
     // not an unrelated UI timer that can report failure while still loading.
     Uint8List audio;
     final retained = continueSentence && _retainedAudioIndex == sentence ? _retainedAudio : null;
-    final resumePosition = retained != null ? _resumePosition : Duration.zero;
+    var resumePosition = retained != null ? _resumePosition : Duration.zero;
     try { audio = retained ?? await _obtainAudio(sentence).timeout(const Duration(seconds: 30)); }
     catch (error) {
       if (!_disposed && generation == _playGeneration) {
@@ -571,6 +601,16 @@ class TtsReader {
     }
     if (_disposed || _state != TtsState.playing || generation != _playGeneration || sentence != _index) return false;
     _activeWords = retained != null ? _retainedWords : (_wordCache[sentence] ?? []);
+    // A newly synthesized rate has different timings. Resume only at the same
+    // reported word's new, actual boundary; never estimate a proportional seek.
+    if (retained == null && initialWordOffset >= 0) {
+      for (final word in _activeWords) {
+        if (word.textStart == initialWordOffset) {
+          resumePosition = Duration(microseconds: word.startMicros);
+          break;
+        }
+      }
+    }
     if (audio.isEmpty) {
       // Keep the current sentence on failure; do not silently skip unread text.
       final error = _audioFailures[sentence] ?? (!_networkAvailable
@@ -592,7 +632,8 @@ class TtsReader {
           .timeout(const Duration(seconds: 15));
         if (_disposed || generation != _playGeneration || sentence != _index || _state != TtsState.playing) return false;
         _activeAudioIndex = sentence; _position = resumePosition;
-        if (continueSentence) _updateWord(resumePosition);
+        _rateResumeWordOffset = -1;
+        if (continueSentence || initialWordOffset >= 0) _updateWord(resumePosition);
         onLoadingChanged?.call(false);
         if (_prefetchIndex < sentence) _prefetchIndex = sentence;
         _startPrefetch();

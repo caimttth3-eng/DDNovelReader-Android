@@ -1636,12 +1636,15 @@ void main() {
     expect((await storage.loadSettings())['sentenceDragDelay'], 0.4);
     final pause = find.byKey(const ValueKey('pause-comma'));
     await tester.ensureVisible(pause); await tester.pumpAndSettle();
-    tester.widget<Slider>(pause).onChanged!(350); tester.widget<Slider>(pause).onChangeEnd!(350); await tester.pumpAndSettle();
+    await tester.tap(pause); await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('pause-number-comma')), '350');
+    await tester.tap(find.text('确定').last); await tester.pumpAndSettle();
+    final apply = find.byKey(const ValueKey('pause-apply'));
+    await tester.ensureVisible(apply); await tester.tap(apply); await tester.pumpAndSettle();
     expect(speech.startCalls, 1, reason: 'Changing pauses while paused must not start speech');
     expect(((await storage.loadSettings())['speechPauses'] as Map)['comma'], 350);
     expect((await storage.loadSettings())['keepScreenMinutes'], 15);
     expect((await storage.loadSettings())['readingScreenSeconds'], 60);
-    await tester.tapAt(const Offset(195, 80)); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     expect(speech.startCalls, 2); expect(speech.lastPauses, contains(350));
     expect(volumeCalls.lastWhere((call) => call.method == 'setKeepScreenOn').arguments, isTrue);
@@ -1873,7 +1876,10 @@ void main() {
           final bounds = tester.getRect(body);
           final rows = laidOutRows(), complete = rows.where((row) => row.$2.top >= bounds.top - 0.5).toList();
           final previous = rows.where((row) => row.$2.bottom <= complete.first.$2.top + 0.5).toList();
-          expect(previous, isNotEmpty);
+          expect(previous, isNotEmpty, reason: 'chapter=$chapter page=$page anchor=$before '
+            'body=$bounds rowCount=${rows.length} '
+            'positions=${tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value} '
+            'firstRows=${rows.take(8).map((row) => '${row.$2.top.toStringAsFixed(2)}..${row.$2.bottom.toStringAsFixed(2)}:${row.$1.substring(0, row.$1.length.clamp(0, 28))}').join('; ')}');
           final end = previous.last.$2.bottom;
           final target = previous.firstWhere((row) => end - row.$2.top <= bounds.height + 0.5).$1;
           await tester.tapAt(const Offset(60, 360)); await tester.pumpAndSettle();
