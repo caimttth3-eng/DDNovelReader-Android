@@ -3192,7 +3192,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           SpeechPauseEditor(voiceId: voice, initialPauses: _settings.speechPausesForVoice(voice),
             globalPauses: _settings.speechPauses, initiallyExpanded: true,
             onApply: (selection) => Navigator.pop(ctx, selection)),
-        ])))));
+        ]))));
     if (selected != null && mounted) await _applySpeechPauseSelection(selected);
   }
 
