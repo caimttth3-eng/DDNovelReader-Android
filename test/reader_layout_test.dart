@@ -1031,19 +1031,19 @@ void main() {
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural'))); await tester.pumpAndSettle();
-    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 晓晓（女·温暖） · 语速 1.80x');
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 晓晓（女·温暖） · 语速 1.8x');
     await _captureReaderPreview(tester, preview, 'reader-selected-voice-cache');
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await _captureReaderPreview(tester, preview, 'reader-voice-menu-cache-actions');
     await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-YunxiNeural'))); await tester.pumpAndSettle();
-    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.80x');
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.8x');
     expect(speech.voice, TtsReader.defaultVoice, reason: 'Opening another voice cache must not change the playing voice');
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await tester.tap(find.text('云希（男·阳光）')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-YunxiNeural'))); await tester.pumpAndSettle();
-    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.80x');
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.8x');
     await tester.tap(find.text('清除缓存')); await tester.pumpAndSettle();
     expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('云希（男·阳光）')), findsOneWidget);
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('确定'))); await tester.pumpAndSettle();
@@ -1625,11 +1625,11 @@ void main() {
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     expect(volumeCalls.lastWhere((call) => call.method == 'setKeepScreenOn').arguments, isFalse);
     await tester.tap(find.byKey(const ValueKey('reading-rate-plus'))); await tester.pumpAndSettle();
-    expect(find.text('语速 1.02x'), findsOneWidget);
-    expect(tester.widget<Slider>(find.byKey(const ValueKey('reading-rate-slider'))).divisions, 125);
-    tester.widget<Slider>(find.byKey(const ValueKey('reading-rate-slider'))).onChanged!(1.26); await tester.pumpAndSettle();
+    expect(find.text('语速 1.1x'), findsOneWidget);
+    expect(tester.widget<Slider>(find.byKey(const ValueKey('reading-rate-slider'))).divisions, 25);
+    tester.widget<Slider>(find.byKey(const ValueKey('reading-rate-slider'))).onChanged!(1.3); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reading-rate-minus'))); await tester.pumpAndSettle();
-    expect(speech.speechRate, 1.24); expect((await storage.loadSettings())['speechRate'], 1.24);
+    expect(speech.speechRate, 1.2); expect((await storage.loadSettings())['speechRate'], 1.2);
     expect(find.byKey(const ValueKey('reading-prefetch')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
     tester.widget<Slider>(find.byKey(const ValueKey('sentence-drag-delay'))).onChanged!(0.4); await tester.pumpAndSettle();
@@ -1876,16 +1876,16 @@ void main() {
           final bounds = tester.getRect(body);
           final rows = laidOutRows(), complete = rows.where((row) => row.$2.top >= bounds.top - 0.5).toList();
           final previous = rows.where((row) => row.$2.bottom <= complete.first.$2.top + 0.5).toList();
-          expect(previous, isNotEmpty, reason: 'chapter=$chapter page=$page anchor=$before '
-            'body=$bounds rowCount=${rows.length} '
-            'positions=${tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value} '
-            'firstRows=${rows.take(8).map((row) => '${row.$2.top.toStringAsFixed(2)}..${row.$2.bottom.toStringAsFixed(2)}:${row.$1.substring(0, row.$1.length.clamp(0, 28))}').join('; ')}');
-          final end = previous.last.$2.bottom;
-          final target = previous.firstWhere((row) => end - row.$2.top <= bounds.height + 0.5).$1;
+          final target = previous.isEmpty ? null : previous.firstWhere((row) => previous.last.$2.bottom - row.$2.top <= bounds.height + 0.5).$1;
           await tester.tapAt(const Offset(60, 360)); await tester.pumpAndSettle();
           expect(viewportAnchor(), isNot(before), reason: 'Each left-side tap must really move to the previous page');
           final landed = laidOutRows().firstWhere((row) => row.$2.bottom > tester.getRect(body).top + 0.5);
-          expect(landed.$1, target, reason: 'The actual first row must remain the selected previous-page row after the indexed list settles');
+          if (target != null) {
+            expect(landed.$1, target, reason: 'The actual first row must remain the selected previous-page row after the indexed list settles');
+          } else {
+            expect(landed.$1, contains('第$chapter章第7段。'),
+              reason: 'An uncached chapter boundary must prepare the preceding chapter final paragraph before paging');
+          }
           expect(landed.$2.top, closeTo(tester.getRect(body).top, 0.25),
             reason: 'The selected row must land at zero actual pixel offset, not a partial row');
           if (chapter == 5 && page == 0) {

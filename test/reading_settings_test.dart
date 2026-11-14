@@ -10,16 +10,16 @@ void main() {
     expect(s.pageTurnAnimation, 'off'); expect(s.followSystemRotation, isFalse);
     expect(s.sentenceDragDelay, 0.2); expect(s.keepScreenMinutes, 0); expect(s.readingScreenSeconds, 0);
     s.pageTurnAnimation = 'slide'; s.followSystemRotation = true; s.sentenceDragDelay = 0.4;
-    s.keepScreenMinutes = 90; s.readingScreenSeconds = 120; s.speechRate = 1.24;
+    s.keepScreenMinutes = 90; s.readingScreenSeconds = 120; s.speechRate = 1.2;
     s.speechPauses = s.speechPauses.withPause(SpeechPauseKind.comma, 350);
     final restored = ReadingSettings.fromJson(s.toJson());
     expect(restored.pageTurnAnimation, 'slide'); expect(restored.followSystemRotation, isTrue);
     expect(restored.sentenceDragDelay, 0.4); expect(restored.keepScreenMinutes, 90); expect(restored.readingScreenSeconds, 120);
-    expect(restored.speechRate, 1.24); expect(restored.speechPauses.millisecondsFor(SpeechPauseKind.comma), 350);
+    expect(restored.speechRate, 1.2); expect(restored.speechPauses.millisecondsFor(SpeechPauseKind.comma), 350);
     final clamped = ReadingSettings.fromJson({'sentenceDragDelay': 9, 'pageTurnAnimation': 'unknown',
       'keepScreenMinutes': 999, 'readingScreenSeconds': 7, 'speechRate': 1.234});
     expect(clamped.sentenceDragDelay, 0.5); expect(clamped.pageTurnAnimation, 'off');
-    expect(clamped.keepScreenMinutes, 120); expect(clamped.readingScreenSeconds, 0); expect(clamped.speechRate, 1.24);
+    expect(clamped.keepScreenMinutes, 120); expect(clamped.readingScreenSeconds, 0); expect(clamped.speechRate, 1.2);
   });
   test('removed short reading durations return to system while minute choices survive', () {
     for (final seconds in [5, 15, 30]) {

@@ -1248,10 +1248,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (_ttsLoading || _paging || _items.isEmpty || !_itemScrollController.isAttached) return false;
     final old = _visibleItems();
     if (old.isEmpty) return false;
+    final oldEndKey = _pageEndKey, oldClipBottom = _pageClipBottom;
     if (!automatic && _autoActive) _autoClock.stop();
     _paging = true;
     _pendingScrollIndex = null;
-    _navigationGeneration++;
+    final navigation = ++_navigationGeneration;
     final boundary = _pageBoundary.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     try {
       if (_settings.pageTurnAnimation == 'slide' && boundary != null && !boundary.debugNeedsPaint) {
@@ -1270,7 +1271,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     var moved = false;
     try {
       await WidgetsBinding.instance.endOfFrame;
-      if (!mounted) return false;
+      if (!mounted || navigation != _navigationGeneration) return false;
       final rows = _pageLines();
       final clip = _pageClipBottom ?? _bodyHeight;
       final complete = rows.where((r) => r.top >= -0.5 && r.bottom <= clip + 0.5).toList();
@@ -1286,20 +1287,18 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       } else {
         final first = complete.first;
         final candidates = rows.where((r) => retain ? r.top <= first.top + 0.5 : r.bottom <= first.top + 0.5).toList();
-        if (candidates.isEmpty) return false;
-        final end = candidates.last;
-        final fitting = candidates.where((r) => end.bottom - r.top <= _bodyHeight + 0.5).toList();
-        if (fitting.isEmpty) return false;
-        target = fitting.first; _pageEndKey = end.key;
+        if (candidates.isEmpty || retain && candidates.every((line) => line.key == first.key)) {
+          target = await _preparePreviousPage(first, navigation, retain: retain);
+          if (target == null) return false;
+        } else {
+          final end = candidates.last;
+          final fitting = candidates.where((r) => end.bottom - r.top <= _bodyHeight + 0.5).toList();
+          if (fitting.isEmpty) return false;
+          target = fitting.first; _pageEndKey = end.key;
+        }
       }
-      if (target.top.abs() < 0.5) return false;
       // Move to an actual text-line boundary behind the frozen outgoing page.
-      await _pageScrollController.animateScroll(
-        offset: target.top,
-        duration: const Duration(milliseconds: 1),
-      );
-      await WidgetsBinding.instance.endOfFrame;
-      if (!mounted) return false;
+      if (!await _alignPageLine(target, navigation)) return false;
       _updatePageGeometry();
       final visible = _visibleItems();
       if (visible.isEmpty) {
@@ -1323,6 +1322,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     } on TickerCanceled {
       return false;
     } finally {
+      if (mounted && !moved && navigation == _navigationGeneration) {
+        _pageEndKey = oldEndKey;
+        await _positionViewport(old.first.index, old.first.itemLeadingEdge);
+        if (mounted) _pageClipBottom = oldClipBottom;
+      }
       if (mounted) {
         final image = _pageImage; _pageImage = null;
         setState(() { _outgoingPage = null; _pageReady = false; _paging = false; });
@@ -1332,6 +1336,59 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         if (!automatic && _autoActive && !_autoPaused) _autoClock.forward(from: 0);
       }
     }
+  }
+
+  Future<_PageLine?> _preparePreviousPage(_PageLine first, int navigation, {bool retain = false}) async {
+    if (first.itemIndex <= 0) return null;
+    final previousItem = first.itemIndex - 1;
+    // A distant TOC jump centres a new indexed list. Its preceding sliver can
+    // have no laid-out text at all; visit the previous item before measuring it.
+    _itemScrollController.jumpTo(index: previousItem, alignment: 1);
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || navigation != _navigationGeneration) return null;
+    final previous = _pageLines().where((line) => line.itemIndex == previousItem).toList();
+    if (previous.isEmpty) return null;
+    var endKey = previous.last.key;
+    await _pageScrollController.animateScroll(offset: previous.last.bottom - _bodyHeight,
+      duration: const Duration(milliseconds: 1));
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || navigation != _navigationGeneration) return null;
+    var rows = _pageLines();
+    if (retain) {
+      final overlap = rows.where((line) => line.key == first.key);
+      if (overlap.isNotEmpty) {
+        endKey = first.key;
+        await _pageScrollController.animateScroll(offset: overlap.first.bottom - _bodyHeight,
+          duration: const Duration(milliseconds: 1));
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted || navigation != _navigationGeneration) return null;
+        rows = _pageLines();
+      }
+    }
+    final ends = rows.where((line) => line.key == endKey);
+    if (ends.isEmpty) return null;
+    final end = ends.first;
+    final fitting = rows.where((line) => line.bottom <= end.bottom + 0.5 && end.bottom - line.top <= _bodyHeight + 0.5).toList();
+    if (fitting.isEmpty) return null;
+    _pageEndKey = end.key;
+    return fitting.first;
+  }
+
+  Future<bool> _alignPageLine(_PageLine target, int navigation) async {
+    var offset = target.top;
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if (!mounted || navigation != _navigationGeneration) return false;
+      if (offset.abs() > 0.25) {
+        await _pageScrollController.animateScroll(offset: offset, duration: const Duration(milliseconds: 1));
+      }
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || navigation != _navigationGeneration) return false;
+      final matches = _pageLines().where((line) => line.key == target.key);
+      if (matches.isEmpty) return false;
+      offset = matches.first.top;
+      if (offset.abs() <= 0.25) return true;
+    }
+    return false;
   }
 
   List<ItemPosition> _visibleItems() => _itemPositionsListener.itemPositions.value
@@ -1374,7 +1431,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       }
       for (final rect in lines) {
         final start = render.getPositionForOffset(Offset(-10000, rect.center.dy)).offset;
-        result.add(_PageLine('${entry.key}/$start', top + rect.top, top + rect.bottom));
+        result.add(_PageLine('${entry.key}/$start', top + rect.top, top + rect.bottom, entry.key));
       }
     }
     result.sort((a,b) => a.top.compareTo(b.top));
@@ -2889,19 +2946,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   onChanged: _setMediaVolume)),
                 const SizedBox(width: 44, height: 44, child: Icon(Icons.volume_up, color: Color(0xFF9BC5DD), size: 20)),
               ]),
-              Text(T('rateLabel', {'rate': rate.toStringAsFixed(2)}),
+              Text(T('rateLabel', {'rate': rate.toStringAsFixed(1)}),
                 style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 12)),
               Row(children: [
                 SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-minus'),
                   padding: EdgeInsets.zero, icon: const Icon(Icons.remove_circle_outline, color: Color(0xFF9BC5DD)),
-                  onPressed: () => _adjustRate(-0.02))),
+                  onPressed: () => _adjustRate(-0.1))),
                 Expanded(child: Slider(key: const ValueKey('reading-rate-slider'),
                   padding: const EdgeInsets.symmetric(horizontal: 12), value: rate.clamp(0.5, 3.0),
-                  min: 0.5, max: 3, divisions: 125, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
+                  min: 0.5, max: 3, divisions: 25, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
                   onChanged: _setRate)),
                 SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-plus'),
                   padding: EdgeInsets.zero, icon: const Icon(Icons.add_circle_outline, color: Color(0xFF9BC5DD)),
-                  onPressed: () => _adjustRate(0.02))),
+                  onPressed: () => _adjustRate(0.1))),
               ]),
               const SizedBox(height: 4),
               if (_tts.usingSystemFallback) Padding(key: const ValueKey('tts-offline-fallback'),
@@ -3010,7 +3067,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _setRate(double rate) {
-    rate = (rate.clamp(0.5, 3.0) * 50).round() / 50;
+    rate = (rate.clamp(0.5, 3.0) * 10).round() / 10;
     _settings.speechRate = rate;
     _tts.setSpeechRate(rate);
     _refreshTtsCache();
@@ -3064,12 +3121,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             })),
           ListTile(title: Text(T('additionalPauses')), subtitle: Text('${T('pauseDescription')}\n${T('pauseDraftHint')}')),
           for (final kind in SpeechPauseKind.values) Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(children: [
-            Expanded(child: Text(T('pause-${kind.name}'))),
-            IconButton(key: ValueKey('pause-${kind.name}-minus'), icon: const Icon(Icons.remove), padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 40, height: 48),
-              onPressed: pauses.millisecondsFor(kind) == SpeechPauseSettings.minimum ? null :
-                () => update(() => pauses = pauses.withPause(kind, pauses.millisecondsFor(kind) - SpeechPauseSettings.step))),
-            SizedBox(width: 96, child: TextButton(key: ValueKey('pause-${kind.name}'),
+            SizedBox(width: 64, child: Text(T('pause-${kind.name}'))),
+            SizedBox(width: 80, child: TextButton(key: ValueKey('pause-${kind.name}'),
               child: FittedBox(fit: BoxFit.scaleDown, child: Text(T('pauseMilliseconds', {'n': '${pauses.millisecondsFor(kind)}'}))),
               onPressed: () async {
                 final value = await showDialog<int>(context: ctx, builder: (_) => _IntegerInputDialog(
@@ -3077,10 +3130,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   maximum: SpeechPauseSettings.maximum, inputKey: ValueKey('pause-number-${kind.name}')));
                 if (value != null && ctx.mounted) update(() => pauses = pauses.withPause(kind, value));
               })),
-            IconButton(key: ValueKey('pause-${kind.name}-plus'), icon: const Icon(Icons.add), padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 40, height: 48),
-              onPressed: pauses.millisecondsFor(kind) == SpeechPauseSettings.maximum ? null :
-                () => update(() => pauses = pauses.withPause(kind, pauses.millisecondsFor(kind) + SpeechPauseSettings.step))),
+            Expanded(child: Slider(key: ValueKey('pause-slider-${kind.name}'),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              min: SpeechPauseSettings.minimum.toDouble(), max: SpeechPauseSettings.maximum.toDouble(),
+              divisions: (SpeechPauseSettings.maximum - SpeechPauseSettings.minimum) ~/ SpeechPauseSettings.step,
+              value: pauses.millisecondsFor(kind).toDouble(),
+              onChanged: (value) => update(() => pauses = pauses.withPause(kind, value.round())))),
           ])),
           Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child:
             FilledButton(key: const ValueKey('pause-apply'), onPressed: pauses == _settings.speechPauses ? null :
@@ -3435,7 +3490,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                         ],
                       ),
                       const SizedBox(height: 10),
-                      Text('${T('voice')}: ${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(2)})}',
+                      Text('${T('voice')}: ${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(1)})}',
                         key: const ValueKey('cache-binding'), style: const TextStyle(fontSize: 13)),
                       const SizedBox(height: 14),
                       Row(
@@ -3510,7 +3565,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                                       context: ctx,
                                       builder: (dctx) => AlertDialog(
                                         title: Text(T('cacheClear')),
-                                        content: Text('${T('cacheClearSelectedConfirm')}\n${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(2)})}'),
+                                        content: Text('${T('cacheClearSelectedConfirm')}\n${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(1)})}'),
                                         actions: [
                                           TextButton(
                                             onPressed: () =>
@@ -4727,7 +4782,8 @@ class _ReaderLineAnchor {
 class _PageLine {
   final String key;
   final double top, bottom;
-  const _PageLine(this.key, this.top, this.bottom);
+  final int itemIndex;
+  const _PageLine(this.key, this.top, this.bottom, this.itemIndex);
 }
 
 class _ReaderPageClipper extends CustomClipper<Rect> {

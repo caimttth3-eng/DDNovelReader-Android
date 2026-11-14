@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -52,6 +56,12 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     tester.platformDispatcher.textScaleFactorTestValue = 1.3;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    const fontPath = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc';
+    if (File(fontPath).existsSync()) {
+      final loader = FontLoader('Roboto');
+      loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
+      await loader.load();
+    }
     final storage = AppStorage();
     await storage.saveSettings((ReadingSettings()..voice = TtsReader.systemVoice).toJson());
     const channel = MethodChannel('com.ddnovelreader/system_tts');
@@ -72,7 +82,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     final book = Book(id: 'pause-system-cursor', title: '停顿', filePath: '', format: BookFormat.txt,
       addedAt: DateTime(2026), chapters: [Chapter(title: '正文', paragraphs: [ReadingText.paragraph('甲乙丙丁，戊己庚辛壬癸。')])]);
-    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage)));
+    final preview = GlobalKey();
+    await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(home: ReaderScreen(book: book, storage: storage))));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     expect(spoken, hasLength(1));
@@ -81,16 +92,41 @@ void main() {
     final requests = <ReaderPreparationRequest>[];
     final prepared = Completer<PreparedReadingBook>();
     ReaderPreparation.runnerForTesting = (request) { requests.add(request); return prepared.future; };
+    Future<void> scrollTo(Finder target) async {
+      // The narrow, enlarged-text sheet lazily builds its offscreen rows.
+      // Scroll its own viewport so absent controls are actually mounted.
+      final scrollable = find.descendant(of: find.byType(BottomSheet), matching: find.byType(Scrollable)).last;
+      await tester.scrollUntilVisible(target, 180, scrollable: scrollable);
+      await tester.pumpAndSettle();
+    }
     Future<void> openMenu() async {
       await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
-      await tester.ensureVisible(find.byKey(const ValueKey('pause-comma-plus'))); await tester.pumpAndSettle();
+      await scrollTo(find.byKey(const ValueKey('pause-slider-comma')));
     }
     await openMenu();
-    for (var i = 0; i < 5; i++) { await tester.tap(find.byKey(const ValueKey('pause-comma-plus'))); await tester.pump(); }
-    await tester.tap(find.byKey(const ValueKey('pause-comma-minus'))); await tester.pump();
+    final comma = find.byKey(const ValueKey('pause-slider-comma'));
+    final semicolon = find.byKey(const ValueKey('pause-slider-semicolon'));
+    final before = tester.getRect(comma), next = tester.getRect(semicolon);
+    expect(before.left, next.left); expect(before.right, next.right);
+    expect(tester.getRect(find.byKey(const ValueKey('pause-comma'))).right, lessThanOrEqualTo(before.left),
+      reason: 'The numeric value is a fixed middle column before the short slider');
+    await tester.drag(comma, const Offset(20, 0)); await tester.pumpAndSettle();
+    expect(tester.widget<Slider>(comma).value, greaterThan(0));
+    expect(tester.getRect(comma).left, before.left); expect(tester.getRect(comma).right, before.right);
+    expect(tester.getRect(semicolon).left, before.left); expect(tester.getRect(semicolon).right, before.right);
     expect(requests, isEmpty);
     expect((await storage.loadSettings())['speechPauses']['comma'], 0);
-    expect(find.byWidgetPredicate((w) => w is Slider && w.key.toString().contains('pause-comma')), findsNothing);
+    if (Platform.isLinux) {
+      await tester.runAsync(() async {
+        final boundary = preview.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+        final image = await boundary.toImage(pixelRatio: 2);
+        try {
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          await Directory('build/ui-previews').create(recursive: true);
+          await File('build/ui-previews/reader-pause-settings.png').writeAsBytes(bytes!.buffer.asUint8List());
+        } finally { image.dispose(); }
+      });
+    }
     await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
     expect(requests, isEmpty);
     await openMenu();
@@ -98,7 +134,7 @@ void main() {
     await tester.enterText(find.byKey(const ValueKey('pause-number-comma')), '250');
     await tester.tap(find.text('确定').last); await tester.pumpAndSettle();
     final apply = find.byKey(const ValueKey('pause-apply'));
-    await tester.ensureVisible(apply); await tester.tap(apply); await tester.pumpAndSettle();
+    await scrollTo(apply); await tester.tap(apply); await tester.pumpAndSettle();
     expect(requests, hasLength(1)); expect(spoken, hasLength(1));
     expect((await storage.loadSettings())['speechPauses']['comma'], 0, reason: 'The old settings remain valid until preparation succeeds');
     await tester.pump(const Duration(milliseconds: 16));
