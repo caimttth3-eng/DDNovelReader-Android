@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/progress.dart';
+import 'speech_breaks.dart';
 
 /// 本地持久化：
 ///  - 书架书籍列表（BookMeta）
@@ -115,6 +116,12 @@ class ReadingSettings {
   bool automaticBrightness = true;
   int autoPageSeconds = 20;
   String pageTurnMode = 'tap';
+  String pageTurnAnimation = 'off';
+  bool followSystemRotation = false;
+  double sentenceDragDelay = 0.2;
+  int keepScreenMinutes = 0;
+  int readingScreenSeconds = 0;
+  SpeechPauseSettings speechPauses = const SpeechPauseSettings();
   bool retainPageLine = false;
   bool mergeNonSentenceBreaks = true;
   bool firstLineIndent = true;
@@ -139,6 +146,12 @@ class ReadingSettings {
         'automaticBrightness': automaticBrightness,
         'autoPageSeconds': autoPageSeconds,
         'pageTurnMode': pageTurnMode,
+        'pageTurnAnimation': pageTurnAnimation,
+        'followSystemRotation': followSystemRotation,
+        'sentenceDragDelay': sentenceDragDelay,
+        'keepScreenMinutes': keepScreenMinutes,
+        'readingScreenSeconds': readingScreenSeconds,
+        'speechPauses': speechPauses.toJson(),
         'retainPageLine': retainPageLine,
         'textCorrection': mergeNonSentenceBreaks,
         'firstLineIndent': firstLineIndent,
@@ -168,6 +181,13 @@ class ReadingSettings {
     }
     s.autoPageSeconds = ((json['autoPageSeconds'] as num?)?.toInt() ?? 20).clamp(1, 120);
     final mode = json['pageTurnMode'];
+    s.pageTurnAnimation = json['pageTurnAnimation'] == 'slide' ? 'slide' : 'off';
+    s.followSystemRotation = json['followSystemRotation'] as bool? ?? false;
+    s.sentenceDragDelay = ((((json['sentenceDragDelay'] as num?)?.toDouble() ?? 0.2).clamp(0, 0.5) * 10).round() / 10);
+    s.keepScreenMinutes = ((json['keepScreenMinutes'] as num?)?.toInt() ?? 0).clamp(0, 120);
+    final readingSeconds = (json['readingScreenSeconds'] as num?)?.toInt();
+    s.readingScreenSeconds = [0, 60, 120, 300, 600, 1800].contains(readingSeconds) ? readingSeconds! : 0;
+    s.speechPauses = SpeechPauseSettings.fromJson(json['speechPauses']);
     s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'tap';
     s.retainPageLine = json['retainPageLine'] as bool? ?? false;
     s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
@@ -182,7 +202,7 @@ class ReadingSettings {
     s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'links';
     s.fontSize = ((json['fontSize'] as num?)?.toDouble() ?? s.fontSize).clamp(14, 64);
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
-    s.speechRate = ((json['speechRate'] as num?)?.toDouble() ?? s.speechRate).clamp(0.5, 3.0);
+    s.speechRate = (((json['speechRate'] as num?)?.toDouble() ?? s.speechRate).clamp(0.5, 3.0) * 50).round() / 50;
     s.prefetchSentences = ((json['prefetchSentences'] as num?)?.toInt() ?? defaultPrefetchSentences)
       .clamp(minPrefetchSentences, maxPrefetchSentences);
     s.voice = json['voice'] as String? ?? '';

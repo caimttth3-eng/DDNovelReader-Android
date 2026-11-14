@@ -27,7 +27,7 @@ class SnapshotLookup {
 class BookSnapshotCache {
   static final shared = BookSnapshotCache();
   // Bump when parser/preparation semantics or the serialized graph change.
-  static const schema = 1;
+  static const schema = 2;
   static const maxBytes = 64 * 1024 * 1024;
   final String? directoryPath;
   int _generation = 0;
@@ -55,7 +55,7 @@ class BookSnapshotCache {
     final generation = ++_generation;
     final key = <Object>[meta.id, meta.title, meta.filePath, meta.format, meta.addedAt.toIso8601String(),
       settings.mergeNonSentenceBreaks, settings.firstLineIndent,
-      settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc];
+      settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc, settings.speechPauses.cacheKey];
     try {
       if (_memory != null && _same(_memoryKey, key)) {
         final current = await _stat(meta.filePath);
@@ -84,8 +84,9 @@ class BookSnapshotCache {
       final path = await _path();
       if (lookup._generation != _generation) return;
       final stamp = lookup._stamp!, key = [...lookup._key];
-      if (settings != null) key.replaceRange(5, 9, [settings.mergeNonSentenceBreaks, settings.firstLineIndent,
-        settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc]);
+      if (settings != null) key.replaceRange(5, 10, [settings.mergeNonSentenceBreaks, settings.firstLineIndent,
+        settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc,
+        settings.speechPauses.cacheKey]);
       if (lookup.snapshot != null && !lookup._needsPublish && _same(key, lookup._key)) return;
       _activeWriteGeneration = lookup._generation;
       try {

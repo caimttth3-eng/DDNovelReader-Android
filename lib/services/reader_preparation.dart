@@ -6,13 +6,15 @@ import 'app_storage.dart';
 import 'reader_header_layout.dart';
 import 'book_parser.dart';
 import 'reading_text.dart';
+import 'speech_breaks.dart';
 
 class ReaderPreparationRequest {
   final Book source;
   final bool merge, indent, autoExtractToc;
   final String filter;
+  final SpeechPauseSettings pauseSettings;
   const ReaderPreparationRequest(this.source, {required this.merge, required this.indent,
-    required this.filter, required this.autoExtractToc});
+    required this.filter, required this.autoExtractToc, this.pauseSettings = const SpeechPauseSettings()});
 }
 
 class PreparedReadingBook {
@@ -30,7 +32,7 @@ typedef ReaderPreparationRunner = Future<PreparedReadingBook> Function(ReaderPre
 
 bool _samePreparation(ReaderPreparationRequest a, ReaderPreparationRequest b) =>
   identical(a.source, b.source) && a.merge == b.merge && a.indent == b.indent &&
-  a.filter == b.filter && a.autoExtractToc == b.autoExtractToc;
+  a.filter == b.filter && a.autoExtractToc == b.autoExtractToc && a.pauseSettings == b.pauseSettings;
 
 class _PendingPreparation {
   final ReaderPreparationRequest request;
@@ -98,7 +100,8 @@ class ReaderPreparation {
   @visibleForTesting
   static PreparedReadingBook prepareSynchronously(ReaderPreparationRequest request) {
     final source = request.source;
-    final book = ReadingText.format(source, merge: request.merge, indent: request.indent, filter: request.filter);
+    final book = ReadingText.format(source, merge: request.merge, indent: request.indent, filter: request.filter,
+      pauseSettings: request.pauseSettings);
     final maps = ReadingText.sourceMapsForTransfer(book);
     final rawToc = BookParser.extractToc(source, autoExtractToc: request.autoExtractToc);
     final toc = <BookTocEntry>[], anchors = <int>[], titles = <bool>[];

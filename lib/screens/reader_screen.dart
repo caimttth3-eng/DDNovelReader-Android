@@ -13,6 +13,8 @@ import '../i18n.dart';
 import '../services/app_appearance.dart';
 import '../services/reading_text.dart';
 import '../services/reader_preparation.dart';
+import '../services/speech_breaks.dart';
+import '../services/reader_screen_awake.dart';
 import '../services/book_parser.dart';
 import '../services/reader_typography.dart';
 import '../services/text_cleaner.dart';
@@ -138,6 +140,7 @@ class _SentenceDragSession {
 
 class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   late final TtsReader _tts;
+  final ReaderScreenAwake _screenAwake = ReaderScreenAwake();
   StreamSubscription<bool>? _networkSubscription;
   final Map<(Size, double), DisplayCutoutGeometry> _cutoutGeometry = {};
   int _cutoutRevision = 0;
@@ -285,6 +288,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    SystemChrome.setPreferredOrientations(widget.initialData?.settings.followSystemRotation == true
+      ? DeviceOrientation.values : [DeviceOrientation.portraitUp]);
     AppAppearance.nightMode.addListener(_onAppearanceChanged);
     if (widget.initialData case final initial?) {
       _applySystemUi();
@@ -385,7 +390,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _permissionGate?.cancel(); _permissionGate = null;
     _volumePollTimer?.cancel(); _volumePollTimer = null; _volumePollEpoch++;
     WidgetsBinding.instance.removeObserver(this);
-    if (_autoActive) _volumeChannel.invokeMethod('setKeepScreenOn', false);
+    unawaited(_screenAwake.dispose());
     for (final recognizer in _sentenceRecognizers.values) { recognizer.dispose(); }
     _pageAnimation.dispose(); _autoClock.dispose();
     final image = _pageImage; _pageImage = null;
@@ -396,7 +401,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     // 退出前确保最后一次进度写入（防抖可能未触发）
     _saveProgress();
     _sleepTimer?.cancel();
-    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     _volumeChannel.invokeMethod('resetScreenBrightness');
     // 恢复系统默认系统栏样式（书架页浅色背景使用深色图标）
     _restoreSystemUiForExit();
@@ -427,7 +432,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   @override
   void didChangeMetrics() {
     if (!_viewportPrepared || _leavingReader) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted && !_leavingReader) _refreshDisplayCutout(); });
+    final playback = _playbackGeneration, navigation = _navigationGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _leavingReader) return;
+      await _refreshDisplayCutout();
+      if (!mounted || _leavingReader || playback != _playbackGeneration || navigation != _navigationGeneration) return;
+      _scheduleActiveSpeechAlignment();
+    });
   }
 
   Future<void> _prepareReaderViewport() async {
@@ -445,6 +456,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void _restoreSystemUiForExit() {
     if (_leavingReader) return;
     _leavingReader = true; _playbackGeneration++; _permissionGate?.cancel(); _sentenceDrag = null;
+    _syncScreenAwake();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge).catchError((Object _) {});
     final dark = AppAppearance.nightMode.value;
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(statusBarColor: Colors.transparent,
@@ -517,12 +529,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   // ---------- 设置 ----------
 
   String _formatSignature(ReadingSettings s) =>
-      '${s.mergeNonSentenceBreaks}/${s.firstLineIndent}/${s.informationFilter}/${s.informationFilterLevel}';
+      '${s.mergeNonSentenceBreaks}/${s.firstLineIndent}/${s.informationFilter}/${s.informationFilterLevel}/${s.speechPauses.cacheKey}';
 
   void _formatBook() {
     _textSignature = _formatSignature(_settings);
     final book = ReadingText.format(widget.book, merge: _settings.mergeNonSentenceBreaks,
       indent: _settings.firstLineIndent,
+      pauseSettings: _settings.speechPauses,
       filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none');
     _installFormattedBook(book, 'words1-${ReadingText.fingerprint(book)}');
     _rebuildToc();
@@ -604,6 +617,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(raw));
     final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
       merge: _settings.mergeNonSentenceBreaks, indent: _settings.firstLineIndent,
+      pauseSettings: _settings.speechPauses,
       filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none',
       autoExtractToc: _settings.autoExtractToc));
     await _viewportReady;
@@ -624,6 +638,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _applySystemUi();
     _tts.setSpeechRate(_settings.speechRate);
     _tts.setPrefetchSentences(_settings.prefetchSentences);
+    _applyRotationPreference();
     final restoreFallback = _settings.systemFallbackActive;
     _tts.setVoice(_settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice);
     _tts.restoreSystemFallback(restoreFallback);
@@ -1237,7 +1252,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _navigationGeneration++;
     final boundary = _pageBoundary.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     try {
-      if (boundary != null && !boundary.debugNeedsPaint) {
+      if (_settings.pageTurnAnimation == 'slide' && boundary != null && !boundary.debugNeedsPaint) {
         _pageImage = boundary.toImageSync(pixelRatio: MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.0));
       }
     } catch (_) { /* A page turn still works if a frame cannot be captured. */ }
@@ -1291,9 +1306,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       var targetItem = visible.first.index;
       while (targetItem < _items.length - 1 && _items[targetItem].isTitle) { targetItem++; }
       _updatePositionFromItem(targetItem);
-      _pageAnimation.value = 0;
-      setState(() => _pageReady = true);
-      await _pageAnimation.forward().orCancel;
+      if (_settings.pageTurnAnimation == 'slide') {
+        _pageAnimation.value = 0;
+        setState(() => _pageReady = true);
+        await _pageAnimation.forward().orCancel;
+      }
       if (mounted && _inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence),
         displayOffset: _visibleDisplayOffset(_chapter, _para));
       return true;
@@ -1821,6 +1838,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) _cancelSentenceDrag();
     _volumeForeground = state == AppLifecycleState.resumed;
+    _syncScreenAwake();
     _syncMediaVolumePolling();
     if (state == AppLifecycleState.resumed) _permissionGate?.resume();
     if (state == AppLifecycleState.hidden || state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
@@ -1837,9 +1855,22 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     } else if (_inReadingMode && _tts.state == TtsState.playing) {
       // Audio keeps playing in the background. Only refresh its cursor; never
       // restart audio or restore the viewport's older reading position.
-      if (!_isPlaying || _showReadingPanel) setState(() { _isPlaying = true; _showReadingPanel = false; });
-      _onTtsSentenceChanged(_tts.currentIndex);
+      setState(() { _isPlaying = true; _showReadingPanel = false; _showControls = false; });
+      _applySystemUi();
+      _scheduleActiveSpeechAlignment();
     }
+  }
+
+  void _scheduleActiveSpeechAlignment() {
+    final playback = _playbackGeneration, navigation = _navigationGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _leavingReader || !_volumeForeground || !_inReadingMode || _sentenceDrag != null ||
+        _tts.state != TtsState.playing || playback != _playbackGeneration || navigation != _navigationGeneration) return;
+      _onTtsSentenceChanged(_tts.currentIndex, follow: false);
+      final offset = _wordStart >= 0 ? _wordStart : _sentenceDisplayOffset(_chapter, _para, max(0, _ttsSentence), _tts.currentTtsOffset);
+      _followSentence(_chapter, _para, max(0, _ttsSentence), character: offset, alignToTop: true);
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   Future<PlaybackNotificationCheck> _checkPlaybackNotificationPermission() async {
@@ -1903,7 +1934,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     });
     widget.storage.saveSettings(_settings.toJson());
     _autoClock.duration = Duration(seconds: selected);
-    _volumeChannel.invokeMethod('setKeepScreenOn', true);
+    _syncScreenAwake();
     _autoClock.forward(from: 0);
   }
 
@@ -1916,20 +1947,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   void _pauseAutoPage() {
     _autoClock.stop();
-    _volumeChannel.invokeMethod('setKeepScreenOn', false);
     if (mounted) setState(() { _autoPaused = true; _showAutoPanel = true; });
+    _syncScreenAwake();
   }
 
   void _resumeAutoPage() {
-    _volumeChannel.invokeMethod('setKeepScreenOn', true);
     setState(() { _autoPaused = false; _showAutoPanel = false; _showControls = false; });
+    _syncScreenAwake();
     if (_autoClock.value >= 1) { _autoClock.forward(from: 0); } else { _autoClock.forward(); }
   }
 
   void _stopAutoPage() {
     _autoClock.stop(); _autoClock.value = 0;
-    _volumeChannel.invokeMethod('setKeepScreenOn', false);
     if (mounted) setState(() { _autoActive = false; _autoPaused = false; _showAutoPanel = false; _showControls = true; });
+    _syncScreenAwake();
   }
 
   Widget _buildAutoGuide() => AnimatedBuilder(animation: _autoClock, builder: (context, child) {
@@ -1990,11 +2021,16 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       ? (_settings.dayThemeIndex == 2 ? 0 : _settings.dayThemeIndex.clamp(0, _bookThemes.length - 1)) : 2);
 
   void _toggleOrientation() {
+    _settings.followSystemRotation = false;
+    widget.storage.saveSettings(_settings.toJson());
     final landscape = MediaQuery.orientationOf(context) == Orientation.landscape;
     SystemChrome.setPreferredOrientations(landscape
         ? [DeviceOrientation.portraitUp]
-        : [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+        : [DeviceOrientation.landscapeLeft]);
   }
+
+  void _applyRotationPreference() => SystemChrome.setPreferredOrientations(_settings.followSystemRotation
+    ? DeviceOrientation.values : [DeviceOrientation.portraitUp]);
 
   void _changeChapter(int direction) {
     _navigateToc(_currentTocIndex + direction);
@@ -2098,7 +2134,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       chapterTitle: title, chapterIndex: chapter);
   }
 
-  void _onTtsSentenceChanged(int idx) {
+  void _onTtsSentenceChanged(int idx, {bool follow = true}) {
     if (!mounted || !_inReadingMode || _sentenceDrag != null) return;
     if (idx < 0) return;
     if (_paging) {
@@ -2137,7 +2173,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _updateMediaChapter(c);
     // A replay after a page animation may already have the right sentence but
     // still need to bring it back inside the newly laid out viewport.
-    if (_itemScrollController.isAttached) _followSentence(c, p, s, character: _tts.currentTtsOffset > 0
+    if (follow && _volumeForeground && _itemScrollController.isAttached) _followSentence(c, p, s, character: _tts.currentTtsOffset > 0
       ? _sentenceDisplayOffset(c, p, s, _tts.currentTtsOffset) : null);
   }
 
@@ -2207,7 +2243,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   bool _ttsGlyphVisible(Rect glyph) => glyph.top >= -0.25 && glyph.bottom <= _ttsVisibleBottom + 0.25;
 
   Future<void> _ensureWordVisible(int offset) async {
-    if (_paging || _followingWord || _pendingScrollIndex != null || !_itemScrollController.isAttached) return;
+    if (!_volumeForeground || _paging || _followingWord || _pendingScrollIndex != null || !_itemScrollController.isAttached) return;
     _clearTtsPageBoundary();
     final glyph = _ttsGlyphRect(_chapter, _para, offset);
     if (glyph == null) {
@@ -2223,7 +2259,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (mounted) _scheduleSave();
   }
 
-  Future<void> _followSentence(int c, int p, int sentence, {int? character}) async {
+  Future<void> _followSentence(int c, int p, int sentence, {int? character, bool alignToTop = false}) async {
     _clearTtsPageBoundary();
     final index = _itemIndexOf(c, p);
     final paragraph = _book.chapters[c].paragraphs[p];
@@ -2240,14 +2276,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final top = boxes.isEmpty ? 0.0 : boxes.first.top + 10;
     painter.dispose();
     final glyph = _ttsGlyphRect(c, p, offset);
-    if (glyph != null && _ttsGlyphVisible(glyph)) return;
+    if (!alignToTop && glyph != null && _ttsGlyphVisible(glyph)) return;
     final before = _navigationGeneration;
+    final playback = _playbackGeneration;
     await _positionViewport(index, 0);
-    if (!mounted || _paging || _navigationGeneration != before + 1) return;
+    if (!mounted || _paging || _navigationGeneration != before + 1 || alignToTop && playback != _playbackGeneration) return;
     _pendingScrollIndex = null;
     final generation = _navigationGeneration;
     final positionedGlyph = _ttsGlyphRect(c, p, offset);
-    final contextSpace = _inReadingMode ? _ttsBodyHeight * 0.2 : 0.0;
+    final contextSpace = _inReadingMode && !alignToTop ? _ttsBodyHeight * 0.2 : 0.0;
     await _pageScrollController.animateScroll(offset: max(0.0, (positionedGlyph?.top ?? top) - contextSpace),
       duration: const Duration(milliseconds: 1));
     if (generation == _navigationGeneration) _scheduleSave();
@@ -2577,6 +2614,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   @override
   Widget build(BuildContext context) {
     _syncMediaVolumePolling();
+    _syncScreenAwake();
     if (!_settingsLoaded) {
       return PopScope(onPopInvokedWithResult: (didPop, result) { if (didPop) _restoreSystemUiForExit(); },
         child: const Scaffold(body: Center(child: CircularProgressIndicator())));
@@ -2587,7 +2625,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final header = _headerLayout.chapterTitle(_chapterBarTitle(_chapter));
     return PopScope(
       onPopInvokedWithResult: (didPop, result) { if (didPop) _restoreSystemUiForExit(); },
-      child: Scaffold(
+      child: Listener(onPointerDown: (_) => _screenAwake.interaction(), onPointerMove: (_) => _screenAwake.interaction(), child: Scaffold(
         backgroundColor: _theme.bg,
         body: Stack(
         children: [
@@ -2631,10 +2669,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             if (_autoActive) _buildAutoGuide(),
             if (_autoActive && _showAutoPanel) _buildAutoPanel(),
             _buildDimMask(),
-            // 假锁屏（最顶层，覆盖一切；长按 2 秒解锁）
           ],
         ),
-      ),
+      )),
     );
   }
 
@@ -2843,38 +2880,24 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   onChanged: _setMediaVolume)),
                 const SizedBox(width: 44, height: 44, child: Icon(Icons.volume_up, color: Color(0xFF9BC5DD), size: 20)),
               ]),
-              Text(T('rateLabel', {'rate': rate.toStringAsFixed(1)}),
+              Text(T('rateLabel', {'rate': rate.toStringAsFixed(2)}),
                 style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 12)),
               Row(children: [
                 SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-minus'),
                   padding: EdgeInsets.zero, icon: const Icon(Icons.remove_circle_outline, color: Color(0xFF9BC5DD)),
-                  onPressed: () => _adjustRate(-0.1))),
+                  onPressed: () => _adjustRate(-0.02))),
                 Expanded(child: Slider(key: const ValueKey('reading-rate-slider'),
                   padding: const EdgeInsets.symmetric(horizontal: 12), value: rate.clamp(0.5, 3.0),
-                  min: 0.5, max: 3, divisions: 25, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
+                  min: 0.5, max: 3, divisions: 125, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
                   onChanged: _setRate)),
                 SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-plus'),
                   padding: EdgeInsets.zero, icon: const Icon(Icons.add_circle_outline, color: Color(0xFF9BC5DD)),
-                  onPressed: () => _adjustRate(0.1))),
+                  onPressed: () => _adjustRate(0.02))),
               ]),
               const SizedBox(height: 4),
-              Material(color: Colors.transparent, child: SwitchListTile(key: const ValueKey('word-highlight'), dense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 6),
-                title: Text(T('wordHighlight'), style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 13)),
-                value: _settings.wordHighlightEnabled, onChanged: (enabled) {
-                  setState(() => _settings.wordHighlightEnabled = enabled);
-                  widget.storage.saveSettings(_settings.toJson());
-                })),
               if (_tts.usingSystemFallback) Padding(key: const ValueKey('tts-offline-fallback'),
                 padding: const EdgeInsets.only(bottom: 4), child: Text(T('offlineSystemVoice'),
                   style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 12))),
-              Material(color: Colors.transparent, child: ListTile(key: const ValueKey('reading-prefetch'), dense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 6),
-                title: Text(T('prefetchSentences', {'n': '${_settings.prefetchSentences}'}),
-                  style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 13)),
-                subtitle: Text(T('prefetchDescription'),
-                  style: const TextStyle(color: Color(0xFFA89060), fontSize: 11)),
-                trailing: const Icon(Icons.tune, color: Color(0xFF9BC5DD), size: 22),
-                onTap: _openPrefetchSettings)),
               // 功能按钮行
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -2894,6 +2917,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                     label: T('voiceWithName', {'name': _shortVoiceLabel(_effectiveVoice)}), singleLine: true,
                     onTap: _openVoiceSelector,
                   ),
+                  _panelButton(
+                    key: const ValueKey('playback-settings'), icon: Icons.settings_outlined,
+                    label: T('playbackSettings'), onTap: _openPlaybackSettings),
                   _panelButton(
                     icon: Icons.power_settings_new,
                     label: T('exit'),
@@ -2975,6 +3001,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _setRate(double rate) {
+    rate = (rate.clamp(0.5, 3.0) * 50).round() / 50;
     _settings.speechRate = rate;
     _tts.setSpeechRate(rate);
     _refreshTtsCache();
@@ -2991,6 +3018,79 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _tts.setPrefetchSentences(count);
     widget.storage.saveSettings(_settings.toJson());
     setState(() {});
+  }
+
+  Future<void> _openPlaybackSettings() async {
+    await showModalBottomSheet<void>(context: context, isScrollControlled: true,
+      builder: (context) => StatefulBuilder(builder: (ctx, update) => SafeArea(child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
+        child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(16), children: [
+          Text(T('playbackSettings'), style: Theme.of(ctx).textTheme.titleMedium),
+          SwitchListTile(key: const ValueKey('word-highlight'), title: Text(T('wordHighlight')),
+            value: _settings.wordHighlightEnabled, onChanged: (value) {
+              setState(() => _settings.wordHighlightEnabled = value); update(() {}); widget.storage.saveSettings(_settings.toJson());
+            }),
+          ListTile(key: const ValueKey('reading-prefetch'), title: Text(T('prefetchSentences', {'n': '${_settings.prefetchSentences}'})),
+            subtitle: Text(T('prefetchDescription')), trailing: const Icon(Icons.tune),
+            onTap: () async { await _openPrefetchSettings(); if (ctx.mounted) update(() {}); }),
+          ListTile(title: Text(T('sentenceDragDelay', {'n': _settings.sentenceDragDelay.toStringAsFixed(1)}))),
+          Slider(key: const ValueKey('sentence-drag-delay'), value: _settings.sentenceDragDelay,
+            min: 0, max: 0.5, divisions: 5, onChanged: (value) {
+              setState(() => _settings.sentenceDragDelay = (value * 10).round() / 10); update(() {}); widget.storage.saveSettings(_settings.toJson());
+            }),
+          ListTile(key: const ValueKey('screen-awake'), title: Text(T('screenAwake')),
+            subtitle: Text('${T('voiceScreenAwakeDescription')}\n${T('screenTimeoutDescription')}'), trailing: DropdownButton<int>(
+            value: [0, 15, 30, 60, 90].contains(_settings.keepScreenMinutes) ? _settings.keepScreenMinutes : -1,
+            items: [for (final minutes in [0, 15, 30, 60, 90, -1]) DropdownMenuItem(value: minutes,
+              child: Text(minutes == 0 ? T('systemScreenAwake') : minutes == -1 ? T('customScreenAwake') : T('minutes', {'m': '$minutes'})))],
+            onChanged: (value) async {
+              if (value == null) return;
+              final chosen = value == -1 ? await showDialog<int>(context: ctx, builder: (_) => _IntegerInputDialog(
+                title: T('screenAwake'), value: _settings.keepScreenMinutes > 0 ? _settings.keepScreenMinutes : 15,
+                minimum: 1, maximum: 120, inputKey: const ValueKey('awake-custom-minutes'))) : value;
+              if (chosen != null && mounted && ctx.mounted) { setState(() => _settings.keepScreenMinutes = chosen); update(() {});
+                widget.storage.saveSettings(_settings.toJson()); _syncScreenAwake(); }
+            })),
+          ListTile(title: Text(T('additionalPauses')), subtitle: Text(T('pauseDescription'))),
+          for (final kind in SpeechPauseKind.values) ...[
+            Text('${T('pause-${kind.name}')} · ${T('pauseMilliseconds', {'n': '${_settings.speechPauses.millisecondsFor(kind)}'})}'),
+            Slider(key: ValueKey('pause-${kind.name}'), value: _settings.speechPauses.millisecondsFor(kind).toDouble(),
+              min: 0, max: 3000, divisions: 60, onChanged: (value) {
+                setState(() => _settings.speechPauses = _settings.speechPauses.withPause(kind, value.round())); update(() {});
+                widget.storage.saveSettings(_settings.toJson());
+              }, onChangeEnd: (_) => _applySpeechPauses()),
+          ],
+        ])))));
+  }
+
+  void _syncScreenAwake() {
+    final speaking = _inReadingMode && (_isPlaying || _ttsLoading);
+    final seconds = _inReadingMode ? speaking ? _settings.keepScreenMinutes * 60 : 0 : _settings.readingScreenSeconds;
+    _screenAwake.configure(timeout: seconds > 0 ? Duration(seconds: seconds) : null,
+      active: _settingsLoaded && !_leavingReader && (!_inReadingMode || speaking), foreground: _volumeForeground,
+      scope: _inReadingMode ? 'voice' : 'reading');
+  }
+
+  Future<void> _applySpeechPauses() async {
+    final previous = _book, line = _captureLineAnchor(), c = _chapter;
+    final paragraph = previous.chapters[c].paragraphs[_para];
+    final at = _wordStart >= 0 ? _wordStart : paragraph.sentences.isEmpty ? 0 : paragraph.sentences[max(0, _ttsSentence)].displayStart;
+    final anchor = ReadingText.anchor(previous, c, _para, at), wasPlaying = _isPlaying;
+    final generation = ++_playbackGeneration;
+    if (_inReadingMode) await _tts.pause();
+    if (!mounted || _leavingReader || generation != _playbackGeneration) return;
+    setState(() {
+      _formatBook(); _flowChapter = null; _flowParagraph = null; _flowOffset = null;
+      final location = ReadingText.locate(_book, c, anchor);
+      _chapter = c; _para = location.$1;
+      _ttsSentence = ReadingText.sentenceAt(_book.chapters[c].paragraphs[_para], location.$2);
+      _wordStart = location.$2; _wordEnd = location.$2; _ttsChapter = -1; _isPlaying = false;
+    });
+    _remapAnnotations(previous); _refreshTtsCache();
+    await _restoreLineAnchor(line);
+    if (mounted && !_leavingReader && generation == _playbackGeneration && wasPlaying) {
+      await _startTtsFrom(_chapter, _para, _ttsSentence, displayOffset: _wordStart);
+    }
   }
 
   /// 定时播放：到时间自动暂停
@@ -3279,7 +3379,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                         ],
                       ),
                       const SizedBox(height: 10),
-                      Text('${T('voice')}: ${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(1)})}',
+                      Text('${T('voice')}: ${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(2)})}',
                         key: const ValueKey('cache-binding'), style: const TextStyle(fontSize: 13)),
                       const SizedBox(height: 14),
                       Row(
@@ -3354,7 +3454,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                                       context: ctx,
                                       builder: (dctx) => AlertDialog(
                                         title: Text(T('cacheClear')),
-                                        content: Text('${T('cacheClearSelectedConfirm')}\n${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(1)})}'),
+                                        content: Text('${T('cacheClearSelectedConfirm')}\n${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(2)})}'),
                                         actions: [
                                           TextButton(
                                             onPressed: () =>
@@ -3435,6 +3535,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     return ReaderGestures(
         enabled: inReading || _settings.pageTurnMode == 'swipe',
         sentenceSwipesEnabled: inReading,
+        sentenceDragDelay: Duration(milliseconds: (_settings.sentenceDragDelay * 1000).round()),
         onSentenceDragStart: inReading ? _startSentenceDrag : null,
         onSentenceDragChange: inReading ? _previewSentenceDrag : null,
         onSentenceDragEnd: inReading ? _finishSentenceDrag : null,
@@ -3790,6 +3891,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         settings: _settings,
         onFontTune: _openFontFineTune,
         onChanged: (s) {
+          final rotationChanged = s.followSystemRotation != _settings.followSystemRotation;
           final tocChanged = s.autoExtractToc != _settings.autoExtractToc;
           AppAppearance.setThemeMode(s.themeMode);
           final current = AppAppearance.applyCurrentMode(s);
@@ -3830,6 +3932,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           _applyReaderBrightness();
           _pageEndKey = null; _schedulePageGeometry();
           widget.storage.saveSettings(_settings.toJson());
+          if (rotationChanged) _applyRotationPreference();
           if (tocChanged) _updateMediaChapter(_chapter);
         },
       ),
@@ -4137,6 +4240,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   DropdownMenuItem(value: 'swipe', child: Text('左右滑动')),
                   DropdownMenuItem(value: 'scroll', child: Text('上下滚动'))],
                 onChanged: (value) { if (value != null) setState(() { _s.pageTurnMode = value; _update(); }); })),
+              ListTile(title: Text(T('pageTurnAnimation')), trailing: DropdownButton<String>(
+                key: const ValueKey('page-turn-animation'), value: _s.pageTurnAnimation,
+                items: ['off', 'slide'].map((value) => DropdownMenuItem(value: value,
+                  child: Text(T(value == 'off' ? 'animationOff' : 'animationSlide')))).toList(),
+                onChanged: (value) { if (value != null) setState(() { _s.pageTurnAnimation = value; _update(); }); })),
+              SwitchListTile(key: const ValueKey('follow-system-rotation'), title: Text(T('followSystemRotation')),
+                value: _s.followSystemRotation, onChanged: (value) => setState(() { _s.followSystemRotation = value; _update(); })),
+              ListTile(title: Text(T('readingScreenAwake')), subtitle: Text(T('screenTimeoutDescription')),
+                trailing: DropdownButton<int>(key: const ValueKey('reading-screen-seconds'),
+                value: _s.readingScreenSeconds,
+                items: [for (final seconds in [0, 60, 120, 300, 600, 1800]) DropdownMenuItem(value: seconds,
+                  child: Text(seconds == 0 ? T('systemScreenAwake') : T('minutes', {'m': '${seconds ~/ 60}'})))],
+                onChanged: (value) { if (value != null) setState(() { _s.readingScreenSeconds = value; _update(); }); })),
               SwitchListTile(key: const ValueKey('retain-page-line'), title: const Text('翻页后保留首行'),
                 subtitle: Text(_s.pageTurnMode == 'scroll' ? '上下滚动时不可用' : '下一页首行重复上一页最后一整行'),
                 value: _s.retainPageLine, onChanged: _s.pageTurnMode == 'scroll' ? null : (value) {

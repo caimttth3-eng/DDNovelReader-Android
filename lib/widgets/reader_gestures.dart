@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 
@@ -17,6 +18,7 @@ class ReaderGestures extends StatefulWidget {
     this.onSentenceDragStart,
     this.onSentenceDragChange,
     this.onSentenceDragEnd,
+    this.sentenceDragDelay = const Duration(milliseconds: 200),
   });
 
   final Widget child;
@@ -30,6 +32,7 @@ class ReaderGestures extends StatefulWidget {
   final VoidCallback? onSentenceDragStart;
   final ValueChanged<int>? onSentenceDragChange;
   final ValueChanged<bool>? onSentenceDragEnd;
+  final Duration sentenceDragDelay;
 
   @override
   State<ReaderGestures> createState() => _ReaderGesturesState();
@@ -44,6 +47,8 @@ class _ReaderGesturesState extends State<ReaderGestures> with WidgetsBindingObse
   int _gestureEpoch = 0;
   Axis? _longAxis;
   int _longSteps = 0;
+  Timer? _delayTimer;
+  bool _delayElapsed = false;
   bool get _longEnabled => widget.enabled && widget.sentenceSwipesEnabled &&
     widget.onSentenceDragStart != null && widget.onSentenceDragChange != null && widget.onSentenceDragEnd != null;
 
@@ -51,6 +56,7 @@ class _ReaderGesturesState extends State<ReaderGestures> with WidgetsBindingObse
   void initState() { super.initState(); WidgetsBinding.instance.addObserver(this); }
 
   void _endLong(bool cancelled, {bool defer = false, ValueChanged<bool>? previousCallback}) {
+    _delayTimer?.cancel(); _delayTimer = null; _delayElapsed = false;
     if (!_longActive) return;
     _longActive = false; _longAxis = null; _longSteps = 0; _distance = Offset.zero;
     final callback = previousCallback ?? widget.onSentenceDragEnd;
@@ -64,7 +70,8 @@ class _ReaderGesturesState extends State<ReaderGestures> with WidgetsBindingObse
     super.didUpdateWidget(oldWidget);
     final wasContinuous = oldWidget.enabled && oldWidget.sentenceSwipesEnabled &&
       oldWidget.onSentenceDragStart != null && oldWidget.onSentenceDragChange != null && oldWidget.onSentenceDragEnd != null;
-    if (!widget.enabled || oldWidget.sentenceSwipesEnabled != widget.sentenceSwipesEnabled || (wasContinuous && !_longEnabled)) {
+    if (!widget.enabled || oldWidget.sentenceSwipesEnabled != widget.sentenceSwipesEnabled ||
+        oldWidget.sentenceDragDelay != widget.sentenceDragDelay || (wasContinuous && !_longEnabled)) {
       _panValid = false; _endLong(true, defer: true, previousCallback: oldWidget.onSentenceDragEnd);
     }
   }
@@ -85,25 +92,38 @@ class _ReaderGesturesState extends State<ReaderGestures> with WidgetsBindingObse
   }
 
   void _beginPan(DragDownDetails details) {
+    _delayTimer?.cancel(); _delayTimer = null;
     _panValid = true; _panOrigin = details.globalPosition; _distance = Offset.zero;
     _longAxis = null; _longSteps = 0;
+    _delayElapsed = widget.sentenceDragDelay <= Duration.zero;
+    if (widget.enabled && widget.sentenceSwipesEnabled && !_delayElapsed) {
+      _delayTimer = Timer(widget.sentenceDragDelay, () {
+        _delayTimer = null; _delayElapsed = true;
+        _dispatchPreview();
+      });
+    }
   }
 
   void _movePan(DragUpdateDetails details) {
     if (!_panValid) return;
     _distance = details.globalPosition - _panOrigin;
-    if (!_longEnabled) return;
     final delta = _distance;
     if (_longAxis == null && delta.distance > kTouchSlop) {
       _longAxis = delta.dx.abs() > delta.dy.abs() ? Axis.horizontal : Axis.vertical;
+      if (_longAxis == Axis.horizontal) { _delayTimer?.cancel(); _delayTimer = null; }
     }
-    if (_longAxis != Axis.vertical) return;
+    _dispatchPreview();
+  }
+
+  void _dispatchPreview() {
+    if (!_panValid || !_longEnabled || !_delayElapsed || _longAxis != Axis.vertical) return;
     if (!_longActive) { _gestureEpoch++; _longActive = true; widget.onSentenceDragStart?.call(); }
-    final steps = (delta.dy / _threshold).truncate();
+    final steps = (_distance.dy / _threshold).truncate();
     if (steps != _longSteps) { _longSteps = steps; widget.onSentenceDragChange?.call(steps); }
   }
 
   void _finish(DragEndDetails details) {
+    _delayTimer?.cancel(); _delayTimer = null;
     if (_longActive) { _panValid = false; _endLong(false); return; }
     if (!_panValid || !widget.enabled) { _distance = Offset.zero; return; }
     _panValid = false;
@@ -118,6 +138,8 @@ class _ReaderGesturesState extends State<ReaderGestures> with WidgetsBindingObse
       }
     } else {
       if (!widget.sentenceSwipesEnabled) return;
+      if (!_delayElapsed) return;
+      if (_longEnabled) return;
       if (delta.dy.abs() < _threshold) return;
       if (delta.dy < 0) {
         widget.onPreviousSentence();

@@ -1,9 +1,34 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:duoduo_langdu/services/speech_breaks.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('playback and reading preferences have independent defaults and normalized persistence', () {
+    final s = ReadingSettings();
+    expect(s.pageTurnAnimation, 'off'); expect(s.followSystemRotation, isFalse);
+    expect(s.sentenceDragDelay, 0.2); expect(s.keepScreenMinutes, 0); expect(s.readingScreenSeconds, 0);
+    s.pageTurnAnimation = 'slide'; s.followSystemRotation = true; s.sentenceDragDelay = 0.4;
+    s.keepScreenMinutes = 90; s.readingScreenSeconds = 120; s.speechRate = 1.24;
+    s.speechPauses = s.speechPauses.withPause(SpeechPauseKind.comma, 350);
+    final restored = ReadingSettings.fromJson(s.toJson());
+    expect(restored.pageTurnAnimation, 'slide'); expect(restored.followSystemRotation, isTrue);
+    expect(restored.sentenceDragDelay, 0.4); expect(restored.keepScreenMinutes, 90); expect(restored.readingScreenSeconds, 120);
+    expect(restored.speechRate, 1.24); expect(restored.speechPauses.millisecondsFor(SpeechPauseKind.comma), 350);
+    final clamped = ReadingSettings.fromJson({'sentenceDragDelay': 9, 'pageTurnAnimation': 'unknown',
+      'keepScreenMinutes': 999, 'readingScreenSeconds': 7, 'speechRate': 1.234});
+    expect(clamped.sentenceDragDelay, 0.5); expect(clamped.pageTurnAnimation, 'off');
+    expect(clamped.keepScreenMinutes, 120); expect(clamped.readingScreenSeconds, 0); expect(clamped.speechRate, 1.24);
+  });
+  test('removed short reading durations return to system while minute choices survive', () {
+    for (final seconds in [5, 15, 30]) {
+      expect(ReadingSettings.fromJson({'readingScreenSeconds': seconds}).readingScreenSeconds, 0);
+    }
+    for (final seconds in [0, 60, 120, 300, 600, 1800]) {
+      expect(ReadingSettings.fromJson({'readingScreenSeconds': seconds}).readingScreenSeconds, seconds);
+    }
+  });
   test('level-one filtering defaults migrate old defaults while explicit disables survive', () {
     for (final json in <Map<String, dynamic>>[{}, {'informationFilter': false, 'informationFilterLevel': 'none'},
       {'informationFilter': false}, {'informationFilter': true, 'informationFilterLevel': 'none'}]) {

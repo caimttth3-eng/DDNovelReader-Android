@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:duoduo_langdu/services/reading_text.dart';
+import 'package:duoduo_langdu/services/speech_breaks.dart';
 import 'package:duoduo_langdu/services/system_tts.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
 
@@ -59,6 +61,25 @@ void main() {
     await emit('start', {'id': spoken.last['id']}); expect(await resumed, isTrue);
     await reader.stop(); expect(reader.state, TtsState.stopped);
     await reader.dispose();
+  });
+  test('configured comma extra silence is honored after native natural completion', () async {
+    final p = ReadingText.paragraph('甲，乙。', pauseSettings:
+      const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 150));
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    queued = Completer<void>(); final initialQueued = queued!.future;
+    final initial = reader.start(p.sentences.map((s) => s.tts).toList(),
+      pauseAfterMilliseconds: p.sentences.map((s) => s.pauseAfterMilliseconds).toList());
+    await initialQueued;
+    expect(spoken.single['text'], '甲，', reason: 'The punctuation remains available for natural engine prosody');
+    await emit('start', {'id': spoken.single['id']}); await initial;
+    final next = Completer<void>(); queued = next;
+    await emit('done', {'id': spoken.single['id']});
+    expect(next.isCompleted, isFalse);
+    expect(reader.currentIndex, 0);
+    await next.future.timeout(const Duration(seconds: 3));
+    expect(spoken.last['text'], '乙。');
+    await emit('start', {'id': spoken.last['id']});
   });
   test('stopping during engine initialization cannot start delayed speech', () async {
     final initialized = Completer<void>();

@@ -7,6 +7,7 @@ import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/book_snapshot_cache.dart';
 import 'package:duoduo_langdu/services/reader_preparation.dart';
 import 'package:duoduo_langdu/services/reading_text.dart';
+import 'package:duoduo_langdu/services/speech_breaks.dart';
 
 void main() {
   late Directory directory;
@@ -29,6 +30,20 @@ void main() {
     cache = BookSnapshotCache(directoryPath: '${directory.path}/cache');
   });
   tearDown(() async { await directory.delete(recursive: true); });
+
+  test('saving changed pauses uses the latest key and never reuses the older pause policy', () async {
+    final lookup = await cache.lookup(meta, settings);
+    final latest = ReadingSettings.fromJson(settings.toJson());
+    latest.speechPauses = latest.speechPauses.withPause(SpeechPauseKind.dash, 750);
+    final changed = ReaderPreparation.prepareSynchronously(ReaderPreparationRequest(source,
+      merge: true, indent: true, filter: 'links', autoExtractToc: true, pauseSettings: latest.speechPauses));
+    await cache.save(lookup, source, changed, settings: latest);
+    cache.clearMemoryCache();
+    expect((await cache.lookup(meta, settings)).snapshot, isNull);
+    final hit = (await cache.lookup(meta, latest)).snapshot!;
+    expect(hit.prepared.book.chapters.expand((c) => c.paragraphs).expand((p) => p.sentences)
+      .any((s) => s.pauseAfterMilliseconds == 750), isTrue);
+  });
 
   test('disk round trip restores source, sentences, pause, TOC and exact source mapping', () async {
     final lookup = await cache.lookup(meta, settings);

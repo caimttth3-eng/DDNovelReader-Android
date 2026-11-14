@@ -34,7 +34,8 @@ void main() {
   final platformCalls = <MethodCall>[];
   setUp(() {
     ReaderPreparation.runnerForTesting = (request) async => ReaderPreparation.prepareSynchronously(request);
-    SharedPreferences.setMockInitialValues({'duoduo.settings.v1': jsonEncode({'brightness': 1.0, 'autoPageSeconds': 2, 'wordHighlightEnabled': true})});
+    SharedPreferences.setMockInitialValues({'duoduo.settings.v1': jsonEncode({'brightness': 1.0, 'autoPageSeconds': 2,
+      'wordHighlightEnabled': true, 'pageTurnAnimation': 'slide', 'sentenceDragDelay': 0.0})});
     AppAppearance.updateSystemBrightness(Brightness.light);
     AppAppearance.setThemeMode('system');
     volumeCalls.clear(); platformCalls.clear();
@@ -959,6 +960,7 @@ void main() {
     expect(tester.widget<Text>(find.descendant(of: find.byKey(const ValueKey('reading-voice')),
       matching: find.byType(Text))).maxLines, 1);
     await _captureReaderPreview(tester, preview, 'reader-speech-controls');
+    await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reading-prefetch'))); await tester.pumpAndSettle();
     final prefetch = find.byKey(const ValueKey('prefetch-number'));
     await tester.enterText(prefetch, '101'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
@@ -968,6 +970,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('reading-prefetch'))); await tester.pumpAndSettle();
     await tester.enterText(prefetch, '0'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
     expect(speech.prefetchSentences, 0); expect((await storage.loadSettings())['prefetchSentences'], 0);
+    await tester.tapAt(const Offset(195, 80)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reading-sleep'))); await tester.pumpAndSettle();
     for (final minutes in [0, 15, 30, 60, 90]) {
       expect(find.byKey(ValueKey('sleep-preset-$minutes')), findsOneWidget);
@@ -1026,19 +1029,19 @@ void main() {
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural'))); await tester.pumpAndSettle();
-    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 晓晓（女·温暖） · 语速 1.8x');
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 晓晓（女·温暖） · 语速 1.80x');
     await _captureReaderPreview(tester, preview, 'reader-selected-voice-cache');
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await _captureReaderPreview(tester, preview, 'reader-voice-menu-cache-actions');
     await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-YunxiNeural'))); await tester.pumpAndSettle();
-    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.8x');
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.80x');
     expect(speech.voice, TtsReader.defaultVoice, reason: 'Opening another voice cache must not change the playing voice');
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await tester.tap(find.text('云希（男·阳光）')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-YunxiNeural'))); await tester.pumpAndSettle();
-    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.8x');
+    expect(tester.widget<Text>(find.byKey(const ValueKey('cache-binding'))).data, '音源: 云希（男·阳光） · 语速 1.80x');
     await tester.tap(find.text('清除缓存')); await tester.pumpAndSettle();
     expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('云希（男·阳光）')), findsOneWidget);
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('确定'))); await tester.pumpAndSettle();
@@ -1395,12 +1398,14 @@ void main() {
     speech.onWordChanged?.call(0, 2); await tester.pumpAndSettle(); expect(blue(), isEmpty);
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     final toggle = find.byKey(const ValueKey('word-highlight'));
+    await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
     expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
     tester.widget<SwitchListTile>(toggle).onChanged!(true); await tester.pumpAndSettle(); expect(blue(), ['清晨']);
     tester.widget<SwitchListTile>(toggle).onChanged!(false); await tester.pumpAndSettle();
     speech.onWordChanged?.call(3, 5); await tester.pumpAndSettle(); expect(blue(), isEmpty);
     tester.widget<SwitchListTile>(toggle).onChanged!(true); await tester.pumpAndSettle(); expect(blue(), ['光洒']);
     expect((await storage.loadSettings())['wordHighlightEnabled'], isTrue);
+    await tester.tapAt(const Offset(195, 80)); await tester.pumpAndSettle();
     await tester.tap(find.text('退出')); await tester.pumpAndSettle();
     expect(tester.getSize(find.byKey(const ValueKey('contents-touch'))), const Size(48, 64));
     expect(tester.getRect(find.byKey(const ValueKey('contents-handle'))).right, 16);
@@ -1603,6 +1608,108 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pump();
     pending.complete(ReaderPreparation.prepareSynchronously(request!)); await tester.pumpAndSettle();
     expect(find.byType(ReaderScreen), findsNothing); expect(speech.startCalls, 0); expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('playback menu persists fine rate, drag delay, separate screen holds and additive pauses', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..readingScreenSeconds = 60..keepScreenMinutes = 15).toJson());
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('playback-preferences'), storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    expect(volumeCalls.lastWhere((call) => call.method == 'setKeepScreenOn').arguments, isTrue);
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
+    expect(volumeCalls.lastWhere((call) => call.method == 'setKeepScreenOn').arguments, isFalse);
+    await tester.tap(find.byKey(const ValueKey('reading-rate-plus'))); await tester.pumpAndSettle();
+    expect(find.text('语速 1.02x'), findsOneWidget);
+    expect(tester.widget<Slider>(find.byKey(const ValueKey('reading-rate-slider'))).divisions, 125);
+    tester.widget<Slider>(find.byKey(const ValueKey('reading-rate-slider'))).onChanged!(1.26); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-rate-minus'))); await tester.pumpAndSettle();
+    expect(speech.speechRate, 1.24); expect((await storage.loadSettings())['speechRate'], 1.24);
+    expect(find.byKey(const ValueKey('reading-prefetch')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+    tester.widget<Slider>(find.byKey(const ValueKey('sentence-drag-delay'))).onChanged!(0.4); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['sentenceDragDelay'], 0.4);
+    final pause = find.byKey(const ValueKey('pause-comma'));
+    await tester.ensureVisible(pause); await tester.pumpAndSettle();
+    tester.widget<Slider>(pause).onChanged!(350); tester.widget<Slider>(pause).onChangeEnd!(350); await tester.pumpAndSettle();
+    expect(speech.startCalls, 1, reason: 'Changing pauses while paused must not start speech');
+    expect(((await storage.loadSettings())['speechPauses'] as Map)['comma'], 350);
+    expect((await storage.loadSettings())['keepScreenMinutes'], 15);
+    expect((await storage.loadSettings())['readingScreenSeconds'], 60);
+    await tester.tapAt(const Offset(195, 80)); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
+    expect(speech.startCalls, 2); expect(speech.lastPauses, contains(350));
+    expect(volumeCalls.lastWhere((call) => call.method == 'setKeepScreenOn').arguments, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('wake keeps the current speech word on a complete line without restarting audio', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    tester.view.viewPadding = const FakeViewPadding(top: 40);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
+    final speech = _TestSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('wake-line'), storage: AppStorage(), ttsReader: speech)));
+    await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    speech.emitSentence(17); speech.onWordChanged?.call(4, 6); await tester.pumpAndSettle();
+    final starts = speech.startCalls;
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.paused); await tester.pump();
+    tester.view.viewPadding = const FakeViewPadding(top: 44);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+    final body = find.byKey(const ValueKey('reader-body'));
+    void expectCompleteTopLine() {
+      final bodyRect = tester.getRect(body), rows = <Rect>[];
+      for (final render in tester.renderObjectList<RenderParagraph>(find.descendant(of: body, matching: find.byType(RichText)))) {
+        final origin = render.localToGlobal(Offset.zero);
+        for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: render.text.toPlainText().length),
+          boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+          final rect = box.toRect().shift(origin);
+          if (rect.height > 2 && rect.width > 0.1 && rect.bottom > bodyRect.top + 0.5 && rect.top < bodyRect.bottom) rows.add(rect);
+        }
+      }
+      rows.sort((a, b) => a.top.compareTo(b.top));
+      expect(rows.first.top, closeTo(bodyRect.top, 0.5));
+    }
+    expectCompleteTopLine();
+    tester.view.physicalSize = const Size(390, 840); await tester.pumpAndSettle();
+    expectCompleteTopLine();
+    expect(find.byKey(const ValueKey('reader-menu')), findsNothing, reason: 'Wake must not leave an overlay over the first text row');
+    expect(speech.startCalls, starts); expect(speech.resumeCalls, 0); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('reader defaults to immediate pages and portrait until system rotation is enabled', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage(); await storage.saveSettings(ReadingSettings().toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('page-rotation-options'), storage: storage, ttsReader: _TestSpeech())));
+    await tester.pumpAndSettle();
+    MethodCall rotation() => platformCalls.lastWhere((call) => call.method == 'SystemChrome.setPreferredOrientations');
+    expect(rotation().arguments, ['DeviceOrientation.portraitUp']);
+    await tester.tapAt(const Offset(360, 360)); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('page-outgoing-transform')), findsNothing);
+    expect(tester.widget<FractionalTranslation>(find.byKey(const ValueKey('page-incoming-transform'))).translation, Offset.zero);
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    expect(tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-animation'))).value, 'off');
+    tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-animation'))).onChanged!('slide'); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['pageTurnAnimation'], 'slide');
+    tester.widget<SwitchListTile>(find.byKey(const ValueKey('follow-system-rotation'))).onChanged!(true); await tester.pumpAndSettle();
+    expect(rotation().arguments, DeviceOrientation.values.map((value) => value.toString()).toList());
+    expect(tester.widget<DropdownButton<int>>(find.byKey(const ValueKey('reading-screen-seconds'))).items!.map((item) => item.value), [0, 60, 120, 300, 600, 1800]);
+    tester.widget<DropdownButton<int>>(find.byKey(const ValueKey('reading-screen-seconds'))).onChanged!(120); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['readingScreenSeconds'], 120);
+    await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('横竖屏切换')); await tester.pumpAndSettle();
+    expect(rotation().arguments, ['DeviceOrientation.landscapeLeft']);
+    expect((await storage.loadSettings())['followSystemRotation'], isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    expect(rotation().arguments, ['DeviceOrientation.portraitUp']);
   });
 
   testWidgets('visible playback volume follows hardware changes without stale read rollback', (tester) async {

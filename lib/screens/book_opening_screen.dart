@@ -69,9 +69,9 @@ class _BookOpeningScreenState extends State<BookOpeningScreen> {
     while (mounted && !_leaving) {
       setState(() => _loadingSettings = settings);
       final key = (settings.mergeNonSentenceBreaks, settings.firstLineIndent,
-        settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc);
+        settings.informationFilter ? settings.informationFilterLevel : 'none', settings.autoExtractToc, settings.speechPauses.cacheKey);
       final prepared = cached ?? await ReaderPreparation.prepare(ReaderPreparationRequest(result.$1,
-        merge: key.$1, indent: key.$2, filter: key.$3, autoExtractToc: key.$4));
+        merge: key.$1, indent: key.$2, filter: key.$3, autoExtractToc: key.$4, pauseSettings: settings.speechPauses));
       cached = null;
       if (!mounted || _leaving) throw StateError('Book opening cancelled');
       final geometry = await geometryFuture;
@@ -79,7 +79,7 @@ class _BookOpeningScreenState extends State<BookOpeningScreen> {
       final latest = ReadingSettings.fromJson(await widget.storage.loadSettings());
       if (!mounted || _leaving) throw StateError('Book opening cancelled');
       final latestKey = (latest.mergeNonSentenceBreaks, latest.firstLineIndent,
-        latest.informationFilter ? latest.informationFilterLevel : 'none', latest.autoExtractToc);
+        latest.informationFilter ? latest.informationFilterLevel : 'none', latest.autoExtractToc, latest.speechPauses.cacheKey);
       if (latestKey != key) { settings = latest; continue; }
       final progress = meta == null ? result.$2 : await widget.storage.loadProgress(meta.id);
       if (!mounted || _leaving) throw StateError('Book opening cancelled');

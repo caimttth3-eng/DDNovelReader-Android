@@ -1,5 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'i18n.dart';
@@ -14,6 +15,7 @@ import 'services/tts_audio_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   final storage = AppStorage();
   final startupSettings = AppAppearance.initialize(
     ReadingSettings.fromJson(await storage.loadSettings()),

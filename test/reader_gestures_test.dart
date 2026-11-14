@@ -3,13 +3,73 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:duoduo_langdu/widgets/reader_gestures.dart';
 
 void main() {
-  Widget continuous(List<String> actions, List<int> steps, {bool sentenceMode = true, bool enabled = true}) => MaterialApp(
+  Widget continuous(List<String> actions, List<int> steps, {bool sentenceMode = true, bool enabled = true,
+    Duration delay = Duration.zero}) => MaterialApp(
     home: ReaderGestures(enabled: enabled, sentenceSwipesEnabled: sentenceMode,
+      sentenceDragDelay: delay,
       onPreviousSentence: () => actions.add('old previous'), onNextSentence: () => actions.add('old next'),
       onPreviousPage: () => actions.add('previous page'), onNextPage: () => actions.add('next page'),
       onSentenceDragStart: () => actions.add('start'), onSentenceDragChange: steps.add,
       onSentenceDragEnd: (cancelled) => actions.add(cancelled ? 'cancel' : 'end'),
       child: const SizedBox.expand()));
+
+  testWidgets('default delay is 200ms and a held vertical position activates at expiry without another move', (tester) async {
+    final actions = <String>[], steps = <int>[];
+    expect(ReaderGestures(child: const SizedBox(), onPreviousSentence: () {}, onNextSentence: () {},
+      onPreviousPage: () {}, onNextPage: () {}).sentenceDragDelay, const Duration(milliseconds: 200));
+    await tester.pumpWidget(continuous(actions, steps, delay: const Duration(milliseconds: 200)));
+    final gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 100));
+    await tester.pump(const Duration(milliseconds: 199));
+    expect(actions, isEmpty); expect(steps, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(actions, ['start']); expect(steps, [2]);
+    await gesture.up(); expect(actions, ['start', 'end']);
+  });
+
+  testWidgets('release, cancellation and horizontal motion before expiry never dispatch a sentence', (tester) async {
+    final actions = <String>[], steps = <int>[];
+    await tester.pumpWidget(continuous(actions, steps, delay: const Duration(milliseconds: 200)));
+    var gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 100)); await gesture.up();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(actions, isEmpty); expect(steps, isEmpty);
+    gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 100)); await gesture.cancel();
+    await tester.pump(const Duration(milliseconds: 300)); expect(actions, isEmpty);
+    gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(-100, 0)); await tester.pump(const Duration(milliseconds: 300));
+    await gesture.up(); expect(actions, ['next page']); expect(steps, isEmpty);
+  });
+
+  testWidgets('a tiny held wobble does not activate and background invalidates a pending deadline', (tester) async {
+    final actions = <String>[], steps = <int>[];
+    await tester.pumpWidget(continuous(actions, steps, delay: const Duration(milliseconds: 200)));
+    var gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 3)); await tester.pump(const Duration(milliseconds: 300));
+    expect(actions, isEmpty); await gesture.up();
+    gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 100));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump(const Duration(milliseconds: 300));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await gesture.up(); expect(actions, isEmpty); expect(steps, isEmpty);
+  });
+
+  testWidgets('changing the delay cancels the old pointer deadline and uses the new value next time', (tester) async {
+    final actions = <String>[], steps = <int>[];
+    await tester.pumpWidget(continuous(actions, steps, delay: const Duration(milliseconds: 200)));
+    var gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 100)); await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpWidget(continuous(actions, steps, delay: const Duration(milliseconds: 500)));
+    await tester.pump(const Duration(milliseconds: 500)); await gesture.up();
+    expect(actions, isEmpty); expect(steps, isEmpty);
+    gesture = await tester.startGesture(const Offset(200, 200));
+    await gesture.moveBy(const Offset(0, 100)); await tester.pump(const Duration(milliseconds: 499));
+    expect(actions, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1)); expect(actions, ['start']);
+    await gesture.up(); expect(actions, ['start', 'end']);
+  });
 
   testWidgets('direct vertical dragging previews multiple sentences and reverses from the original touch', (tester) async {
     final actions = <String>[], steps = <int>[];
@@ -140,6 +200,7 @@ void main() {
     final actions = <String>[];
     await tester.pumpWidget(MaterialApp(
       home: ReaderGestures(
+        sentenceDragDelay: Duration.zero,
         onPreviousSentence: () => actions.add('previous sentence'),
         onNextSentence: () => actions.add('next sentence'),
         onPreviousPage: () => actions.add('previous page'),

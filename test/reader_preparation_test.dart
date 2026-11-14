@@ -5,6 +5,7 @@ import 'package:duoduo_langdu/models/book.dart';
 import 'package:duoduo_langdu/services/book_parser.dart';
 import 'package:duoduo_langdu/services/reader_preparation.dart';
 import 'package:duoduo_langdu/services/reading_text.dart';
+import 'package:duoduo_langdu/services/speech_breaks.dart';
 
 void main() {
   setUp(() { ReaderPreparation.clearMemoryCache(); ReaderPreparation.runnerForTesting = null; });
@@ -72,6 +73,18 @@ void main() {
     pending.complete(stale); await old;
     expect(await ReaderPreparation.prepare(r), isNot(same(stale)));
     expect(runs, 3);
+  });
+
+  test('real preparation cache includes pause policy and transfers sentence delays', () async {
+    final book = Book(id: 'pauses', title: 'pauses', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '正文', paragraphs: [ReadingText.paragraph('甲，乙。')])]);
+    final natural = await ReaderPreparation.prepare(request(book));
+    final r = ReaderPreparationRequest(book, merge: true, indent: false, filter: 'none', autoExtractToc: true,
+      pauseSettings: const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 250));
+    final custom = await ReaderPreparation.prepare(r);
+    expect(custom.fingerprint, isNot(natural.fingerprint));
+    expect(custom.book.chapters.single.paragraphs.single.sentences.map((s) => s.pauseAfterMilliseconds), [250, 0]);
+    expect(await ReaderPreparation.prepare(r), same(custom));
   });
 
   test('oversized books skip retention and release the previous completed cache', () async {

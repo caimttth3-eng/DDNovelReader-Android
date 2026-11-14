@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import '../models/book.dart';
 import 'text_cleaner.dart';
 import 'chapterizer.dart';
+import 'speech_breaks.dart';
 
 /// Rebuild display paragraphs and TTS sentences from the same source text.
 /// The imported file is never rewritten.
@@ -19,54 +20,84 @@ class ReadingText {
   static final _speechSentence = RegExp(r'''[^。！？!?；;\n]+(?:[。！？!?；;]+[”’」』）》）\]"']*)?''');
   static final _onlySpeechPunctuation = RegExp(r'''^[\s。！？!?；;，,：:.…“”‘’「」『』《》〈〉（）()\[\]"'、]+$''');
 
-  static Paragraph paragraph(String display) {
+  static Paragraph paragraph(String display, {SpeechPauseSettings pauseSettings = const SpeechPauseSettings()}) {
     final sentences = <Sentence>[];
     final starts = <int>[];
     final tts = StringBuffer();
     final dashes = _speechDash.allMatches(display).toList();
-    void extendLast(int end, {bool pause = false}) {
+    void extendLast(int end, {int pause = 0}) {
       if (sentences.isEmpty) return;
       final previous = sentences.last;
       sentences[sentences.length - 1] = Sentence(display.substring(previous.displayStart, end), previous.tts,
         displayStart: previous.displayStart, displayEnd: end,
-        pauseAfterMilliseconds: pause ? 300 : previous.pauseAfterMilliseconds);
+        pauseAfterMilliseconds: pause > previous.pauseAfterMilliseconds ? pause : previous.pauseAfterMilliseconds);
     }
     void appendSpeech(int from, int to) {
       final cleaned = const TextCleaner().clean(display.substring(from, to));
       // A trailing closing quote after a dash belongs to the visible segment;
       // it must not cause a punctuation-only synthesis request.
       if (dashes.isNotEmpty && (cleaned.tts.isEmpty || _onlySpeechPunctuation.hasMatch(cleaned.tts))) {
-        extendLast(to);
+        extendLast(to, pause: SpeechBreaks.maxPause(cleaned.display, pauseSettings));
         return;
       }
       final base = tts.length;
       tts.write(cleaned.tts);
+      // Classify the original punctuation, before TextCleaner normalizes ASCII
+      // periods or collapses an ellipsis run. Project each boundary into TTS.
+      final breaks = <SpeechBreak>[];
+      final displayBoundaries = <int, int>{};
+      for (final raw in SpeechBreaks.boundaries(cleaned.display, pauseSettings)) {
+        var low = 0, high = cleaned.tts.length + 1;
+        while (low < high) {
+          final mid = (low + high) ~/ 2;
+          if (cleaned.ttsToDisplay[mid] <= raw.end) { low = mid + 1; } else { high = mid; }
+        }
+        final cut = (low - 1).clamp(0, cleaned.tts.length);
+        displayBoundaries[cut] = raw.end;
+        breaks.add(SpeechBreak(cut, raw.milliseconds));
+      }
+      var boundary = 0;
+      void emit(int a, int b, int pause) {
+        final speech = cleaned.tts.substring(a, b);
+        if (speech.trim().isEmpty) return;
+        final start = (from + (displayBoundaries[a] ?? cleaned.displayOffsetOfTts(a))).clamp(from, to);
+        final end = (from + (displayBoundaries[b] ?? cleaned.displayOffsetOfTts(b))).clamp(start, to);
+        if (_onlySpeechPunctuation.hasMatch(speech)) {
+          extendLast(end, pause: pause); return;
+        }
+        starts.add(base + a);
+        sentences.add(Sentence(display.substring(start, end), speech,
+          displayStart: start, displayEnd: end, pauseAfterMilliseconds: pause));
+      }
       for (final m in _speechSentence.allMatches(cleaned.tts)) {
-        if (m.group(0)!.trim().isEmpty) continue;
-        final start = (from + cleaned.displayOffsetOfTts(m.start)).clamp(from, to);
-        final end = (from + cleaned.displayOffsetOfTts(m.end)).clamp(start, to);
-        starts.add(base + m.start);
-        sentences.add(Sentence(display.substring(start, end), m.group(0)!,
-          displayStart: start, displayEnd: end));
+        var a = m.start;
+        while (boundary < breaks.length && breaks[boundary].end <= m.start) boundary++;
+        while (boundary < breaks.length && breaks[boundary].end <= m.end) {
+          final split = breaks[boundary++];
+          emit(a, split.end, split.milliseconds); a = split.end;
+        }
+        if (a < m.end) emit(a, m.end, 0);
       }
     }
     var cursor = 0;
     for (final dash in dashes) {
       appendSpeech(cursor, dash.start);
-      extendLast(dash.end, pause: true);
+      extendLast(dash.end, pause: pauseSettings.millisecondsFor(SpeechPauseKind.dash));
       cursor = dash.end;
     }
     appendSpeech(cursor, display.length);
+    if (sentences.isNotEmpty) extendLast(sentences.last.displayEnd,
+      pause: pauseSettings.millisecondsFor(SpeechPauseKind.paragraph));
     return Paragraph(display: display, tts: tts.toString(),
       sentences: sentences, sentenceStartTts: starts);
   }
 
   static Book format(Book source, {required bool merge, required bool indent,
-    String filter = 'none'}) {
+    String filter = 'none', SpeechPauseSettings pauseSettings = const SpeechPauseSettings()}) {
     final maps = <List<List<int>>>[];
     final chapters = <Chapter>[];
     for (final chapter in source.chapters) {
-      final result = _paragraphs(chapter, merge, indent, filter);
+      final result = _paragraphs(chapter, merge, indent, filter, pauseSettings);
       chapters.add(Chapter(title: chapter.title, paragraphs: result.$1));
       maps.add(result.$2);
     }
@@ -82,7 +113,7 @@ class ReadingText {
   static final _advert = RegExp(r'^(?:[【\[（(].*?[】\]）)]\s*)?(?:请?访问本站|请?记住本站|本书(?:由|来自)|更多(?:精彩|好书|小说)|(?:请|欢迎)?下载.{0,16}(?:APP|客户端)|(?:请|欢迎)?加入.{0,16}(?:群|QQ群)|(?:手机|电脑)访问).{0,160}$', caseSensitive: false);
   static final _author = RegExp(r'^(?:[【\[（(].*?[】\]）)]\s*)?(?:PS[：:]|P\.S\.|作者(?:有话说|的话)[：:]|(?:求|跪求|请大家).{0,12}(?:月票|推荐票|收藏|订阅|打赏)|本章完|未完待续).{0,160}$', caseSensitive: false);
 
-  static (List<Paragraph>, List<List<int>>) _paragraphs(Chapter chapter, bool merge, bool indent, String filter) {
+  static (List<Paragraph>, List<List<int>>) _paragraphs(Chapter chapter, bool merge, bool indent, String filter, SpeechPauseSettings pauseSettings) {
     final lines = <_MappedLine>[];
     final sourceLines = [for (final p in chapter.paragraphs)
       ...p.display.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')];
@@ -138,7 +169,7 @@ class ReadingText {
       return indent && leading.length < 2 ? line.trimLeft().prepend('　　') : line;
     }).toList();
     if (output.isEmpty) output.add(_MappedLine('', [sourceAnchor]));
-    return (output.map((line) => paragraph(line.text)).toList(), output.map((line) => line.anchors).toList());
+    return (output.map((line) => paragraph(line.text, pauseSettings: pauseSettings)).toList(), output.map((line) => line.anchors).toList());
   }
 
   /// Stable chapter coordinate, independent of inserted spaces and line breaks.
