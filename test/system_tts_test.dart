@@ -206,6 +206,43 @@ void main() {
     expect(reader.currentTtsOffset, 1); expect(spoken.last['text'], '😀乙。');
     await emit('start', {'id': spoken.last['id']}); await started;
   });
+  test('chapter title numbers and spaces survive synthesis and stale cursors never select its last digit', () async {
+    const title = '第 3 章 一寸金03';
+    final p = ReadingText.paragraph(title);
+    expect(p.sentences, hasLength(1)); expect(p.sentences.single.tts, title);
+    expect(p.sentences.single.display, title); expect(p.sentenceStartTts, [0]);
+    final reader = TtsReader()..setVoice(TtsReader.systemVoice);
+    addTearDown(reader.dispose);
+    for (final offset in [0, title.length, title.length + 20, -1]) {
+      queued = Completer<void>(); final pending = queued!.future;
+      final starting = reader.start([p.sentences.single.tts, '正文从这里开始。'], initialTtsOffset: offset);
+      await pending;
+      expect(spoken.last['text'], title, reason: 'Invalid cursor $offset must not become just the final digit');
+      expect(reader.currentTtsOffset, 0); expect(reader.currentIndex, 0);
+      await emit('start', {'id': spoken.last['id']}); await starting;
+    }
+    final middle = title.indexOf('一');
+    queued = Completer<void>(); final pending = queued!.future;
+    final starting = reader.start([title], initialTtsOffset: middle); await pending;
+    expect(spoken.last['text'], '一寸金03'); expect(reader.currentTtsOffset, middle);
+    final id = spoken.last['id']; await emit('start', {'id': id}); await starting;
+    await emit('range', {'id': id, 'start': 3, 'end': 5});
+    expect(reader.currentWordStart, title.indexOf('0')); expect(reader.currentWordEnd, title.length);
+    await reader.pause();
+    queued = Completer<void>(); final resumedQueued = queued!.future;
+    final resumed = reader.resume(); await resumedQueued;
+    expect(spoken.last['text'], '03', reason: 'A real reported digit-word cursor remains a valid resume position');
+    await emit('start', {'id': spoken.last['id']}); expect(await resumed, isTrue);
+    queued = Completer<void>(); final previousQueued = queued!.future;
+    final previous = reader.start(['前一段。', title, '正文从这里开始。']); await previousQueued;
+    final previousId = spoken.last['id']; await emit('start', {'id': previousId}); await previous;
+    await emit('range', {'id': previousId, 'start': 2, 'end': 3});
+    queued = Completer<void>(); final titleQueued = queued!.future;
+    await emit('done', {'id': previousId}); await titleQueued;
+    expect(spoken.last['text'], title); expect(reader.currentTtsOffset, 0);
+    expect(reader.currentIndex, 1, reason: 'Natural advancement must not inherit the previous word cursor');
+    await emit('start', {'id': spoken.last['id']});
+  });
   test('native rejection returns promptly instead of waiting for the start timeout', () async {
     messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
       if (call.method == 'initialize') return 'engine';

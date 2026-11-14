@@ -1616,10 +1616,10 @@ void main() {
     expect(find.byType(ReaderScreen), findsNothing); expect(speech.startCalls, 0); expect(tester.takeException(), isNull);
   });
 
-  testWidgets('playback menu persists fine rate, drag delay, separate screen holds and additive pauses', (tester) async {
+  testWidgets('playback preferences persist and system voice owns additive pauses', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
-    final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..readingScreenSeconds = 60..keepScreenMinutes = 15).toJson());
+    final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..readingScreenSeconds = 60..keepScreenMinutes = 15..voice = TtsReader.systemVoice).toJson());
     final speech = _TestSpeech();
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('playback-preferences'), storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle();
@@ -1637,6 +1637,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
     tester.widget<Slider>(find.byKey(const ValueKey('sentence-drag-delay'))).onChanged!(0.4); await tester.pumpAndSettle();
     expect((await storage.loadSettings())['sentenceDragDelay'], 0.4);
+    expect(find.byKey(const ValueKey('pause-expand')), findsNothing);
+    await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pause-voice-zh-CN-XiaoxiaoNeural')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('pause-voice-__system_tts__'))); await tester.pumpAndSettle();
     final expandPauses = find.byKey(const ValueKey('pause-expand'));
     await tester.ensureVisible(expandPauses); await tester.tap(expandPauses); await tester.pumpAndSettle();
     final pause = find.byKey(const ValueKey('pause-comma'));
@@ -1648,9 +1653,10 @@ void main() {
     await tester.ensureVisible(apply); await tester.tap(apply); await tester.pumpAndSettle();
     expect(speech.startCalls, 1, reason: 'Changing pauses while paused must not start speech');
     expect(((await storage.loadSettings())['speechPauses'] as Map)['comma'], 0);
-    expect((await storage.loadSettings())['perVoiceSpeechPauses'][TtsReader.defaultVoice]['comma'], 350);
+    expect((await storage.loadSettings())['perVoiceSpeechPauses'][TtsReader.systemVoice]['comma'], 350);
     expect((await storage.loadSettings())['keepScreenMinutes'], 15);
     expect((await storage.loadSettings())['readingScreenSeconds'], 60);
+    await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     expect(speech.startCalls, 2); expect(speech.lastPauses, contains(350));
     expect(volumeCalls.lastWhere((call) => call.method == 'setKeepScreenOn').arguments, isTrue);

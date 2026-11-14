@@ -306,7 +306,10 @@ class TtsReader {
   int _systemOffset(int sentence, int requested) {
     if (!usesSystemVoice || _sentences[sentence].isEmpty) return 0;
     final text = _sentences[sentence];
-    var offset = requested.clamp(0, text.length - 1);
+    // A stale viewport/display coordinate is not a request for the last
+    // character. Preserve valid explicit cursors, and replay safely from the
+    // beginning when the caller no longer has a coordinate in this sentence.
+    var offset = requested < 0 || requested >= text.length ? 0 : requested;
     if (_insideSurrogatePair(text, offset)) offset--;
     return offset;
   }

@@ -624,6 +624,22 @@ void main() {
     expect(requested, ['甲乙丙丁。', '甲乙丙丁。']);
     expect(reader.currentTtsOffset, 0); expect(player.starts.last, Duration.zero);
   });
+  test('online synthesis preserves the complete numbered title regardless of system-only start cursors', () async {
+    const title = '第 3 章 一寸金03';
+    final player = _ResumePlayer(); final requested = <String>[];
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      requested.add(text); onWords([]); return Uint8List.fromList([1]);
+    }
+    final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(0);
+    addTearDown(reader.dispose);
+    for (final offset in [0, title.indexOf('一'), title.length, title.length + 20]) {
+      await reader.start([title], initialTtsOffset: offset);
+      expect(requested.last, title); expect(reader.currentTtsOffset, 0);
+      expect(player.starts.last, Duration.zero);
+    }
+    expect(requested, List.filled(4, title));
+  });
 
   test('jump, voice and rate changes discard the paused audio position', () async {
     final player = _ResumePlayer();

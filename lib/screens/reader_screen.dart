@@ -16,6 +16,7 @@ import '../services/reader_preparation.dart';
 import '../services/reader_screen_awake.dart';
 import '../services/book_parser.dart';
 import '../services/reader_typography.dart';
+import '../services/speech_breaks.dart';
 import '../services/text_cleaner.dart';
 import '../widgets/reader_icon.dart';
 import '../widgets/reader_brightness_control.dart';
@@ -1662,11 +1663,31 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   int _visibleOffset(ItemPosition position) {
     final render = _paragraphKeys[position.index]?.currentContext?.findRenderObject();
     if (render is! RenderParagraph) return 0;
-    final y = max(0.0, -position.itemLeadingEdge * _bodyExtent - 10);
     final it = _items[position.index];
     if (it.isTitle) return 0;
+    // Item positions include padding around the paragraph. Hit-testing below a
+    // short line (or at the left edge of centered/RTL text) can return the end
+    // of the entire paragraph. Pick a real glyph row and its logical start.
+    final body = _pageBoundary.currentContext?.findRenderObject();
+    final y = body is RenderBox && body.hasSize
+      ? body.localToGlobal(Offset.zero).dy - render.localToGlobal(Offset.zero).dy
+      : -position.itemLeadingEdge * _bodyExtent - 10;
+    final text = render.text.toPlainText();
+    final rows = <Rect>[];
+    for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
+      boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+      final rect = box.toRect();
+      if (rect.width < 0.01 || rect.height < 2) continue;
+      final row = rows.indexWhere((r) => (r.top - rect.top).abs() < 0.5);
+      if (row < 0) { rows.add(rect); } else { rows[row] = rows[row].expandToInclude(rect); }
+    }
+    rows.sort((a, b) => a.top.compareTo(b.top));
+    if (rows.isEmpty) return 0;
+    final row = rows.firstWhere((r) => r.bottom > max(0.0, y) + 0.01, orElse: () => rows.last);
+    final left = render.getPositionForOffset(Offset(row.left - 1, row.center.dy)).offset;
+    final right = render.getPositionForOffset(Offset(row.right + 1, row.center.dy)).offset;
     return ReaderTypography.sourceOffset(_book.chapters[it.chapterIndex].paragraphs[it.paragraphIndex].display,
-      render.getPositionForOffset(Offset(0, y)).offset, lineBreakAt: _lineBreakFor(it.chapterIndex, it.paragraphIndex));
+      min(left, right), lineBreakAt: _lineBreakFor(it.chapterIndex, it.paragraphIndex));
   }
 
   int _visibleDisplayOffset(int c, int p) {
@@ -1677,11 +1698,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   int _sentenceTtsOffset(int c, int p, int s, int? displayOffset) {
     if (!_tts.usesSystemVoice || displayOffset == null) return 0;
     final sentence = _book.chapters[c].paragraphs[p].sentences[s];
-    final relative = max(0, displayOffset - sentence.displayStart);
+    final relative = displayOffset - sentence.displayStart;
+    // Stale/end-of-line coordinates are not a request to read only the last
+    // character. Valid within-sentence word anchors still resume precisely.
+    if (relative < 0 || relative >= sentence.display.length) return 0;
     final map = const TextCleaner().clean(sentence.display);
     var offset = 0;
     while (offset < map.tts.length && map.displayOffsetOfTts(offset) < relative) { offset++; }
-    return offset.clamp(0, max(0, sentence.tts.length - 1));
+    return offset < sentence.tts.length ? offset : 0;
   }
 
   int _sentenceDisplayOffset(int c, int p, int s, int ttsOffset) {
@@ -2408,10 +2432,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         _ttsChapter = next;
         _chapter = next;
         _para = 0;
+        _ttsSentence = 0;
+        _wordStart = -1; _wordEnd = -1;
       });
       _jumpToItem(_itemIndexOf(next, 0));
       _scheduleSave();
-      _startTtsFrom(next, 0, 0);
+      // A new chapter must never inherit the previous chapter's word cursor.
+      _startTtsFrom(next, 0, 0, displayOffset: 0);
     } else {
       _exitReadingMode();
     }
@@ -3131,8 +3158,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _openPlaybackSettings() async {
     if (_applyingSpeechPauses) return;
-    final pauseVoice = _settings.speechPauseVoice;
-    final selected = await showModalBottomSheet<SpeechPauseSelection>(context: context, isScrollControlled: true,
+    await showModalBottomSheet<void>(context: context, isScrollControlled: true,
       builder: (context) => StatefulBuilder(builder: (ctx, update) => SafeArea(child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
         child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(16), children: [
@@ -3167,11 +3193,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               if (chosen != null && mounted && ctx.mounted) { setState(() => _settings.keepScreenMinutes = chosen); update(() {});
                 widget.storage.saveSettings(_settings.toJson()); _syncScreenAwake(); }
             })),
-          SpeechPauseEditor(voiceId: pauseVoice,
-            initialPauses: _settings.speechPausesForVoice(pauseVoice), globalPauses: _settings.speechPauses,
-            onApply: (selection) => Navigator.pop(ctx, selection)),
         ])))));
-    if (selected != null && mounted) await _applySpeechPauseSelection(selected);
   }
 
   void _syncScreenAwake() {
@@ -3183,26 +3205,18 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Future<void> _openVoiceSpeechPauses(String voice) async {
-    if (_applyingSpeechPauses) return;
-    final selected = await showModalBottomSheet<SpeechPauseSelection>(context: context, isScrollControlled: true,
+    if (_applyingSpeechPauses || voice != TtsReader.systemVoice) return;
+    final selected = await showModalBottomSheet<SpeechPauseSettings>(context: context, isScrollControlled: true,
       builder: (ctx) => SafeArea(child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
         child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(16), children: [
           Text(T('voicePauseTitle', {'name': _shortVoiceLabel(voice)}), style: Theme.of(ctx).textTheme.titleMedium),
-          SpeechPauseEditor(voiceId: voice, initialPauses: _settings.speechPausesForVoice(voice),
-            globalPauses: _settings.speechPauses, initiallyExpanded: true,
+          SpeechPauseEditor(initialPauses: _settings.speechPausesForVoice(voice),
             onApply: (selection) => Navigator.pop(ctx, selection)),
         ]))));
-    if (selected != null && mounted) await _applySpeechPauseSelection(selected);
-  }
-
-  Future<void> _applySpeechPauseSelection(SpeechPauseSelection selection) async {
+    if (selected == null || !mounted) return;
     final desired = ReadingSettings.fromJson(_settings.toJson());
-    switch (selection.action) {
-      case SpeechPauseAction.currentVoice: desired.setVoiceSpeechPauses(selection.voiceId, selection.pauses);
-      case SpeechPauseAction.global: desired.applyGlobalSpeechPauses(selection.pauses);
-      case SpeechPauseAction.resetGlobal: desired.resetGlobalSpeechPauses();
-    }
+    desired.setVoiceSpeechPauses(TtsReader.systemVoice, selected);
     await _applySpeechConfiguration(desired);
   }
 
@@ -3487,7 +3501,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
               color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
             trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-              _voicePauseButton(v.id, update, sheet),
               IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
                 icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
             ]), onTap: () => Navigator.pop(ctx, v.id)));
