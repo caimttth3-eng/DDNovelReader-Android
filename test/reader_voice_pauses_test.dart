@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import 'package:duoduo_langdu/models/book.dart';
 import 'package:duoduo_langdu/screens/reader_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
+import 'package:duoduo_langdu/services/book_cache_task.dart';
 import 'package:duoduo_langdu/services/display_cutout.dart';
 import 'package:duoduo_langdu/services/network_connectivity.dart';
 import 'package:duoduo_langdu/services/playback_notifications.dart';
@@ -133,6 +135,63 @@ void main() {
     expect(preparations, hasLength(2)); expect(speech.voice, targetVoice);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  }, timeout: const Timeout(Duration(seconds: 45)));
+
+  testWidgets('another voice cache uses its own split and fingerprint without changing the reader', (tester) async {
+    await configureView(tester);
+    final directory = (await tester.runAsync(() => Directory.systemTemp.createTemp('reader-voice-pause-cache-')))!;
+    const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+    messenger.setMockMethodCallHandler(pathChannel, (_) async => directory.path);
+    const bookId = 'cache-target-voice-pause', targetVoice = 'zh-CN-YunxiNeural';
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(pathChannel, null);
+      final keys = activeBookCaches.keys.where((key) => key.startsWith('$bookId/')).toList();
+      for (final key in keys) { activeBookCaches.remove(key)!.statusNotifier.dispose(); }
+      await directory.delete(recursive: true);
+    });
+    final storage = AppStorage();
+    final settings = ReadingSettings()..voice = TtsReader.defaultVoice..speechRate = 1.8
+      ..firstLineIndent = false..mergeNonSentenceBreaks = false;
+    settings.setVoiceSpeechPauses(targetVoice, const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 250));
+    await storage.saveSettings(settings.toJson());
+    final speech = _VoiceSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book(bookId, '甲乙，丙丁。戊己，庚辛。'),
+      storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    expect(preparations, hasLength(1));
+    final currentFingerprint = ReaderPreparation.prepareSynchronously(preparations.single).fingerprint;
+    final body = find.byKey(const ValueKey('reader-body'));
+    final signatureBefore = tester.widget<KeyedSubtree>(find.ancestor(of: body, matching: find.byType(KeyedSubtree)).first).key;
+    await tester.tap(find.byTooltip(T('read'))); await tester.pumpAndSettle();
+    await pause(tester);
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    final cacheButton = find.byKey(const ValueKey('cache-voice-$targetVoice'));
+    await scrollSheetTo(tester, cacheButton); await tester.tap(cacheButton);
+    // File-system futures are real IO. Drain them outside FakeAsync while
+    // pumping frames, rather than waiting on a network or starting a download.
+    for (var frame = 0; frame < 120 && find.byKey(const ValueKey('cache-binding')).evaluate().isEmpty; frame++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(find.byKey(const ValueKey('cache-binding')), findsOneWidget);
+    expect(preparations, hasLength(2));
+    expect(preparations.last.pauseSettings.millisecondsFor(SpeechPauseKind.comma), 250);
+    final task = activeBookCaches.values.singleWhere((task) => task.bookId == bookId);
+    expect(task.store.voice, targetVoice); expect(task.store.rate, 1.8);
+    expect(task.store.textFingerprint, isNot(currentFingerprint));
+    expect(task.store.textFingerprint, 'words1-${ReadingText.fingerprint(task.book)}');
+    expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences), hasLength(4));
+    expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences).map((s) => s.pauseAfterMilliseconds), contains(250));
+    expect(task.status.total, 4); expect(task.status.done, 0); expect(task.status.isActive, isFalse,
+      reason: 'Opening cache settings must not start network synthesis');
+    expect(speech.voice, TtsReader.defaultVoice); expect(speech.state, TtsState.paused); expect(speech.starts, hasLength(1));
+    final signatureAfter = tester.widget<KeyedSubtree>(find.ancestor(of: body, matching: find.byType(KeyedSubtree)).first).key;
+    expect(signatureAfter, signatureBefore, reason: 'Preparing another cache voice cannot replace the displayed split');
+    final saved = ReadingSettings.fromJson(await storage.loadSettings());
+    expect(saved.voice, TtsReader.defaultVoice); expect(saved.effectiveSpeechPauses.millisecondsFor(SpeechPauseKind.comma), 0);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    await tester.runAsync(() => task.store.sizeBytes());
+    expect(tester.takeException(), isNull);
   }, timeout: const Timeout(Duration(seconds: 45)));
 
   testWidgets('system fallback reparses its own pause policy and keeps the current word anchor', (tester) async {

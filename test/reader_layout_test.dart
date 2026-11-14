@@ -1058,7 +1058,9 @@ void main() {
     expect(find.text('音源：系统'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     final systemOption = find.widgetWithText(ListTile, '使用系统文本转语音能力');
-    expect(tester.widget<ListTile>(systemOption).trailing, isNull);
+    expect(tester.widget<ListTile>(systemOption).trailing?.key, const ValueKey('pause-voice-__system_tts__'));
+    expect(find.descendant(of: systemOption, matching: find.byIcon(Icons.download_outlined)), findsNothing);
+    expect(find.descendant(of: systemOption, matching: find.byIcon(Icons.hourglass_empty)), findsOneWidget);
     expect(tester.widget<ListTile>(systemOption).subtitle, isNull);
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await _captureReaderPreview(tester, preview, 'reader-system-cache-disabled');
@@ -1645,7 +1647,8 @@ void main() {
     final apply = find.byKey(const ValueKey('pause-apply'));
     await tester.ensureVisible(apply); await tester.tap(apply); await tester.pumpAndSettle();
     expect(speech.startCalls, 1, reason: 'Changing pauses while paused must not start speech');
-    expect(((await storage.loadSettings())['speechPauses'] as Map)['comma'], 350);
+    expect(((await storage.loadSettings())['speechPauses'] as Map)['comma'], 0);
+    expect((await storage.loadSettings())['perVoiceSpeechPauses'][TtsReader.defaultVoice]['comma'], 350);
     expect((await storage.loadSettings())['keepScreenMinutes'], 15);
     expect((await storage.loadSettings())['readingScreenSeconds'], 60);
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();

@@ -557,10 +557,13 @@ Future<Uint8List?> _synthOnce(String text,
   Socket? transport;
   Completer<Uint8List?>? waiting;
   token._abort = () {
+    // destroy() can synchronously finish the incoming stream. Publish the
+    // intentional cancellation first so onDone cannot replace it with a
+    // connection failure (and incorrectly trigger offline fallback).
+    if (waiting != null && !waiting!.isCompleted) waiting!.completeError(const EdgeTtsException('cancelled'));
     client.close(force: true);
     if (ws != null) unawaited(ws!.close().then<void>((_) {}, onError: (Object _) {}));
     transport?.destroy();
-    if (waiting != null && !waiting!.isCompleted) waiting!.completeError(const EdgeTtsException('cancelled'));
   };
   try {
     token.check();
