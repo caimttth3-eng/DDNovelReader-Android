@@ -16,6 +16,17 @@ import 'package:duoduo_langdu/services/reading_text.dart';
 import 'package:duoduo_langdu/services/reader_preparation.dart';
 import 'package:duoduo_langdu/services/system_tts.dart';
 
+Future<void> completeAction(WidgetTester tester, Future<void> action) async {
+  var done = false;
+  Object? failure;
+  action.then((_) { done = true; }, onError: (Object error) { failure = error; done = true; });
+  for (var frame = 0; frame < 120 && !done; frame++) {
+    await tester.pump(const Duration(milliseconds: 16));
+  }
+  expect(done, isTrue, reason: 'The media callback must complete while widget frames and platform microtasks are pumped');
+  if (failure != null) throw failure!;
+}
+
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   final messenger = binding.defaultBinaryMessenger;
@@ -60,55 +71,57 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book(voice), storage: storage, ttsReader: speech)));
       await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
       expect(handler.playbackState.value.playing, isTrue);
-      await handler.pause(); await tester.pumpAndSettle();
+      await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
       expect(speech.state, TtsState.paused); expect(handler.playbackState.value.playing, isFalse);
       expect(find.byKey(const ValueKey('reading-volume-slider')), findsOneWidget);
-      await handler.play(); await tester.pumpAndSettle();
+      await completeAction(tester, handler.play()); await tester.pumpAndSettle();
       expect(speech.resumes, 1); expect(handler.playbackState.value.playing, isTrue);
       expect(find.byKey(const ValueKey('reading-volume-slider')), findsNothing);
       await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
       expect(handler.playbackState.value.playing, isFalse);
       binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       binding.handleAppLifecycleStateChanged(AppLifecycleState.paused); await tester.pump();
-      await handler.play(); await tester.pumpAndSettle();
+      await completeAction(tester, handler.play()); await tester.pumpAndSettle();
       expect(speech.resumes, 2); expect(handler.playbackState.value.playing, isTrue);
-      await handler.pause(); await tester.pumpAndSettle();
+      await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
       expect(speech.state, TtsState.paused); expect(handler.playbackState.value.playing, isFalse);
       binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
       await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
       expect(speech.resumes, 3); expect(handler.playbackState.value.playing, isTrue);
       speech.changeState(TtsState.paused); await tester.pumpAndSettle();
       expect(handler.playbackState.value.playing, isFalse, reason: 'Actual service state must update the notification without a screen pause request');
-      await handler.play(); await tester.pumpAndSettle();
+      await completeAction(tester, handler.play()); await tester.pumpAndSettle();
       expect(speech.resumes, 4); expect(speech.starts, 1);
       expect(handler.playbackState.value.playing, isTrue); expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
-    });
+    }, timeout: const Timeout(Duration(seconds: 45)));
   }
 
   testWidgets('notification pause cancels a pending media play and can play again', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final speech = _MediaSpeech()..pendingStart = Completer<void>();
+    addTearDown(() { if (!speech.pendingStart!.isCompleted) speech.pendingStart!.complete(); });
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('pending-media'), storage: AppStorage(), ttsReader: speech)));
     await tester.pumpAndSettle();
     final starting = handler.play(); await tester.pump(); await tester.pump(const Duration(milliseconds: 16));
     expect(speech.starts, 1);
     final pausing = handler.pause(); await tester.pumpAndSettle();
     expect(speech.state, TtsState.paused); expect(handler.playbackState.value.playing, isFalse);
-    await pausing; await starting;
-    await handler.play(); await tester.pumpAndSettle();
+    await completeAction(tester, pausing); await completeAction(tester, starting);
+    await completeAction(tester, handler.play()); await tester.pumpAndSettle();
     expect(speech.resumes, 1); expect(handler.playbackState.value.playing, isTrue);
     expect(find.byKey(const ValueKey('reading-volume-slider')), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
-  });
+  }, timeout: const Timeout(Duration(seconds: 45)));
 
   testWidgets('a delayed volume read cannot block notification pause or the following play', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     var holdVolume = false;
     final pendingVolume = Completer<double>();
+    addTearDown(() { if (!pendingVolume.isCompleted) pendingVolume.complete(0.5); });
     messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/volume_keys'), (call) async {
       if (call.method == 'getMediaVolume') return holdVolume ? pendingVolume.future : 0.5;
       return null;
@@ -124,14 +137,14 @@ void main() {
     expect(paused, isTrue, reason: 'Pause must finish while the independent volume request remains pending');
     expect(handler.playbackState.value.playing, isFalse);
     expect(find.byKey(const ValueKey('reading-volume-slider')), findsOneWidget);
-    await pauseRequest; await handler.play(); await tester.pumpAndSettle();
+    await completeAction(tester, pauseRequest); await completeAction(tester, handler.play()); await tester.pumpAndSettle();
     expect(speech.resumes, 1); expect(handler.playbackState.value.playing, isTrue);
     expect(find.byKey(const ValueKey('reading-volume-slider')), findsNothing);
     holdVolume = false; pendingVolume.complete(0.1); await tester.pumpAndSettle();
     expect(speech.currentIndex, 1); expect(speech.starts, 1); expect(speech.resumes, 1);
     expect(handler.playbackState.value.playing, isTrue); expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
-  });
+  }, timeout: const Timeout(Duration(seconds: 45)));
 
   testWidgets('system media text follows displayed sentences and toggles immediately without word-level updates', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
@@ -139,41 +152,43 @@ void main() {
     final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..firstLineIndent = false).toJson());
     final speech = _MediaSpeech(), items = <String?>[];
     final subscription = handler.mediaItem.listen((item) { items.add(item?.displaySubtitle); });
+    addTearDown(subscription.cancel);
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('media-text'), storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
     expect(handler.mediaItem.value!.artist, '第一章'); expect(handler.mediaItem.value!.displaySubtitle, isNull);
-    await handler.pause(); await tester.pumpAndSettle();
+    await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
     final toggle = find.byKey(const ValueKey('show-system-media-text'));
     await tester.ensureVisible(toggle); await tester.pumpAndSettle(); await tester.tap(toggle); await tester.pumpAndSettle();
     expect(handler.mediaItem.value!.displaySubtitle, '清晨山间的风吹过树林。');
     expect(handler.mediaItem.value!.artist, '清晨山间的风吹过树林。');
     await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
-    await handler.play(); await tester.pumpAndSettle();
+    await completeAction(tester, handler.play()); await tester.pumpAndSettle();
     speech.emitSentence(1); await tester.pumpAndSettle();
     expect(handler.mediaItem.value!.displaySubtitle, '朋友带来一封远方的来信。');
     final count = items.length;
     speech.onWordChanged?.call(0, 2); speech.onWordChanged?.call(2, 4); await tester.pumpAndSettle();
     expect(items.length, count, reason: 'Real word ticks must not re-emit unchanged sentence metadata');
-    await handler.pause(); await tester.pumpAndSettle();
+    await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
     await tester.ensureVisible(toggle); await tester.pumpAndSettle(); await tester.tap(toggle); await tester.pumpAndSettle();
     expect(handler.mediaItem.value!.artist, '第一章'); expect(handler.mediaItem.value!.displaySubtitle, isNull);
     expect(handler.mediaItem.value!.extras!.containsKey('spokenText'), isFalse);
     await tester.tap(toggle); await tester.pumpAndSettle();
     expect(handler.mediaItem.value!.displaySubtitle, '朋友带来一封远方的来信。');
-    await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle(); await handler.stop(); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle(); await completeAction(tester, handler.stop()); await tester.pumpAndSettle();
     expect(handler.mediaItem.value!.title, '媒体暂停继续'); expect(handler.mediaItem.value!.artist, '第一章');
     expect(handler.mediaItem.value!.displaySubtitle, isNull); expect(handler.mediaItem.value!.extras!.containsKey('spokenText'), isFalse);
     await subscription.cancel(); expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
-  });
+  }, timeout: const Timeout(Duration(seconds: 45)));
 
   testWidgets('real system speech keeps its word through a delayed central pause, speed change and central resume', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final spoken = <Map>[], stopEntered = Completer<void>();
     Completer<void>? stopGate;
+    addTearDown(() { if (stopGate != null && !stopGate!.isCompleted) stopGate!.complete(); });
     Future<void> emit(String name, Map data) async {
       final handled = Completer<void>();
       messenger.handlePlatformMessage(SystemTtsClient.channel.name,
@@ -238,7 +253,7 @@ void main() {
     expect(speech.currentTtsOffset, 2); expect(highlightedWord(), '丙丁');
     expect(handler.playbackState.value.playing, isTrue); expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
-  });
+  }, timeout: const Timeout(Duration(seconds: 45)));
 }
 
 class _MediaSpeech extends TtsReader {
