@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,6 +35,7 @@ void main() {
   late TtsAudioHandler handler;
   TtsAudioHandler? previous;
   setUp(() async {
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     SharedPreferences.setMockInitialValues({});
     ReaderPreparation.runnerForTesting = (request) async => ReaderPreparation.prepareSynchronously(request);
     AppAppearance.setThemeMode('light');
@@ -205,6 +207,11 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final spoken = <Map>[], stopEntered = Completer<void>();
+    final notificationCalls = <String>[], nativeCalls = <String>[];
+    messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (call) async {
+      notificationCalls.add(call.method);
+      return {'supported': false, 'enabled': false, 'canRequest': false, 'asked': false};
+    });
     Completer<void>? stopGate;
     addTearDown(() { if (stopGate != null && !stopGate!.isCompleted) stopGate!.complete(); });
     Future<void> emit(String name, Map data) async {
@@ -214,6 +221,7 @@ void main() {
       await handled.future;
     }
     messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+      nativeCalls.add(call.method);
       if (call.method == 'initialize') return 'phone-default-engine';
       if (call.method == 'stop' && stopGate != null) {
         if (!stopEntered.isCompleted) stopEntered.complete();
@@ -232,15 +240,23 @@ void main() {
     const text = '甲乙丙丁戊己，庚辛壬癸。';
     final source = Book(id: 'real-system-center-rate', title: '中央点按与调速', filePath: '', format: BookFormat.txt,
       addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [ReadingText.paragraph(text)])]);
-    final speech = TtsReader();
+    final speech = TtsReader(player: _SystemOnlyPlayer());
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
-    await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读'));
+    await tester.pumpAndSettle();
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pump();
+    expect(binding.lifecycleState, AppLifecycleState.resumed);
+    expect(find.byKey(const ValueKey('reader-body')), findsOneWidget);
+    expect(find.byTooltip('朗读'), findsOneWidget);
+    await tester.tap(find.byTooltip('朗读'));
     for (var frame = 0; frame < 120 && spoken.isEmpty; frame++) {
       await tester.runAsync(() => Future<void>.delayed(Duration.zero));
       await tester.pump(const Duration(milliseconds: 16));
     }
     await tester.pumpAndSettle();
-    expect(spoken, hasLength(1));
+    expect(spoken, hasLength(1), reason: 'foreground=${binding.lifecycleState} state=${speech.state} '
+      'permissionCalls=$notificationCalls nativeCalls=$nativeCalls '
+      'readerBody=${find.byKey(const ValueKey('reader-body')).evaluate().length} '
+      'loading=${find.byType(CircularProgressIndicator).evaluate().length}');
     final originalId = spoken.single['id'];
     await emit('range', {'id': originalId, 'start': 2, 'end': 4}); await tester.pumpAndSettle();
     debugPrint('MEDIA_REAL word');
@@ -283,6 +299,7 @@ void main() {
 }
 
 class _MediaSpeech extends TtsReader {
+  _MediaSpeech() : super(player: _SystemOnlyPlayer());
   TtsState status = TtsState.idle;
   int starts = 0, resumes = 0;
   int sentenceIndex = -1;
@@ -302,4 +319,22 @@ class _MediaSpeech extends TtsReader {
   }
   @override Future<bool> resume() async { resumes++; changeState(TtsState.playing); return true; }
   @override Future<void> stop() async { changeState(TtsState.stopped); }
+}
+
+/// The system-engine integration uses no BytesSource player. Keep its transport
+/// independent of the audioplayers singleton created in other FakeAsync zones.
+class _SystemOnlyPlayer implements AudioPlayer {
+  @override PositionUpdater? positionUpdater;
+  @override Stream<void> get onPlayerComplete => const Stream<void>.empty();
+  @override Stream<Duration> get onPositionChanged => const Stream<Duration>.empty();
+  @override Future<Duration?> getCurrentPosition() async => Duration.zero;
+  @override Future<void> stop() async {}
+  @override Future<void> pause() async {}
+  @override Future<void> dispose() async { positionUpdater?.dispose(); }
+  @override Future<void> play(Source source, {double? volume, double? balance, AudioContext? ctx,
+    Duration? position, PlayerMode? mode}) async {
+    throw StateError('System speech must not enter the BytesSource audio path');
+  }
+  @override dynamic noSuchMethod(Invocation invocation) =>
+    throw StateError('Unexpected system-only player operation: ${invocation.memberName}');
 }
