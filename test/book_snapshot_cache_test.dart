@@ -32,6 +32,7 @@ void main() {
   tearDown(() async { await directory.delete(recursive: true); });
 
   test('saving changed pauses uses the latest key and never reuses the older pause policy', () async {
+    settings.voice = ReadingSettings.systemPauseVoice;
     final lookup = await cache.lookup(meta, settings);
     final latest = ReadingSettings.fromJson(settings.toJson());
     latest.speechPauses = latest.speechPauses.withPause(SpeechPauseKind.dash, 750);
@@ -45,7 +46,7 @@ void main() {
       .any((s) => s.pauseAfterMilliseconds == 750), isTrue);
   });
 
-  test('snapshot keys follow effective voice pauses and ignore inactive overrides', () async {
+  test('online snapshots ignore historical overrides and system snapshots follow the system policy', () async {
     final lookup = await cache.lookup(meta, settings);
     await cache.save(lookup, source, prepared);
     settings.setVoiceSpeechPauses('zh-CN-YunxiNeural',
@@ -53,6 +54,11 @@ void main() {
     expect((await cache.lookup(meta, settings)).snapshot, isNotNull,
       reason: 'Changing a different voice must not invalidate the current prepared book');
     settings.voice = 'zh-CN-YunxiNeural';
+    expect((await cache.lookup(meta, settings)).snapshot, isNotNull,
+      reason: 'Online voices must keep factory pauses even when an old override is stored');
+    settings.systemFallbackActive = true;
+    settings.setVoiceSpeechPauses(ReadingSettings.systemPauseVoice,
+      const SpeechPauseSettings().withPause(SpeechPauseKind.dash, 950));
     expect((await cache.lookup(meta, settings)).snapshot, isNull);
     final changed = ReaderPreparation.prepareSynchronously(ReaderPreparationRequest(source,
       merge: true, indent: true, filter: 'links', autoExtractToc: true,
@@ -62,11 +68,10 @@ void main() {
     final hit = (await cache.lookup(meta, settings)).snapshot!;
     expect(hit.prepared.book.chapters.expand((c) => c.paragraphs).expand((p) => p.sentences)
       .any((s) => s.pauseAfterMilliseconds == 950), isTrue);
-    settings.systemFallbackActive = true;
+    settings.systemFallbackActive = false;
     expect((await cache.lookup(meta, settings)).snapshot, isNull,
-      reason: 'System fallback inherits global pauses instead of the online voice override');
-    settings.setVoiceSpeechPauses(ReadingSettings.systemPauseVoice,
-      const SpeechPauseSettings().withPause(SpeechPauseKind.dash, 950));
+      reason: 'Returning online must not reuse the system-specific split');
+    settings.voice = ReadingSettings.systemPauseVoice;
     expect((await cache.lookup(meta, settings)).snapshot, isNotNull,
       reason: 'Voices with identical effective pauses can reuse the same prepared graph');
   });

@@ -151,16 +151,18 @@ class ReadingSettings {
   String get speechPauseVoice => systemFallbackActive ? systemPauseVoice : _pauseVoiceKey(voice);
   SpeechPauseSettings get effectiveSpeechPauses => speechPausesForVoice(speechPauseVoice);
   SpeechPauseSettings speechPausesForVoice(String voiceId) =>
-    perVoiceSpeechPauses[_pauseVoiceKey(voiceId)] ?? speechPauses;
-  bool hasVoiceSpeechPauses(String voiceId) => perVoiceSpeechPauses.containsKey(_pauseVoiceKey(voiceId));
+    _pauseVoiceKey(voiceId) == systemPauseVoice
+      ? perVoiceSpeechPauses[systemPauseVoice] ?? speechPauses
+      : const SpeechPauseSettings();
+  bool hasVoiceSpeechPauses(String voiceId) => _pauseVoiceKey(voiceId) == systemPauseVoice &&
+    perVoiceSpeechPauses.containsKey(systemPauseVoice);
   void setVoiceSpeechPauses(String voiceId, SpeechPauseSettings pauses) =>
     perVoiceSpeechPauses[_pauseVoiceKey(voiceId)] = pauses;
   void clearVoiceSpeechPauses(String voiceId) => perVoiceSpeechPauses.remove(_pauseVoiceKey(voiceId));
 
-  // Global changes affect inherited voices only. Explicit per-voice choices
-  // survive both global application and the factory reset requested by the UI.
-  void applyGlobalSpeechPauses(SpeechPauseSettings pauses) { speechPauses = pauses; }
-  void resetGlobalSpeechPauses() { speechPauses = const SpeechPauseSettings(); }
+  // Legacy global and online overrides remain serialized for compatibility.
+  // Only the system voice may consume customized pauses. Its explicit profile
+  // wins over the older, pre-profile setting so upgrades never discard it.
 
   Map<String, dynamic> toJson() => {
         'brightness': brightness,

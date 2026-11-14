@@ -12,6 +12,7 @@ import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
 import 'package:duoduo_langdu/services/book_cache_task.dart';
 import 'package:duoduo_langdu/services/display_cutout.dart';
+import 'package:duoduo_langdu/services/edge_tts.dart';
 import 'package:duoduo_langdu/services/network_connectivity.dart';
 import 'package:duoduo_langdu/services/playback_notifications.dart';
 import 'package:duoduo_langdu/services/reader_preparation.dart';
@@ -74,7 +75,20 @@ void main() {
     await tester.tap(find.text(T('ok'))); await tester.pumpAndSettle();
   }
 
-  testWidgets('editing an inactive voice leaves current speech unchanged and its override survives global actions', (tester) async {
+  Future<void> dismissSheet(WidgetTester tester) async {
+    Navigator.of(tester.element(find.byType(BottomSheet).last)).pop();
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> expandPauses(WidgetTester tester) async {
+    expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
+    expect(find.byKey(const ValueKey('pause-apply')), findsNothing);
+    final expand = find.byKey(const ValueKey('pause-expand'));
+    await scrollSheetTo(tester, expand); await tester.tap(expand); await tester.pumpAndSettle();
+    expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNull);
+  }
+
+  testWidgets('only the system voice offers paused editing and editing it leaves online playback unchanged', (tester) async {
     await configureView(tester);
     final storage = AppStorage();
     await storage.saveSettings((ReadingSettings()..voice = TtsReader.defaultVoice
@@ -88,14 +102,28 @@ void main() {
     expect(speech.starts, hasLength(1));
     final original = speech.starts.single;
     await pause(tester);
+    await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pause-expand')), findsNothing,
+      reason: 'Playback settings no longer expose an additional-pause editor');
+    expect(find.byKey(const ValueKey('pause-apply')), findsNothing);
+    expect(find.byKey(const ValueKey('pause-apply-global')), findsNothing);
+    expect(find.byKey(const ValueKey('pause-reset-global')), findsNothing);
+    await dismissSheet(tester);
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
-    const targetVoice = 'zh-CN-YunxiNeural';
+    const targetVoice = TtsReader.systemVoice;
     final voicePause = find.byKey(const ValueKey('pause-voice-$targetVoice'));
-    await scrollSheetTo(tester, voicePause);
+    expect(voicePause, findsOneWidget);
     expect(find.byKey(const ValueKey('pause-customized-$targetVoice')), findsNothing);
-    expect(tester.getRect(voicePause).right,
-      lessThanOrEqualTo(tester.getRect(find.byKey(const ValueKey('cache-voice-$targetVoice'))).left));
+    for (final voice in edgeVoices) {
+      final cache = find.byKey(ValueKey('cache-voice-${voice.id}'));
+      await scrollSheetTo(tester, cache);
+      expect(cache, findsOneWidget);
+      expect(find.byKey(ValueKey('pause-voice-${voice.id}')), findsNothing,
+        reason: 'Online voices have their cache action without an added-pause action');
+    }
+    await scrollSheetTo(tester, voicePause, delta: -150);
     await tester.tap(voicePause); await tester.pumpAndSettle();
+    await expandPauses(tester);
     await editComma(tester, '0.25');
     final apply = find.byKey(const ValueKey('pause-apply'));
     await scrollSheetTo(tester, apply, delta: -150); await tester.tap(apply); await tester.pumpAndSettle();
@@ -105,29 +133,19 @@ void main() {
     var saved = ReadingSettings.fromJson(await storage.loadSettings());
     expect(saved.voice, TtsReader.defaultVoice); expect(saved.speechPauses.millisecondsFor(SpeechPauseKind.comma), 0);
     expect(saved.speechPausesForVoice(targetVoice).millisecondsFor(SpeechPauseKind.comma), 250);
+    expect(saved.effectiveSpeechPauses, const SpeechPauseSettings());
     expect(find.byKey(const ValueKey('pause-customized-$targetVoice')), findsOneWidget);
 
     await tester.tap(find.ancestor(of: voicePause, matching: find.byType(ListTile)).first); await tester.pumpAndSettle();
     expect(speech.voice, targetVoice); expect(preparations, hasLength(2));
     expect(preparations.last.pauseSettings.millisecondsFor(SpeechPauseKind.comma), 250);
     expect(speech.starts, hasLength(2)); expect(speech.starts.last.sentences, hasLength(4));
+    expect(speech.starts.last.system, isTrue);
     expect(speech.starts.last.pauses, contains(250));
     await pause(tester);
-    Future<void> openPlaybackPauses() async {
-      await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
-      final expand = find.byKey(const ValueKey('pause-expand'));
-      await scrollSheetTo(tester, expand); await tester.tap(expand); await tester.pumpAndSettle();
-    }
-    await openPlaybackPauses(); await editComma(tester, '0.45');
-    final applyGlobal = find.byKey(const ValueKey('pause-apply-global'));
-    await scrollSheetTo(tester, applyGlobal, delta: -150); await tester.tap(applyGlobal); await tester.pumpAndSettle();
-    saved = ReadingSettings.fromJson(await storage.loadSettings());
-    expect(saved.speechPauses.millisecondsFor(SpeechPauseKind.comma), 450);
-    expect(saved.speechPausesForVoice(targetVoice).millisecondsFor(SpeechPauseKind.comma), 250);
-    expect(preparations, hasLength(2)); expect(speech.starts, hasLength(2));
-    await openPlaybackPauses();
-    final reset = find.byKey(const ValueKey('pause-reset-global'));
-    await scrollSheetTo(tester, reset); await tester.tap(reset); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pause-expand')), findsNothing);
+    await dismissSheet(tester);
     saved = ReadingSettings.fromJson(await storage.loadSettings());
     expect(saved.speechPauses, const SpeechPauseSettings());
     expect(saved.hasVoiceSpeechPauses(targetVoice), isTrue);
@@ -137,7 +155,7 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));
 
-  testWidgets('another voice cache uses its own split and fingerprint without changing the reader', (tester) async {
+  testWidgets('online cache ignores legacy global and voice-specific pauses without changing the reader', (tester) async {
     await configureView(tester);
     final directory = (await tester.runAsync(() => Directory.systemTemp.createTemp('reader-voice-pause-cache-')))!;
     const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
@@ -152,6 +170,7 @@ void main() {
     final storage = AppStorage();
     final settings = ReadingSettings()..voice = TtsReader.defaultVoice..speechRate = 1.8
       ..firstLineIndent = false..mergeNonSentenceBreaks = false;
+    settings.speechPauses = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 450);
     settings.setVoiceSpeechPauses(targetVoice, const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 250));
     await storage.saveSettings(settings.toJson());
     final speech = _VoiceSpeech();
@@ -159,6 +178,8 @@ void main() {
       storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle();
     expect(preparations, hasLength(1));
+    expect(preparations.single.pauseSettings, const SpeechPauseSettings(),
+      reason: 'Online reading cannot inherit the old globally customized pause');
     final currentFingerprint = ReaderPreparation.prepareSynchronously(preparations.single).fingerprint;
     final body = find.byKey(const ValueKey('reader-body'));
     final signatureBefore = tester.widget<KeyedSubtree>(find.ancestor(of: body, matching: find.byType(KeyedSubtree)).first).key;
@@ -174,21 +195,25 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
     }
     expect(find.byKey(const ValueKey('cache-binding')), findsOneWidget);
-    expect(preparations, hasLength(2));
-    expect(preparations.last.pauseSettings.millisecondsFor(SpeechPauseKind.comma), 250);
+    expect(preparations, hasLength(1), reason: 'Both online voices use the same default split, so no reformat is necessary');
     final task = activeBookCaches.values.singleWhere((task) => task.bookId == bookId);
     expect(task.store.voice, targetVoice); expect(task.store.rate, 1.8);
-    expect(task.store.textFingerprint, isNot(currentFingerprint));
+    expect(task.store.textFingerprint, currentFingerprint);
     expect(task.store.textFingerprint, 'words1-${ReadingText.fingerprint(task.book)}');
-    expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences), hasLength(4));
-    expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences).map((s) => s.pauseAfterMilliseconds), contains(250));
-    expect(task.status.total, 4); expect(task.status.done, 0); expect(task.status.isActive, isFalse,
+    expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences), hasLength(2));
+    expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences).map((s) => s.pauseAfterMilliseconds), isNot(contains(250)));
+    expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences).map((s) => s.pauseAfterMilliseconds), isNot(contains(450)));
+    expect(task.status.total, 2); expect(task.status.done, 0); expect(task.status.isActive, isFalse,
       reason: 'Opening cache settings must not start network synthesis');
     expect(speech.voice, TtsReader.defaultVoice); expect(speech.state, TtsState.paused); expect(speech.starts, hasLength(1));
     final signatureAfter = tester.widget<KeyedSubtree>(find.ancestor(of: body, matching: find.byType(KeyedSubtree)).first).key;
     expect(signatureAfter, signatureBefore, reason: 'Preparing another cache voice cannot replace the displayed split');
     final saved = ReadingSettings.fromJson(await storage.loadSettings());
     expect(saved.voice, TtsReader.defaultVoice); expect(saved.effectiveSpeechPauses.millisecondsFor(SpeechPauseKind.comma), 0);
+    expect(saved.speechPauses.millisecondsFor(SpeechPauseKind.comma), 450);
+    expect(saved.perVoiceSpeechPauses[targetVoice]!.millisecondsFor(SpeechPauseKind.comma), 250,
+      reason: 'Legacy data remains readable while online synthesis ignores its customized values');
+    expect(saved.hasVoiceSpeechPauses(targetVoice), isFalse);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     await tester.runAsync(() => task.store.sizeBytes());
     expect(tester.takeException(), isNull);

@@ -95,12 +95,24 @@ void main() {
     Future<void> scrollTo(Finder target, {double delta = 180}) async {
       // The narrow, enlarged-text sheet lazily builds its offscreen rows.
       // Scroll its own viewport so absent controls are actually mounted.
-      final scrollable = find.descendant(of: find.byType(BottomSheet), matching: find.byType(Scrollable)).last;
+      final scrollable = find.descendant(of: find.byType(BottomSheet).last, matching: find.byType(Scrollable)).last;
       await tester.scrollUntilVisible(target, delta, scrollable: scrollable);
       await tester.pumpAndSettle();
     }
+    Future<void> dismissSheet() async {
+      Navigator.of(tester.element(find.byType(BottomSheet).last)).pop();
+      await tester.pumpAndSettle();
+    }
+    Future<void> dismissPauseAndVoice() async {
+      await dismissSheet();
+      expect(find.byKey(const ValueKey('pause-voice-__system_tts__')), findsOneWidget);
+      await dismissSheet();
+      expect(find.byKey(const ValueKey('reading-voice')), findsOneWidget);
+    }
     Future<void> openMenu() async {
-      await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+      final systemPause = find.byKey(const ValueKey('pause-voice-__system_tts__'));
+      await scrollTo(systemPause); await tester.tap(systemPause); await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
       expect(find.byKey(const ValueKey('pause-apply')), findsNothing);
       final expand = find.byKey(const ValueKey('pause-expand'));
@@ -108,7 +120,11 @@ void main() {
       expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNull);
       await scrollTo(find.byKey(const ValueKey('pause-slider-comma')));
     }
-    await openMenu();
+    // General playback settings retain media-text options but no longer expose
+    // the system-only pause editor. Close them before entering the voice sheet.
+    await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pause-expand')), findsNothing);
+    expect(find.byKey(const ValueKey('pause-apply')), findsNothing);
     final mediaText = find.byKey(const ValueKey('show-system-media-text'));
     await scrollTo(mediaText, delta: -180);
     expect(tester.widget<SwitchListTile>(mediaText).value, isFalse);
@@ -117,6 +133,8 @@ void main() {
     await tester.tap(mediaText); await tester.pumpAndSettle();
     expect((await storage.loadSettings())['showSystemMediaText'], isFalse);
     expect(requests, isEmpty);
+    await dismissSheet();
+    await openMenu();
     await scrollTo(find.byKey(const ValueKey('pause-slider-comma')));
     expect(find.descendant(of: find.byKey(const ValueKey('pause-comma')), matching: find.text('0.00秒')), findsOneWidget);
     final comma = find.byKey(const ValueKey('pause-slider-comma'));
@@ -132,7 +150,7 @@ void main() {
     final drafted = tester.widget<Slider>(comma).value;
     // Collapsing the section keeps its draft but cannot apply it.
     final expand = find.byKey(const ValueKey('pause-expand'));
-    final sheetScroll = find.descendant(of: find.byType(BottomSheet), matching: find.byType(Scrollable)).last;
+    final sheetScroll = find.descendant(of: find.byType(BottomSheet).last, matching: find.byType(Scrollable)).last;
     await tester.scrollUntilVisible(expand, -180, scrollable: sheetScroll); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('pause-expand-label'))); await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('pause-slider-comma')), findsNothing);
@@ -143,6 +161,8 @@ void main() {
     expect((await storage.loadSettings())['speechPauses']['comma'], 0);
     await scrollTo(expand, delta: -180);
     expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNotNull);
+    expect(tester.getRect(find.byKey(const ValueKey('pause-apply'))).center.dy,
+      closeTo(tester.getRect(expand).center.dy, 1), reason: 'Apply remains on the expanded section header row');
     if (Platform.isLinux) {
       await tester.runAsync(() async {
         final boundary = preview.currentContext!.findRenderObject()! as RenderRepaintBoundary;
@@ -154,8 +174,8 @@ void main() {
         } finally { image.dispose(); }
       });
     }
-    await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
-    expect(requests, isEmpty, reason: 'Dismissing playback settings discards its unapplied draft');
+    await dismissPauseAndVoice();
+    expect(requests, isEmpty, reason: 'Dismissing the system pause editor discards its unapplied draft');
     expect((await storage.loadSettings())['speechPauses']['comma'], 0);
     expect(spoken, hasLength(1));
     await openMenu();
@@ -178,14 +198,18 @@ void main() {
     expect((await storage.loadSettings())['speechPauses']['comma'], 0);
     expect((await storage.loadSettings())['perVoiceSpeechPauses'][TtsReader.systemVoice]['comma'], 250);
     expect(spoken, hasLength(1), reason: 'Applying a paused setting must remain paused');
+    // Apply closed only the nested pause sheet. The underlying voice picker
+    // remains, and must also close before reopening it or resuming the reader.
+    expect(find.byKey(const ValueKey('pause-expand')), findsNothing);
+    await dismissSheet();
     await openMenu();
-    await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
+    await dismissPauseAndVoice();
     expect(requests, hasLength(1), reason: 'Closing without changes must not prepare the book again');
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     expect(spoken, hasLength(2));
     expect(spoken.last['text'], '庚辛壬癸。', reason: 'Re-segmentation must map the saved word into the new sentence before system resume');
     expect(requests, hasLength(1)); expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
-  });
+  }, timeout: const Timeout(Duration(seconds: 45)));
 
 }
