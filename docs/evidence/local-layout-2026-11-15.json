@@ -6,9 +6,9 @@
   "sourceAfter": "DDNovelReader",
   "gitHeadPreserved": "fb84403b3cb507dfb8d5ed6e97eb4a17cc47066d",
   "holdingRoot": "_cache/projects/ddnovelreader/main/temp/layout-review",
-  "pendingDeletion": true,
-  "deletedFiles": 0,
-  "deletedBytes": 0,
+  "pendingDeletion": false,
+  "deletedFiles": 120,
+  "deletedBytes": 116295907,
   "files": 120,
   "bytes": 116295907.0,
   "groups": [
@@ -212,5 +212,15 @@
     }
   ],
   "reparsePointsFound": 0,
-  "rebuildPerformed": false
+  "rebuildPerformed": false,
+  "deletedManifestFiles": 1,
+  "deletedManifestBytes": 29650,
+  "deletedTotalFiles": 121,
+  "deletedTotalBytes": 116325557,
+  "review": {
+    "initialBatchDeletionRejected": true,
+    "safeHoldingMoveCompleted": true,
+    "explicitUserApproval": "允许删除全部列明旧物",
+    "finalDeletionCompleted": true
+  }
 }

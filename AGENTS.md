@@ -8,4 +8,4 @@
 - 正式构建使用 GitHub Actions。共享工具尚未登记本项目；新增本地构建前由共享维护者登记，不修改公共契约、不借用其他项目实例、不安装或回退全局 Flutter。
 - 本地 Git 用共享 `_env/bin/Invoke-PortableGit.ps1` 和既定署名；目录整理只本地提交，未经明确指示不推送、不改写历史。
 - `docs/history/initial-workspace` 是停用的早期元数据，不是当前构建入口。
-- `_cache/projects/ddnovelreader/main/temp/layout-review` 的旧物批量删除已被自动审批拒绝。总根通用整理授权不能代替对这批具体旧物的确认；取得用户对清单的明确同意前保留，不交其他任务代删。
+- 2026-11-15 的 120 个旧物已在用户具体授权后清理，记录见 `docs/evidence/local-layout-2026-11-15.json`。此授权不扩展到其他文件；以后被安全拒绝的具体删除仍按父目录规则另行确认。
