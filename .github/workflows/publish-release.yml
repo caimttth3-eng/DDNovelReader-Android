@@ -1,0 +1,36 @@
+name: Publish verified APK release
+
+on:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/publish-release.yml']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  release:
+    if: github.repository == 'NayGnehz/DDNovelReader-Android'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: publish-verified-v1.2.26
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: DDNovelReader-gestures-apk
+          run-id: 43622578197
+          github-token: ${{ github.token }}
+          path: verified-apk
+      - name: Verify and publish the existing online APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/publish_verified_release.py
