@@ -3,7 +3,7 @@ name: Publish verified APK release
 on:
   push:
     branches: [master]
-    paths: ['.github/workflows/publish-release.yml']
+    paths: ['.github/workflows/publish-release.yml', 'scripts/publish_verified_release.py']
   workflow_dispatch:
 
 permissions: {}
