@@ -8,9 +8,9 @@
 | 最新成功完整 ARM64 v1.2.27 测试成品、校验和、构建身份与许可 | `_releases/ddnovelreader/v1.2.27/` |
 | 本地最新 APK 选择入口 | `DDNovelReader/scripts/LocalApk.ps1 -Action Path` |
 | 当前尺寸报告与独立调试符号 | `_cache/projects/ddnovelreader/main/build/v1.2.27/` |
-| 原有截图资料与签名目录 | `_data/ddnovelreader/`，签名在其下 `signing/` |
+| 当前签名资料（仅核元数据） | `_data/ddnovelreader/signing/` |
 
-此前签名目录仅做同卷移动，通过文件数量、长度、时间和 ACL 元数据核对；未读取、打印或哈希密钥内容。现有截图资料未移动、未读取内容。APK 归位前后 SHA-256 相同，不为整理重新构建或签名。
+此前签名目录仅做同卷移动，通过文件数量、长度、时间和 ACL 元数据核对；未读取、打印或哈希密钥内容。先前截图资料的数量属于当时快照，本轮目录已仅含签名子目录，不再将旧截图位置写作当前入口。APK 归位前后 SHA-256 相同，不为整理重新构建或签名。
 
 外层 7 个旧代码文件已在 Git 对象中核实；两个未匹配历史的早期说明/依赖清单完整保存在 `docs/history/initial-workspace/`，不能当作当前构建入口。旧预览、重复安装包及一次性补丁脚本先因自动审批拒绝而可恢复暂存；用户随后明确授权后，已删除清单中的 120 个旧文件，共 116295907 字节，并删除 29650 字节清单及空目录，总计删除 121 个文件、116325557 字节。暂存目录已不存在；本项目当前保留的构建缓存未清空。分组记录及授权结果见 [迁移证据](evidence/local-layout-2026-11-15.json)。
 
@@ -28,8 +28,9 @@
 云端下载及验证后的本地目录使用 `_cache/projects/ddnovelreader/main/build/v<版本>/`。其中包含 APK、`build-info.json`（版本、文件名、长度、SHA-256、固定证书指纹及真实构建身份）、`SHA256SUMS.txt`、`signature-verification.txt` 和 `MaterialSymbols-LICENSE.txt`。接收入口从脚本自身定位共享总根，只读使用共享固定 JDK 与 Android Build Tools，不依赖全局工具，不访问私钥：
 
 ```powershell
-# 在源码根执行；-BuildDirectory 使用当次真实构建目录。
-.\scripts\LocalApk.ps1 -Action Receive -BuildDirectory ..\_cache\projects\ddnovelreader\main\build\v1.2.27
+# 在源码根执行；下载完成后先将 $buildDirectory 设为当次完整构建目录。
+# 已归位版本的缓存只保留分析文件，不可再次作为 Receive 输入。
+.\scripts\LocalApk.ps1 -Action Receive -BuildDirectory $buildDirectory
 .\scripts\LocalApk.ps1 -Action Path
 ```
 
@@ -43,4 +44,4 @@
 
 已解决的审批例外：首次删除 `_releases/ddnovelreader/v1.2.26/` 被自动审批拒绝，接收时未启用 `-RetirePrevious`，先保留旧包。用户随后明确回答“允许删除这个旧版本目录”；再次核对精确文件清单、旧 APK 身份、新版校验和及无重解析点/占用后，已实际删除该目录的 6 文件、19,367,572 字节。连同上述缓存，本轮共清理 14 文件、33,691,312 字节。本地成品目录现在仅保留 v1.2.27，选择入口返回该版。
 
-`_data/ddnovelreader` 元数据核对结果为 7 张 JPG 参考截图及签名目录内 2 个文件，共 1,455,943 字节；未发现构建目录、SDK、依赖展开或合成测试资料，没有读取或哈希资料/密钥内容。本轮逐项收据见 [2026-11-16 归位记录](evidence/local-layout-2026-11-16.json)。
+此前归位时的元数据快照为 7 张 JPG 参考截图及签名目录内 2 个文件，共 1,455,943 字节，原始收据保留在 [2026-11-16 归位记录](evidence/local-layout-2026-11-16.json)。本轮复查实际仅有签名目录的 2 个文件、8,319 字节；未发现构建目录、SDK、依赖展开或合成测试资料，没有读取、哈希或修改资料/密钥内容，也未寻找或处理已不在此目录的截图。当前各子目录用途与引用、删除结果见 [全仓引用和目录复查](reference-audit-2026-11-16.md)。

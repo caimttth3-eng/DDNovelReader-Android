@@ -15,7 +15,9 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 ## 下载与安装
 
-当前版本 **1.2.26（31）**：[下载 ARM64-v8a APK](https://github.com/NayGnehz/DDNovelReader-Android/releases/download/v1.2.26/DDNovelReader-v1.2.26-arm64-v8a.apk)。支持 Android 7.0（API 24）及以上的 ARM64 设备，安装包约 19.4 MB。
+公开安装包请从本修改版的 [GitHub Releases](https://github.com/NayGnehz/DDNovelReader-Android/releases) 下载；仓库不再存放 APK。已发布的 **1.2.26（31）** 可从其 [Release 页面](https://github.com/NayGnehz/DDNovelReader-Android/releases/tag/v1.2.26) 获取。支持 Android 7.0（API 24）及以上的 ARM64 设备，安装包约 19.4 MB。
+
+本地最新成功完整包为 **1.2.27（32）**，保存在共享总根的 `_releases/ddnovelreader/v1.2.27/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该本地测试包归位不代表已创建同版本 GitHub Release，详见 [本地布局与接收入口](docs/local-layout.md)。
 
 本分支使用固定签名，后续使用相同证书的版本可覆盖更新。与原作者版本或早期临时调试签名不同，无法直接覆盖安装；更换前请备份书籍与数据。Release 提供 SHA-256 校验文件，详见 [固定签名说明](docs/signing.md)。
 
@@ -47,7 +49,7 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 ## 构建与验证
 
-使用 Flutter 3.50.0、JDK 17 和 Android SDK；依赖版本见 `pubspec.lock`，完整在线流程见 [.github/workflows/build-apk.yml](.github/workflows/build-apk.yml)。
+GitHub Actions 使用 Flutter 3.50.0、JDK 17 和 Android SDK；依赖版本见 `pubspec.lock`，完整在线流程见 [.github/workflows/build-apk.yml](.github/workflows/build-apk.yml)。以下是在线 runner 的构建步骤；本工作区尚缺共享 Flutter 离线闭包，不能将它们当作已就绪的本地构建入口或退回全局 Flutter。
 
 ```sh
 flutter pub get
@@ -57,6 +59,8 @@ flutter build apk --release --target-platform android-arm64 --split-debug-info=b
 ```
 
 在线构建使用仓库 Secret `DDNOVEL_SIGNING_JSON`；缺少 Secret 和 PR 构建只提供明确标记的未签名产物。私钥不进入源码、日志或 Release。`DDNovelReader-build-analysis` 单独保存 APK 体积报告与调试符号。
+
+`publish-release.yml` 与 `publish_verified_release.py` 是固定 **v1.2.26** 输入身份的发布流程，仍引用存在的脚本和对应发布说明；它们不是任意新版的一键发布入口，不能用来发布 v1.2.27。新版构建以 `build-apk.yml` 为入口，本地接收以 `LocalApk.ps1` 为入口。
 
 1.2.26 的 [GitHub 构建](https://github.com/NayGnehz/DDNovelReader-Android/actions/runs/43622578197) 通过 351 项 Flutter 测试、13 项签名脚本测试及独立在线语音探测；主套件有 1 项可选在线探测跳过。下载成品已独立核验版本、ARM64 架构、SHA-256 和固定证书。手机音源、系统通知样式及实际手感仍需真机验证。
 
@@ -68,3 +72,5 @@ flutter build apk --release --target-platform android-arm64 --split-debug-info=b
 - [系统媒体控制与包体积](docs/media-controls.md)
 - [固定签名与构建](docs/signing.md)
 - [来源说明](docs/SOURCES.md)
+- [本地布局与当前入口](docs/local-layout.md)
+- [历史资料索引](docs/history/README.md)

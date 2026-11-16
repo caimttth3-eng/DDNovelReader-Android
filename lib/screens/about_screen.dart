@@ -208,6 +208,15 @@ class AboutScreen extends StatelessWidget {
                       context: context,
                       icon: Icons.link_outlined,
                       label: T('releaseLabel'),
+                      value: 'github.com/NayGnehz/DDNovelReader-Android/releases',
+                      actionText: T('openAction'),
+                      onTap: () =>
+                          _openUrl(context, 'https://github.com/NayGnehz/DDNovelReader-Android/releases'),
+                    ),
+                    _contactRow(
+                      context: context,
+                      icon: Icons.source_outlined,
+                      label: T('upstreamLabel'),
                       value: 'github.com/caimttth3-eng/DDNovelReader-Android',
                       actionText: T('openAction'),
                       onTap: () =>

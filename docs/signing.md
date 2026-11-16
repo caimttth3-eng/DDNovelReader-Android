@@ -23,19 +23,21 @@
 
 ## 本地签名未签名产物
 
+本工作区的正式构建使用 GitHub Actions；已签名完整包通过 [LocalApk 接收与选择入口](local-layout.md#本地构建收尾与-apk-选择) 归位。以下保留跨平台签名脚本的参数示例，`/path`、`/private` 是占位路径，不是本地已存在的入口；本工作区须使用共享固定工具和本实例临时目录，不直接调用未登记的全局 Python/JDK/SDK。
+
 需要 Python 3.10+、JDK 17 的 `keytool/java` 与 Android SDK Build Tools 35+ 的 `zipalign/apksigner`。设置 `JAVA_HOME`、`ANDROID_HOME`，或使用脚本的 `--keytool`、`--zipalign`、`--apksigner` 指定工具路径。Windows 的 `apksigner.bat` 自动转用同目录 `lib/apksigner.jar`，也可直接传入该 JAR 路径。
 
 在仓库根目录执行（输出路径必须尚不存在）：
 
 ```sh
-python scripts/sign_apk.py --apk /path/app-release-unsigned.apk --secret-json /private/signing-secret.json --output /path/DDNovelReader-fixed.apk
+python -B scripts/sign_apk.py --apk /path/app-release-unsigned.apk --secret-json /private/signing-secret.json --output /path/DDNovelReader-fixed.apk
 ```
 
 脚本先验证密钥证书，再按 16 KiB 对齐、签名，并验证实际 APK 证书与对齐，全部成功后才发布输出文件及 `.apk.sha256`。输入 APK 保持不变。密码仅通过子进程环境变量传递，不放入命令行；临时密钥随临时目录清理。
 
 ```sh
-python scripts/sign_apk.py --verify-only --apk /path/DDNovelReader-fixed.apk
-python -m unittest discover -s scripts -p 'test_*.py' -v
+python -B scripts/sign_apk.py --verify-only --apk /path/DDNovelReader-fixed.apk
+python -B -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
 只把已签名 APK 和公开校验文件交付用户；未签名 APK 名称和状态不得冒充可安装版本。若暂时无法配置 GitHub Secret，可持续使用同一私钥本地签名，以后添加 Secret 后在线构建会沿用相同证书。
