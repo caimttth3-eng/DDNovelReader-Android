@@ -2,7 +2,8 @@
 param(
     [ValidateSet('Path', 'Receive')][string]$Action = 'Path',
     [string]$BuildDirectory,
-    [switch]$RetirePrevious
+    # Compatibility only: successful Receive always retires superseded builds.
+    [switch]$RetirePrevious = $true
 )
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -134,13 +135,11 @@ try {
     $staging = $null
     [void](Assert-Apk $destination)
     foreach ($name in $names) { Remove-Item -LiteralPath (Join-Path $source $name) }
-    if ($RetirePrevious) {
-        foreach ($directory in $old) {
-            [void]@(Get-SafeFiles $directory.FullName)
-            Remove-Item -LiteralPath $directory.FullName -Recurse
-        }
+    foreach ($directory in $old) {
+        [void]@(Get-SafeFiles $directory.FullName)
+        Remove-Item -LiteralPath $directory.FullName -Recurse
     }
-    [pscustomobject]@{ apk = Join-Path $destination $info.apk; previous = $retired; previousRemoved = [bool]$RetirePrevious } | ConvertTo-Json -Depth 4
+    [pscustomobject]@{ apk = Join-Path $destination $info.apk; previous = $retired; previousRemoved = $true } | ConvertTo-Json -Depth 4
 } finally {
     foreach ($name in $previous.Keys) {
         if ($previous[$name].exists) { [Environment]::SetEnvironmentVariable($name, $previous[$name].value, 'Process') }
