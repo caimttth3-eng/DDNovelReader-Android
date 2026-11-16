@@ -109,7 +109,7 @@ void main() {
     final clamped = ReadingSettings.fromJson({'sentenceDragDelay': 9, 'pageTurnAnimation': 'unknown',
       'keepScreenMinutes': 999, 'readingScreenSeconds': 7, 'speechRate': 1.234});
     expect(clamped.sentenceDragDelay, 0.5); expect(clamped.pageTurnAnimation, 'off');
-    expect(clamped.keepScreenMinutes, 120); expect(clamped.readingScreenSeconds, 0); expect(clamped.speechRate, 1.2);
+    expect(clamped.keepScreenMinutes, 120); expect(clamped.readingScreenSeconds, 0); expect(clamped.speechRate, 1.24);
   });
   test('removed short reading durations return to system while minute choices survive', () {
     for (final seconds in [5, 15, 30]) {

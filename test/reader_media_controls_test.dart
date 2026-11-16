@@ -345,10 +345,10 @@ void main() {
     debugPrint('MEDIA_REAL pause');
     expect(find.byKey(const ValueKey('reading-rate-plus')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reading-rate-plus'))); await tester.pumpAndSettle();
-    expect(speech.speechRate, 1.1); expect(spoken, hasLength(1)); expect(highlightedWord(), '丙丁');
+    expect(speech.speechRate, 1.02); expect(spoken, hasLength(1)); expect(highlightedWord(), '丙丁');
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     debugPrint('MEDIA_REAL resume');
-    expect(spoken, hasLength(2)); expect(spoken.last['rate'], 1.1);
+    expect(spoken, hasLength(2)); expect(spoken.last['rate'], 1.02);
     expect(spoken.last['text'], '丙丁戊己，庚辛壬癸。', reason: 'The real engine request must start at the saved word, not an earlier viewport line');
     expect(speech.currentTtsOffset, 2); expect(highlightedWord(), '丙丁');
     await emit('range', {'id': originalId, 'start': 0, 'end': 2});

@@ -62,8 +62,8 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
                         chunks = parts
                         chunkIndex = 0
                         started = false
-                        val rate = call.argument<Number>("rate")?.toFloat() ?: 1f
-                        if (!rate.isFinite() || engine!!.setSpeechRate(rate.coerceIn(0.1f, 3f)) != TextToSpeech.SUCCESS) {
+                        val rate = call.argument<Number>("rate")?.toDouble() ?: 1.0
+                        if (!rate.isFinite() || engine!!.setSpeechRate(SystemSpeechRate.toPlatformRate(rate)) != TextToSpeech.SUCCESS) {
                             requestId = null
                             result.error("speak_failed", "System engine rejected speech rate", null)
                         } else if (speakChunk()) result.success(null)

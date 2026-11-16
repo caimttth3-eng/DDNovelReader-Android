@@ -63,13 +63,20 @@ void main() {
     });
   });
 
-  test('0.1 UI steps persist while the synthesis layer keeps finer precision', () {
-    for (final rate in [0.5, 0.6, 0.7, 1.0, 1.1, 1.2, 2.9, 3.0]) {
+  test('all 0.02 UI steps persist and retain distinct synthesis cache keys', () {
+    final keys = <String>{};
+    for (var tick = 25; tick <= 150; tick++) {
+      final rate = tick / 50;
       final saved = ReadingSettings()..speechRate = rate;
       expect(ReadingSettings.fromJson(saved.toJson()).speechRate, rate);
       expect(TtsCacheStore('book', 'voice', rate).rateKey, rate.toStringAsFixed(2));
+      keys.add(TtsCacheStore('book', 'voice', rate).rateKey);
     }
-    expect(ReadingSettings.fromJson({'speechRate': 1.24}).speechRate, 1.2);
+    expect(keys, hasLength(126));
+    expect(ReadingSettings.fromJson({'speechRate': 1.24}).speechRate, 1.24);
+    expect(ReadingSettings.fromJson({'speechRate': 1.234}).speechRate, 1.24);
+    expect(ReadingSettings.fromJson({'speechRate': 0.1}).speechRate, 0.5);
+    expect(ReadingSettings.fromJson({'speechRate': 4.0}).speechRate, 3.0);
     expect([edgeRateStr(0.5), edgeRateStr(0.52), edgeRateStr(0.54)], ['-50%', '-48%', '-46%']);
     expect([edgeRateStr(1), edgeRateStr(1.02), edgeRateStr(1.04)], ['+0%', '+2%', '+4%']);
   });

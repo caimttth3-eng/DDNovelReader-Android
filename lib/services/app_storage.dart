@@ -109,6 +109,10 @@ class AppStorage {
 
 /// 阅读偏好（含默认值）
 class ReadingSettings {
+  static const speechRateStep = 0.02;
+  static const speechRateDivisions = 125;
+  static double normalizeSpeechRate(double rate) =>
+      (rate.clamp(0.5, 3.0) * 50).round() / 50;
   static const defaultPrefetchSentences = 8;
   static const minPrefetchSentences = 0;
   static const maxPrefetchSentences = 100;
@@ -238,7 +242,7 @@ class ReadingSettings {
     s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'links';
     s.fontSize = ((json['fontSize'] as num?)?.toDouble() ?? s.fontSize).clamp(14, 64);
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
-    s.speechRate = (((json['speechRate'] as num?)?.toDouble() ?? s.speechRate).clamp(0.5, 3.0) * 10).round() / 10;
+    s.speechRate = normalizeSpeechRate((json['speechRate'] as num?)?.toDouble() ?? s.speechRate);
     s.prefetchSentences = ((json['prefetchSentences'] as num?)?.toInt() ?? defaultPrefetchSentences)
       .clamp(minPrefetchSentences, maxPrefetchSentences);
     s.voice = json['voice'] as String? ?? '';

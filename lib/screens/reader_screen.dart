@@ -3016,19 +3016,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   onChanged: _setMediaVolume)),
                 const SizedBox(width: 44, height: 44, child: Icon(Icons.volume_up, color: Color(0xFF9BC5DD), size: 20)),
               ]),
-              Text(T('rateLabel', {'rate': rate.toStringAsFixed(1)}),
+              Text(T('rateLabel', {'rate': rate.toStringAsFixed(2)}),
                 style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 12)),
               Row(children: [
                 SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-minus'),
                   padding: EdgeInsets.zero, icon: const Icon(Icons.remove_circle_outline, color: Color(0xFF9BC5DD)),
-                  onPressed: () => _adjustRate(-0.1))),
+                  onPressed: () => _adjustRate(-ReadingSettings.speechRateStep))),
                 Expanded(child: Slider(key: const ValueKey('reading-rate-slider'),
                   padding: const EdgeInsets.symmetric(horizontal: 12), value: rate.clamp(0.5, 3.0),
-                  min: 0.5, max: 3, divisions: 25, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
+                  min: 0.5, max: 3, divisions: ReadingSettings.speechRateDivisions, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
                   onChanged: _setRate)),
                 SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-plus'),
                   padding: EdgeInsets.zero, icon: const Icon(Icons.add_circle_outline, color: Color(0xFF9BC5DD)),
-                  onPressed: () => _adjustRate(0.1))),
+                  onPressed: () => _adjustRate(ReadingSettings.speechRateStep))),
               ]),
               const SizedBox(height: 4),
               if (_tts.usingSystemFallback) Padding(key: const ValueKey('tts-offline-fallback'),
@@ -3137,7 +3137,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _setRate(double rate) {
-    rate = (rate.clamp(0.5, 3.0) * 10).round() / 10;
+    rate = ReadingSettings.normalizeSpeechRate(rate);
     _settings.speechRate = rate;
     _tts.setSpeechRate(rate);
     _refreshTtsCache();
@@ -3605,7 +3605,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                         ],
                       ),
                       const SizedBox(height: 10),
-                      Text('${T('voice')}: ${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(1)})}',
+                      Text('${T('voice')}: ${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(2)})}',
                         key: const ValueKey('cache-binding'), style: const TextStyle(fontSize: 13)),
                       const SizedBox(height: 14),
                       Row(
@@ -3680,7 +3680,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                                       context: ctx,
                                       builder: (dctx) => AlertDialog(
                                         title: Text(T('cacheClear')),
-                                        content: Text('${T('cacheClearSelectedConfirm')}\n${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(1)})}'),
+                                        content: Text('${T('cacheClearSelectedConfirm')}\n${_voiceLabel(voice)} · ${T('rateLabel', {'rate': rate.toStringAsFixed(2)})}'),
                                         actions: [
                                           TextButton(
                                             onPressed: () =>
