@@ -103,6 +103,7 @@ jobs:
         if: always()
         run: python3 scripts/prepare_signing.py --cleanup --output-directory "$RUNNER_TEMP/ddnovel-signing"
       - name: Upload size analysis and separate debug symbols
+        id: upload_analysis
         if: always() && steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
@@ -113,6 +114,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
       - uses: actions/upload-artifact@v4
+        id: upload_apk
         if: always() && steps.build.outcome == 'success'
         with:
           name: ${{ steps.verify.outcome == 'success' && 'DDNovelReader-gestures-apk' || 'DDNovelReader-unverified-apk' }}
@@ -123,3 +125,26 @@ jobs:
             build/distribution/signing-certificate.sha256
           if-no-files-found: error
           retention-days: 90
+      - name: Finish transferred APK staging
+        if: success() && steps.verify.outcome == 'success' && steps.upload_apk.outcome == 'success' && steps.upload_analysis.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 -B - <<'PY'
+          import hashlib
+          from pathlib import Path
+          root = Path.cwd().resolve()
+          published, = Path('build/distribution').glob('*.apk')
+          expected = hashlib.sha256(published.read_bytes()).digest()
+          for directory in ('build/app/outputs/flutter-apk', 'build/app/outputs/apk/release'):
+              for apk in Path(directory).glob('*.apk'):
+                  try:
+                      if any(p.is_symlink() for p in (apk, *apk.parents)) or not apk.resolve().is_relative_to(root) or apk.resolve() == published.resolve():
+                          print(f'Retained unexpected path: {apk}')
+                      elif hashlib.sha256(apk.read_bytes()).digest() == expected:
+                          size = apk.stat().st_size
+                          apk.unlink()
+                          print(f'Removed transferred duplicate APK: {apk} ({size} bytes)')
+                  except OSError as error:
+                      print(f'Cleanup deferred: {apk} ({type(error).__name__})')
+          # Keep distribution, UI previews, symbols and all incremental caches.
+          PY

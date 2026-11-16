@@ -18,3 +18,5 @@
 - 追加停顿参考 [W3C SSML break](https://www.w3.org/TR/speech-synthesis11/#S3.2.3) 与 [Microsoft SSML silence](https://learn.microsoft.com/en-us/azure/cognitive-services/speech-service/speech-synthesis-markup-structure) 对自然/追加停顿的区分，调度由本应用实现。
 
 更多技术资料在对应功能文档中列出。引用来源不代表原作者参与或认可本修改版发布。
+
+外部协议研究摘录的本地原件、来源与固定字节身份见 [references/edge-tts](../references/edge-tts/README.md)，仅供阅读核对，不参与构建；不复制或迁移独立维护的本地项目。

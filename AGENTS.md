@@ -4,7 +4,8 @@
 
 - ProjectId 为 `ddnovelreader`，缓存 InstanceId 为 `main`。布局见 `docs/local-layout.md`。
 - 最新成功完整成品（含开发/测试版）在共享总根 `_releases/ddnovelreader/` 并备份；每条产品线仅保留最新一份。真实资料和签名在 `_data/ddnovelreader/`；增量、诊断、符号和构建 staging 在 `_cache/projects/ddnovelreader/main/`。
-- 本地成品接收/选择入口为 `scripts/LocalApk.ps1`，用固定共享 JDK 验签、比对原字节后归位，成功接收始终清退已替代旧包，仅留最新；旧 `RetirePrevious` 参数仅兼容调用。不安装应用、不修改远程 Release。具体已被安全拒绝的旧包删除必须另获授权，不能用通用整理规则重试。
+- 本地成品接收/选择入口为 `scripts/LocalApk.ps1`，用固定共享 JDK 验签、比对原字节后归位；最外层成功收尾自动清退已替代旧包和已核实的重复归档，仅留最新。父流程尚在消费时用 `KeepArtifacts` 延后清理，结清后用同入口 `Finalize` 收尾/重试；旧 `RetirePrevious` 参数仅兼容调用。不安装应用、不修改远程 Release。具体已被安全拒绝的旧包删除必须另获授权，不能用通用整理规则重试。
+- 纯外部源码参考归 `references/<upstream>/`；原协议摘录已原字节移入 `references/edge-tts/`。实际参与测试/构建的旧版本基线保留原结构；不移动独立维护的本地项目或读取私人参考资料。
 - 不读取、打印、哈希或上传真实资料、个人配置和密钥内容。保护资料迁移只按总根规定核对元数据和 ACL。
 - 正式构建使用 GitHub Actions。共享工具尚未登记本项目；新增本地构建前由共享维护者登记，不修改公共契约、不借用其他项目实例、不安装或回退全局 Flutter。
 - 本地 Git 用共享 `_env/bin/Invoke-PortableGit.ps1` 和既定署名；目录整理只本地提交，未经明确指示不推送、不改写历史。
