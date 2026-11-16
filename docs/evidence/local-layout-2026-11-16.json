@@ -68,11 +68,25 @@
     "contentReadOrHashed": false,
     "dataMovedOrDeleted": false
   },
-  "exception": {
+  "deletedSupersededRelease": {
+    "path": "_releases/ddnovelreader/v1.2.26",
+    "fileCount": 6,
+    "bytes": 19367572,
+    "oldApkSha256Verified": "be64fb084a3af05184f023b219abc6a75d6f652605a7f736d10e9f3c057d5aec",
+    "userAuthorization": "允许删除这个旧版本目录",
+    "checks": "Exact canonical directory and 6-file inventory; no reparse points or open-file handles; exclusive project lock; newest APK selected and checksum checked before and after removal",
+    "deleted": true
+  },
+  "cleanupTotals": {
+    "fileCount": 14,
+    "bytes": 33691312
+  },
+  "resolvedException": {
     "path": "_releases/ddnovelreader/v1.2.26",
     "files": 6,
     "bytes": 19367572,
     "reason": "Automatic approval rejected deletion of this specific old release and requires explicit user authorization",
-    "deleted": false
+    "resolution": "User explicitly authorized this exact old directory; subsequent deletion succeeded",
+    "deleted": true
   }
 }
