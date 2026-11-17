@@ -70,19 +70,23 @@ void main() {
     addTearDown(tester.view.resetViewPadding);
     addTearDown(tester.view.resetPadding);
     const fontPath = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc';
-    if (File(fontPath).existsSync()) {
-      for (final family in ['Preview', 'Roboto']) {
-        final loader = FontLoader(family);
-        loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
+    await tester.runAsync(() async {
+      if (File(fontPath).existsSync()) {
+        for (final family in ['Preview', 'Roboto']) {
+          final loader = FontLoader(family);
+          loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
+          await loader.load();
+        }
+      }
+      final icons = File('${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');
+      if (icons.existsSync()) {
+        final loader = FontLoader('MaterialIcons');
+        loader.addFont(Future.value(ByteData.sublistView(icons.readAsBytesSync())));
         await loader.load();
       }
-    }
-    final icons = File('${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');
-    if (icons.existsSync()) {
-      final loader = FontLoader('MaterialIcons');
-      loader.addFont(Future.value(ByteData.sublistView(icons.readAsBytesSync())));
-      await loader.load();
-    }
+      // Font-change platform messages must settle without depending on PNG IO.
+      await Future<void>.delayed(Duration.zero);
+    });
     final key = GlobalKey();
     Widget app(Widget child) => ValueListenableBuilder<bool>(valueListenable: AppAppearance.nightMode,
       builder: (context, night, _) => RepaintBoundary(key: key, child: MaterialApp(
@@ -1814,9 +1818,12 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetViewPadding);
       const fontPath = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc';
       if (File(fontPath).existsSync()) {
-        final loader = FontLoader('PagingCjk');
-        loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
-        await loader.load();
+        await tester.runAsync(() async {
+          final loader = FontLoader('PagingCjk');
+          loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
+          await loader.load();
+          await Future<void>.delayed(Duration.zero);
+        });
       }
       final storage = AppStorage();
       await storage.saveSettings((ReadingSettings()..fontSize = fontSize..lineHeight = 1.63..pageTurnAnimation = 'off'

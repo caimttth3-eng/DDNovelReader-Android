@@ -58,9 +58,13 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     const fontPath = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc';
     if (File(fontPath).existsSync()) {
-      final loader = FontLoader('Roboto');
-      loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
-      await loader.load();
+      await tester.runAsync(() async {
+        final loader = FontLoader('Roboto');
+        loader.addFont(Future.value(ByteData.sublistView(File(fontPath).readAsBytesSync())));
+        await loader.load();
+        // Drain the engine font-change message even when preview capture is off.
+        await Future<void>.delayed(Duration.zero);
+      });
     }
     final storage = AppStorage();
     await storage.saveSettings((ReadingSettings()..voice = TtsReader.systemVoice).toJson());
