@@ -92,7 +92,7 @@ void main() {
     )));
     Future<void> capture(String name) async {
       expect(tester.takeException(), isNull);
-      if (!Platform.isLinux) return;
+      if (!Platform.isLinux || Platform.environment['DD_READER_CAPTURE_UI_PREVIEWS'] != '1') return;
       final boundary = key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
       await tester.runAsync(() async {
         final image = await boundary.toImage(pixelRatio: 2);
@@ -482,7 +482,7 @@ void main() {
       reason: 'The current word has a stronger highlight');
     expect(spans.any((s) => s.style?.backgroundColor == const Color(0x44FFC107)), isTrue,
       reason: 'The rest of the sentence stays highlighted');
-    if (Platform.isLinux) {
+    if (Platform.isLinux && Platform.environment['DD_READER_CAPTURE_UI_PREVIEWS'] == '1') {
       await tester.pump();
       await tester.runAsync(() async {
         final boundary = wordPreviewKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
@@ -2070,7 +2070,7 @@ void main() {
 
 Future<void> _captureReaderPreview(WidgetTester tester, GlobalKey key, String name) async {
   expect(tester.takeException(), isNull);
-  if (!Platform.isLinux) return;
+  if (!Platform.isLinux || Platform.environment['DD_READER_CAPTURE_UI_PREVIEWS'] != '1') return;
   await tester.runAsync(() async {
     final boundary = key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
     final image = await boundary.toImage(pixelRatio: 2);

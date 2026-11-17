@@ -162,7 +162,7 @@ void main() {
     expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNotNull);
     expect(tester.getRect(find.byKey(const ValueKey('pause-apply'))).center.dy,
       closeTo(tester.getRect(expand).center.dy, 1), reason: 'Apply remains on the expanded section header row');
-    if (Platform.isLinux) {
+    if (Platform.isLinux && Platform.environment['DD_READER_CAPTURE_UI_PREVIEWS'] == '1') {
       await tester.runAsync(() async {
         final boundary = preview.currentContext!.findRenderObject()! as RenderRepaintBoundary;
         final image = await boundary.toImage(pixelRatio: 2);

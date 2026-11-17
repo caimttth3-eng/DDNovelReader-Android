@@ -60,7 +60,7 @@ flutter build apk --release --target-platform android-arm64 --split-debug-info=b
 
 在线构建使用仓库 Secret `DDNOVEL_SIGNING_JSON`；缺少 Secret 和 PR 构建只提供明确标记的未签名产物。私钥不进入源码、日志或 Release。`DDNovelReader-build-analysis` 单独保存 APK 体积报告与调试符号。
 
-测试截图由 `reader_layout_test.dart`、`reader_pause_settings_test.dart` 生成到 runner 的 `build/ui-previews`，流程中保留供验证与上传，全部步骤返回后自动删除本地临时图及空根。已上传的 `DDNovelReader-ui-previews` 是独立构建交付物；上传/生成数量不表示已在聊天中展示。模型打开和向用户展示也是父阶段，本轮本地临时副本须在全部阶段结束、报告完成前清理，只有用户明确要求本轮结束后保留才例外。
+普通 CI 默认不生成或上传 UI 截图，布局断言仍执行。只有用户明确要求会话结束后保留时，才可在手动 workflow 中开启 `retain_ui_previews`，启用两处测试文件的可选截图和上传；runner 本地临时根在全部步骤后清理。纯截图 artifact 不因上传就自动成为长期交付物。仅为聊天临时查看时，不得用“保留”开关绕过收尾：须先具备已授权的父流程删除能力，按 artifact ID 交接，在真实取图/展示及后续消费结束后、报告会话完成前清远程传输包和本地副本。当前连接没有 artifact 删除工具，不能承诺这条临时远程交接链已完成，也不能仅凭上传数量声称已展示。
 
 `publish-release.yml` 与 `publish_verified_release.py` 是固定 **v1.2.26** 输入身份的发布流程，仍引用存在的脚本和对应发布说明；它们不是任意新版的一键发布入口，不能用来发布 v1.2.27。新版构建以 `build-apk.yml` 为入口，本地接收以 `LocalApk.ps1` 为入口。
 
