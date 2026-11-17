@@ -148,3 +148,27 @@ jobs:
                       print(f'Cleanup deferred: {apk} ({type(error).__name__})')
           # Keep distribution, UI previews, symbols and all incremental caches.
           PY
+      - name: Retire runner-local temporary UI previews
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 -B - <<'PY'
+          from pathlib import Path
+          workspace = Path.cwd().resolve()
+          previews = Path('build/ui-previews')
+          # Exact root owned by screenshot tests in this fresh runner; do not
+          # search source/data/cache trees by PNG suffix or age.
+          if previews.exists() or previews.is_symlink():
+              if any(p.is_symlink() for p in (previews, *previews.parents)) or not previews.resolve().is_relative_to(workspace):
+                  raise RuntimeError('Unexpected preview root; retirement stopped')
+              files = list(previews.iterdir())
+              if any(p.is_symlink() or not p.is_file() or p.suffix != '.png' for p in files):
+                  raise RuntimeError('Unknown preview contents; retirement stopped')
+              size = sum(p.stat().st_size for p in files)
+              for path in files:
+                  path.unlink()
+              previews.rmdir()
+              print(f'Retired runner-local test captures: {len(files)} files, {size} bytes')
+          # All job stages/uploads returned. Uploaded artifacts are separate
+          # exports; source assets, APKs and incremental caches are untouched.
+          PY

@@ -151,7 +151,6 @@ try {
         Assert-That ($stagingLeft.Count -eq $(if ($case -eq 'keep-failed') { 1 } else { 0 })) "$case retained or deleted the wrong staging"
         $passed++
     }
-    Write-Output "PASS: $passed synthetic file lifecycle cases; native verification mocked; no real releases touched"
 } finally {
     $full = [IO.Path]::GetFullPath($fixtureRoot)
     if (!$full.StartsWith([IO.Path]::GetFullPath($temp) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe fixture cleanup path' }
@@ -161,3 +160,4 @@ try {
         Remove-Item -LiteralPath $full -Recurse
     }
 }
+Write-Output "PASS: $passed synthetic file lifecycle cases; outer fixture including temporary viewing files retired; native verification mocked; no real releases touched"

@@ -60,6 +60,8 @@ flutter build apk --release --target-platform android-arm64 --split-debug-info=b
 
 在线构建使用仓库 Secret `DDNOVEL_SIGNING_JSON`；缺少 Secret 和 PR 构建只提供明确标记的未签名产物。私钥不进入源码、日志或 Release。`DDNovelReader-build-analysis` 单独保存 APK 体积报告与调试符号。
 
+测试截图由 `reader_layout_test.dart`、`reader_pause_settings_test.dart` 生成到 runner 的 `build/ui-previews`，流程中保留供验证与上传，全部步骤返回后自动删除本地临时图及空根。已上传的 `DDNovelReader-ui-previews` 是独立构建交付物；上传/生成数量不表示已在聊天中展示。模型打开和向用户展示也是父阶段，本轮本地临时副本须在全部阶段结束、报告完成前清理，只有用户明确要求本轮结束后保留才例外。
+
 `publish-release.yml` 与 `publish_verified_release.py` 是固定 **v1.2.26** 输入身份的发布流程，仍引用存在的脚本和对应发布说明；它们不是任意新版的一键发布入口，不能用来发布 v1.2.27。新版构建以 `build-apk.yml` 为入口，本地接收以 `LocalApk.ps1` 为入口。
 
 1.2.26 的 [GitHub 构建](https://github.com/NayGnehz/DDNovelReader-Android/actions/runs/43622578197) 通过 351 项 Flutter 测试、13 项签名脚本测试及独立在线语音探测；主套件有 1 项可选在线探测跳过。下载成品已独立核验版本、ARM64 架构、SHA-256 和固定证书。手机音源、系统通知样式及实际手感仍需真机验证。
