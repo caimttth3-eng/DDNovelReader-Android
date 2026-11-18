@@ -157,10 +157,19 @@ class AppStorage {
     return _settings;
   }
 
+  /// 合并写入：阅读设置与同步配置共用同一份 map，
+  /// 任何一方保存时都不能把另一方的 key 冲掉（重启丢同步配置的根因）。
   Future<void> saveSettings(Map<String, dynamic> s) async {
-    _settings = s;
     final sp = await _sp;
-    await sp.setString(_settingsKey, jsonEncode(s));
+    var current = _settings;
+    final raw = sp.getString(_settingsKey);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        current = (jsonDecode(raw) as Map).cast<String, dynamic>();
+      } catch (_) {}
+    }
+    _settings = {...current, ...s};
+    await sp.setString(_settingsKey, jsonEncode(_settings));
   }
 
   // ---------- 最后阅读的书籍（启动时自动恢复） ----------

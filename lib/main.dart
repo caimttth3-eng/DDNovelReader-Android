@@ -9,6 +9,7 @@ import 'services/font_manager.dart';
 import 'services/app_appearance.dart';
 import 'services/app_storage.dart';
 import 'services/book_parser.dart';
+import 'services/book_snapshot_cache.dart';
 import 'services/reader_preparation.dart';
 import 'services/reader_screen_awake.dart';
 import 'services/tts_audio_handler.dart';
@@ -74,6 +75,7 @@ class _DuoduoLangduAppState extends State<DuoduoLangduApp> with WidgetsBindingOb
   void didHaveMemoryPressure() {
     BookParser.clearMemoryCache();
     ReaderPreparation.clearMemoryCache();
+    BookSnapshotCache.shared.clearMemoryCache();
   }
 
   @override

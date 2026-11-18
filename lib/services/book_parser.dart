@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -74,6 +74,11 @@ class BookParser {
     required DateTime addedAt,
   }) async {
     try {
+      // 解析结果按「路径+大小+修改时间」缓存一份：同一本书再次打开不必重读重分章
+      final stat = await File(filePath).stat();
+      final cacheKey = '$filePath|${stat.size}|${stat.modified.millisecondsSinceEpoch}|$id';
+      final cached = _parsedCache[cacheKey];
+      if (cached != null) return cached;
       final raw = await _readRawText(filePath, format);
       final chapters = _autoChapter(raw);
       final book = Book(
@@ -85,9 +90,14 @@ class BookParser {
         addedAt: addedAt,
       );
       // content_key 与音频缓存目录一级键同一值，跨端（PC/安卓）可命中
-      return book.withContentKey(
+      final result = book.withContentKey(
         computeContentKey(title, book.chapters.length, bookFullText(book)),
       );
+      _parsedCache[cacheKey] = result;
+      if (_parsedCache.length > 2) {
+        _parsedCache.remove(_parsedCache.keys.first);
+      }
+      return result;
     } catch (e) {
       return Book.failed(
         id: id,
@@ -99,6 +109,10 @@ class BookParser {
       );
     }
   }
+
+  /// 最近解析过的书籍（最多 2 本），避免重复打开同一本书时重新分章
+  static final Map<String, Book> _parsedCache = {};
+
 
   /// 读取各格式原始文本
   Future<String> _readRawText(String path, BookFormat format) async {

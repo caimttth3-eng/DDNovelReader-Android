@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -18,6 +18,7 @@ import '../services/tts_cache_store.dart';
 import '../services/updater.dart';
 import '../widgets/book_card.dart';
 import 'about_screen.dart';
+import 'book_opening_screen.dart';
 import 'reader_screen.dart';
 import 'sync_screen.dart';
 
@@ -404,48 +405,44 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   Future<void> _openBook(BookMeta meta) async {
-    final book = await _parser.parse(
-      id: meta.id,
-      filePath: meta.filePath,
-      title: meta.title,
-      format: BookFormat.values.firstWhere(
-        (f) => f.name == meta.format,
-        orElse: () => BookFormat.txt,
-      ),
-      addedAt: meta.addedAt,
-    );
-    if (!mounted) return;
-    if (!book.parseOk) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            T('parseFail', {'err': book.parseError ?? 'Unknown'}),
-          ),
-        ),
-      );
-      return;
-    }
-    final saved = await _storage.loadProgress(meta.id);
-    if (!mounted) return;
-    // 缓存目录一级键以书架记录为准（历史书已存 contentKey，新书解析时算好）
-    final bookForReader = meta.contentKey.isEmpty
-        ? book
-        : book.withContentKey(meta.contentKey);
-    // 从 PC 拉来的进度只有章内字符偏移，这里按书内容换算成段落坐标
-    var initial = saved;
-    if (initial != null && initial.charOffsetInChapter != null) {
-      final (p, off) = bookForReader.locateByCharOffset(
-        initial.chapterIndex,
-        initial.charOffsetInChapter!,
-      );
-      initial = initial.copyWith(paragraphIndex: p, offsetInParagraph: off);
-    }
+    // 先打开加载页（首帧立即出画面），解析/排版在页面出现后再跑：
+    // 大书点开不再卡在书架上等，解析完成会原地切到阅读页，没有二次转场。
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ReaderScreen(
-          book: bookForReader,
+        builder: (_) => BookOpeningScreen(
+          title: meta.title,
           storage: _storage,
-          initialProgress: initial,
+          sourceMeta: meta,
+          loadBook: () async {
+            final book = await _parser.parse(
+              id: meta.id,
+              filePath: meta.filePath,
+              title: meta.title,
+              format: BookFormat.values.firstWhere(
+                (f) => f.name == meta.format,
+                orElse: () => BookFormat.txt,
+              ),
+              addedAt: meta.addedAt,
+            );
+            if (!book.parseOk) {
+              throw StateError(book.parseError ?? 'parse failed');
+            }
+            // 缓存目录一级键以书架记录为准（历史书已存 contentKey，新书解析时算好）
+            final bookForReader = meta.contentKey.isEmpty
+                ? book
+                : book.withContentKey(meta.contentKey);
+            // 从 PC 拉来的进度只有章内字符偏移，这里按书内容换算成段落坐标
+            final saved = await _storage.loadProgress(meta.id);
+            var initial = saved;
+            if (initial != null && initial.charOffsetInChapter != null) {
+              final (p, off) = bookForReader.locateByCharOffset(
+                initial.chapterIndex,
+                initial.charOffsetInChapter!,
+              );
+              initial = initial.copyWith(paragraphIndex: p, offsetInParagraph: off);
+            }
+            return (bookForReader, initial);
+          },
           onProgressChanged: (p) async {
             await _storage.saveProgress(p);
             // 同步书架腰封进度

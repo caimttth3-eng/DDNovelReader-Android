@@ -11,6 +11,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../i18n.dart';
 import '../services/app_appearance.dart';
+import '../services/sync_engine.dart';
 import '../services/reading_text.dart';
 import '../services/reader_preparation.dart';
 import '../services/reader_screen_awake.dart';
@@ -256,6 +257,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   MediaSpeechText? _mediaSpeechText;
   // TTS 合成加载中（点击播放/恢复后等待首句出声；期间防误触）
   bool _ttsLoading = false;
+
+  /// 阅读页「一键同步」进行中
+  bool _syncing = false;
 
   // 系统媒体音量（音量键正常调节，暂停面板也提供滑条）
   double _mediaVolume = 1.0;
@@ -734,6 +738,22 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     await widget.onProgressChanged?.call(p);
   }
 
+  /// 阅读页一键同步：与书架「数据同步」同一引擎，成功后提示结果
+  Future<void> _syncNow() async {
+    if (_syncing) return;
+    final engine =
+        SyncEngine(storage: widget.storage, annotations: AnnotationStore());
+    final s = await engine.settings();
+    if (!engine.configured(s)) {
+      _showToast(T('syncNotConfigured'));
+      return;
+    }
+    setState(() => _syncing = true);
+    final report = await engine.sync();
+    if (!mounted) return;
+    setState(() => _syncing = false);
+    _showToast(report.ok ? report.summary : (report.error ?? T('syncFailed')));
+  }
   // ---------- 书签与划线 ----------
 
   Future<void> _loadAnnotations() async {
@@ -1473,6 +1493,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _schedulePageGeometry() {
+    // 滚动模式没有页边界，不需要每帧测量行锚/页几何（这是滚动掉帧的主因）
+    if (_settings.pageTurnMode == 'scroll') return;
     if (_pageGeometryScheduled || !mounted) return;
     _pageGeometryScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1639,7 +1661,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
   TtsCacheStore _currentCacheStore() =>
       TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate,
-        contentKey: widget.book.contentKey, textFingerprint: _cacheFingerprint);
+        contentKey: widget.book.contentKey);
 
 
   /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
@@ -2246,7 +2268,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _refreshTtsCache();
     await _tts.start(
       sentences,
-      offsets: chapterTtsSentenceOffsets(_book.chapters[c]),
+      offsets: chapterSentenceOffsets(_book.chapters[c]),
       pauseAfterMilliseconds: [for (final para in _book.chapters[c].paragraphs)
         for (final sentence in para.sentences) sentence.pauseAfterMilliseconds],
       chapterIndex: c,
@@ -3551,7 +3573,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final cacheBook = prepared?.book ?? _book, fingerprint = prepared?.fingerprint ?? _cacheFingerprint;
     final cacheKey = '${cacheBook.id}/$fingerprint/$voice/${rate.toStringAsFixed(2)}';
     final store = TtsCacheStore(cacheBook.id, voice, rate,
-        contentKey: cacheBook.contentKey, textFingerprint: fingerprint);
+        contentKey: cacheBook.contentKey);
     final task = activeBookCaches[cacheKey] ??
         (activeBookCaches[cacheKey] = BookCacheTask(
               book: cacheBook,
@@ -3761,7 +3783,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final sentence = ReadingText.sentenceAt(targetParagraph, target.$2);
     var global = sentence;
     for (var pi = 0; pi < target.$1; pi++) { global += task.book.chapters[c].paragraphs[pi].sentences.length; }
-    final offsets = chapterTtsSentenceOffsets(task.book.chapters[c]);
+    final offsets = chapterSentenceOffsets(task.book.chapters[c]);
     task.start(resume: false, fromChapter: c, fromOffset: global >= 0 && global < offsets.length ? offsets[global] : 0);
   }
 
@@ -3824,6 +3846,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             const Spacer(),
             IconButton(tooltip: T('read'), icon: const ReaderIcon(ReaderSymbol.headphones, color: Colors.white70),
               onPressed: _ttsLoading ? null : () => _play(requestNotificationPermission: true)),
+            IconButton(key: const ValueKey('reader-sync'), tooltip: T('syncNow'),
+              icon: Icon(Icons.sync, size: 22,
+                color: _syncing ? const Color(0xFF9BC5DD) : Colors.white70),
+              onPressed: _syncing ? null : _syncNow),
             IconButton(key: const ValueKey('night-mode'), tooltip: T(_isNight ? 'dayMode' : 'nightMode'),
               icon: ReaderIcon(_isNight ? ReaderSymbol.sun : ReaderSymbol.moon, color: Colors.white70), onPressed: _toggleNight),
             IconButton(key: const ValueKey('reader-menu'), tooltip: T('readerMenu'),
