@@ -6,12 +6,17 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.2.3';
-  static const String build = '8';
+  static const String version = '1.2.4';
+  static const String build = '9';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.2.4：语音缓存与桌面版统一。缓存目录改用书籍内容指纹命名，'
+        '语速目录改为整数百分比，进度文件键名两端兼容，'
+        '桌面版已生成的整本语音缓存可直接复用；'
+        '新增 TXT 编码自动识别（UTF-8 / GBK / GB18030 / Big5），'
+        '修复部分书籍乱码与分章错乱。',
     'v1.2.3：新增全书语音缓存增强与新版本推送。'
         '整本缓存退出书籍重进后进度不丢失，自动从磁盘恢复；'
         '书架新增「缓存管理」，查看各书缓存占用、单本清除或清空全部；'
