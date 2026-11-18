@@ -1,5 +1,6 @@
-// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
@@ -32,6 +33,7 @@ import '../services/annotation_store.dart';
 import '../services/app_storage.dart';
 import '../services/book_cache_task.dart';
 import '../services/edge_tts.dart';
+import '../services/diag_log.dart';
 import '../services/font_manager.dart';
 import '../services/tts_audio_handler.dart';
 import '../services/playback_notifications.dart';
@@ -427,7 +429,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _saveProgress();
     _sleepTimer?.cancel();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-    _volumeChannel.invokeMethod('resetScreenBrightness');
+    if (Platform.isAndroid) {
+      _volumeChannel.invokeMethod('resetScreenBrightness').catchError((Object _) {});
+    }
     // 恢复系统默认系统栏样式（书架页浅色背景使用深色图标）
     _restoreSystemUiForExit();
     _gestureTipTimer?.cancel();
@@ -1958,6 +1962,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _applyReaderBrightness() {
+    // iOS 没有对应亮度通道，跳过（后续用 UIScreen 实现）
+    if (!Platform.isAndroid) return;
     if (_settings.automaticBrightness) {
       _volumeChannel.invokeMethod('resetScreenBrightness');
     } else {
@@ -2526,8 +2532,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onTtsError() {
-    if (!mounted || !_inReadingMode) return;
     final failure = _tts.lastFailure;
+    unawaited(diagLog('tts error: ${failure.runtimeType}: $failure'));
+    if (!mounted || !_inReadingMode) return;
     final message = failure is PlatformException ? T(_tts.usesSystemVoice ? 'systemTtsUnavailable' : 'voicePlaybackFailed')
       : failure is TimeoutException || failure is EdgeTtsException && failure.kind == 'timeout'
         ? T(_tts.usesSystemVoice ? 'systemTtsTimeout' : 'onlineTtsTimeout')
@@ -2535,7 +2542,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       : T('voicePlaybackFailed');
     _exitReadingMode();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+      SnackBar(content: Text('$message（$failure）')),
     );
   }
 

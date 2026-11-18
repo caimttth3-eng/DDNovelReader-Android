@@ -1,5 +1,8 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+import 'dart:io';
+
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -14,9 +17,11 @@ import 'services/book_snapshot_cache.dart';
 import 'services/reader_preparation.dart';
 import 'services/reader_screen_awake.dart';
 import 'services/tts_audio_handler.dart';
+import 'services/diag_log.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await diagLog('app start platform=${Platform.operatingSystem}');
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   final storage = AppStorage();
   final storedSettings = await storage.loadSettings();
@@ -38,6 +43,14 @@ Future<void> main() async {
   AppI18n.current = AppLang.detect(
     WidgetsBinding.instance.platformDispatcher.locales,
   );
+  // iOS 必须显式配置 AVAudioSession，否则 audioplayers 播放会抛 PlatformException
+  try {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.music());
+    await diagLog('audio session configured');
+  } catch (e) {
+    await diagLog('audio session failed: $e');
+  }
   try {
     globalAudioHandler = await AudioService.init(
       builder: () => TtsAudioHandler(),
@@ -52,8 +65,9 @@ Future<void> main() async {
         androidStopForegroundOnPause: false,
       ),
     );
+    await diagLog('AudioService init ok');
   } catch (e) {
-    print('AudioService init failed: $e');
+    await diagLog('AudioService init failed: $e');
   }
   runApp(const DuoduoLangduApp());
 }
