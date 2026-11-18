@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -7,13 +8,13 @@ import 'package:xml/xml.dart';
 
 import '../models/book.dart';
 import 'chapterizer.dart';
-import 'text_cleaner.dart';
+import 'content_key.dart';
+import 'text_decoder.dart';
+import 'tts_text.dart';
 
 /// 书籍解析器：支持 TXT / EPUB / PDF / DOCX，并自动分章。
 class BookParser {
-  final TextCleaner _cleaner;
-
-  BookParser({TextCleaner? cleaner}) : _cleaner = cleaner ?? const TextCleaner();
+  BookParser();
 
   /// 章节标题匹配：中文「第X章/节/回/卷」或英文 Chapter N
   static final RegExp chapterTitleRe = RegExp(
@@ -31,13 +32,17 @@ class BookParser {
     try {
       final raw = await _readRawText(filePath, format);
       final chapters = _autoChapter(raw);
-      return Book(
+      final book = Book(
         id: id,
         title: title,
         filePath: filePath,
         format: format,
         chapters: chapters,
         addedAt: addedAt,
+      );
+      // content_key 与音频缓存目录一级键同一值，跨端（PC/安卓）可命中
+      return book.withContentKey(
+        computeContentKey(title, book.chapters.length, bookFullText(book)),
       );
     } catch (e) {
       return Book.failed(
@@ -70,33 +75,9 @@ class BookParser {
     return _decodeTxt(bytes);
   }
 
-  String _decodeTxt(List<int> bytes) {
-    // 先尝试严格 UTF-8
-    try {
-      final s = const Utf8Decoder(allowMalformed: false).convert(bytes);
-      if (!s.contains('\uFFFD')) return s;
-    } catch (_) {}
-    // UTF-16 LE/BE 探测（带 BOM）
-    if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
-      return _decodeUtf16(bytes.sublist(2), endian: Endian.little);
-    }
-    if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
-      return _decodeUtf16(bytes.sublist(2), endian: Endian.big);
-    }
-    // 退化为宽松 UTF-8（GBK 文本会得到替换符，但至少不崩溃）
-    return const Utf8Decoder(allowMalformed: true).convert(bytes);
-  }
-
-  String _decodeUtf16(List<int> bytes, {required Endian endian}) {
-    final sb = StringBuffer();
-    for (var i = 0; i + 1 < bytes.length; i += 2) {
-      final code = endian == Endian.little
-          ? bytes[i] | (bytes[i + 1] << 8)
-          : (bytes[i] << 8) | bytes[i + 1];
-      sb.writeCharCode(code);
-    }
-    return sb.toString();
-  }
+  /// txt 解码统一走 text_decoder（与 PC _decode 同口径：BOM → 严格 UTF-8 →
+  /// GB18030 / Big5 质量打分择优 → 宽松 UTF-8 兜底）
+  String _decodeTxt(List<int> bytes) => decodeTextBytes(bytes);
 
   Future<String> _readEpub(String path) async {
     final bytes = await File(path).readAsBytes();
@@ -338,67 +319,91 @@ class BookParser {
   List<Chapter> _autoChapter(String raw) {
     final chapters = <Chapter>[];
     for (final (title, body) in makeChapters(raw)) {
-      final paras = _toParagraphs(body);
-      if (paras.isEmpty) continue;
-      chapters.add(Chapter(title: title, paragraphs: paras));
+      final ch = _buildChapter(title, body);
+      if (ch != null) chapters.add(ch);
     }
     if (chapters.isEmpty) {
-      chapters.add(Chapter(title: '正文', paragraphs: _toParagraphs(raw.trim())));
+      final ch = _buildChapter('正文', raw.trim());
+      if (ch != null) chapters.add(ch);
     }
     return chapters;
   }
 
-  List<Paragraph> _toParagraphs(String body) {
-    final blocks = body
-        .split(RegExp(r'\n\s*\n'))
-        .map((b) => b.replaceAll('\n', ' ').trim())
-        .where((b) => b.isNotEmpty)
-        .toList();
-    if (blocks.isEmpty) return const [];
-    return blocks.map((b) => _buildParagraph(b)).toList();
-  }
+  /// 构建整章：清洗与切句必须按**整章原始正文**做（与 PC 端 ch.tts_content() 同口径）。
+  ///
+  /// 两个必须对齐的点：
+  /// 1) 喂给清洗的是 body 原文（保留行结构），不能是"段落折成空格后的拼接"——
+  ///    PC 的 _strip_decor_lines 是行级过滤（`------` 整行丢弃、行尾装饰截断），
+  ///    折平行结构会让它失效，两端 tts 文本与偏移随之不同。
+  /// 2) 切句按整章做：段落间 '\n' 在清洗时被删，段末无句末标点时句子会跨段合并。
+  ///    这里把章级句子按「起点所在块」归属，显示区间在该块内裁剪。
+  Chapter? _buildChapter(String title, String body) {
+    final text = body;
+    if (text.trim().isEmpty) return null;
 
-  /// 构建段落：切句 + 双文本
-  Paragraph _buildParagraph(String display) {
-    final cleaned = _cleaner.clean(display);
-    // 在 tts 文本上按句子结束符切句
-    final tts = cleaned.tts;
-    final sentenceSplitRe = RegExp(r'[^。！？!?；;\n]+[。！？!?；;]?');
-    final sentences = <Sentence>[];
-    final starts = <int>[];
-    var idx = 0;
-    for (final m in sentenceSplitRe.allMatches(tts)) {
-      final seg = m.group(0)!;
-      if (seg.trim().isEmpty) continue;
-      starts.add(idx);
-      // 显示层取整段对应（简化：同段落内句子级别 display 用相同子串近似）
-      final dStart = cleaned.displayOffsetOfTts(idx);
-      var dEnd = cleaned.displayOffsetOfTts(idx + seg.length);
-      // 若 tts 长度不足，回退到段末
-      if (idx + seg.length > tts.length) dEnd = cleaned.display.length;
-      final dSeg = cleaned.display.substring(
-        dStart.clamp(0, cleaned.display.length),
-        dEnd.clamp(dStart, cleaned.display.length),
-      );
-      sentences.add(Sentence(dSeg, seg,
-          displayStart: dStart.clamp(0, cleaned.display.length),
-          displayEnd: dEnd.clamp(dStart, cleaned.display.length)));
-      idx += seg.length;
+    // 段落块（按空行切；normalizeBody 已把空行折成单换行，通常整章一块）
+    final blocks = <(int, int)>[];
+    var pos = 0;
+    for (final m in RegExp(r'\n\s*\n').allMatches(text)) {
+      blocks.add((pos, m.start));
+      pos = m.end;
     }
-    if (sentences.isEmpty && tts.trim().isNotEmpty) {
-      starts.add(0);
-      sentences.add(Sentence(
-        cleaned.display.trim(),
-        tts.trim(),
-        displayStart: 0,
-        displayEnd: cleaned.display.length,
+    blocks.add((pos, text.length));
+    final kept = <(int, int)>[];
+    final displays = <String>[];
+    for (final b in blocks) {
+      final seg = text.substring(b.$1, b.$2);
+      if (seg.trim().isEmpty) continue;
+      kept.add(b);
+      // 块内换行折成空格（渲染单位）；'\n'→' ' 一对一，块内偏移不变
+      displays.add(seg.replaceAll('\n', ' ').trim());
+    }
+    if (kept.isEmpty) return null;
+
+    final clean = preprocessForTts(text);
+    final ranges = splitSentenceRanges(clean.clean);
+    final byPara = List.generate(kept.length, (_) => <Sentence>[]);
+
+    var pIdx = 0;
+    for (final (s, e) in ranges) {
+      final tts = clean.clean.substring(s, e);
+      if (tts.trim().isEmpty) continue;
+      final u16s = s < clean.cmap.length ? clean.cmap[s] : text.length;
+      final u16e = (e > s && e - 1 < clean.cmap.length)
+          ? clean.cmap[e - 1] + 1
+          : text.length;
+
+      while (pIdx + 1 < kept.length && u16s >= kept[pIdx + 1].$1) {
+        pIdx++;
+      }
+      final ps = kept[pIdx].$1;
+      final pe = kept[pIdx].$2;
+      final ds = (u16s - ps).clamp(0, displays[pIdx].length);
+      final de = (min(u16e, pe) - ps).clamp(ds, displays[pIdx].length);
+      byPara[pIdx].add(Sentence(
+        displays[pIdx].substring(ds, de),
+        tts,
+        displayStart: ds,
+        displayEnd: de,
       ));
     }
-    return Paragraph(
-      display: display,
-      tts: tts,
-      sentences: sentences,
-      sentenceStartTts: starts,
-    );
+
+    final paragraphs = <Paragraph>[];
+    for (var i = 0; i < kept.length; i++) {
+      final seg = byPara[i];
+      final segStarts = <int>[];
+      var acc = 0;
+      for (final s in seg) {
+        segStarts.add(acc);
+        acc += s.tts.length;
+      }
+      paragraphs.add(Paragraph(
+        display: displays[i],
+        tts: seg.map((s) => s.tts).join(),
+        sentences: seg,
+        sentenceStartTts: segStarts,
+      ));
+    }
+    return Chapter(title: title, paragraphs: paragraphs);
   }
 }

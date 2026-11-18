@@ -105,6 +105,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
         addedAt: DateTime.now(),
         parseOk: book.parseOk,
         parseError: book.parseError,
+        contentKey: book.contentKey,
       );
       await _storage.addBook(meta);
       // 拷贝文件到应用私有目录（防止外部文件被清理/权限变化）
@@ -272,10 +273,14 @@ class _ShelfScreenState extends State<ShelfScreen> {
     }
     final saved = await _storage.loadProgress(meta.id);
     if (!mounted) return;
+    // 缓存目录一级键以书架记录为准（历史书已存 contentKey，新书解析时算好）
+    final bookForReader = meta.contentKey.isEmpty
+        ? book
+        : book.withContentKey(meta.contentKey);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ReaderScreen(
-          book: book,
+          book: bookForReader,
           storage: _storage,
           initialProgress: saved,
           onProgressChanged: (p) async {
@@ -300,7 +305,10 @@ class _ShelfScreenState extends State<ShelfScreen> {
 
     String bookTitleOf(String safeId) {
       for (final b in _books) {
-        if (TtsCacheStore.safeId(b.id) == safeId) return b.title;
+        if (TtsCacheStore.safeId(b.cacheDirName) == safeId ||
+            TtsCacheStore.safeId(b.id) == safeId) {
+          return b.title;
+        }
       }
       return safeId;
     }
@@ -309,7 +317,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
     Future<void> clearOne(String safeId) async {
       String? origId;
       for (final b in _books) {
-        if (TtsCacheStore.safeId(b.id) == safeId) {
+        if (TtsCacheStore.safeId(b.cacheDirName) == safeId ||
+            TtsCacheStore.safeId(b.id) == safeId) {
           origId = b.id;
           break;
         }

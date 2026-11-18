@@ -98,6 +98,10 @@ class Book {
   final List<Chapter> chapters;
   final DateTime addedAt;
 
+  /// 跨端稳定的内容指纹（与 PC 端 content_key 同一值）：
+  /// 音频缓存目录一级键、WebDAV 同步键都用它，因此换设备也能命中同一批 mp3。
+  final String contentKey;
+
   /// 是否解析完成（加载失败时显示但不可读）
   final bool parseOk;
   final String? parseError;
@@ -114,9 +118,23 @@ class Book {
     required this.format,
     required this.chapters,
     required this.addedAt,
+    this.contentKey = '',
     this.parseOk = true,
     this.parseError,
   });
+
+  /// 带上内容指纹的副本（解析完成后统一在 BookParser 里补上）
+  Book withContentKey(String key) => Book(
+        id: id,
+        title: title,
+        filePath: filePath,
+        format: format,
+        chapters: chapters,
+        addedAt: addedAt,
+        contentKey: key,
+        parseOk: parseOk,
+        parseError: parseError,
+      );
 
   factory Book.failed({
     required String id,

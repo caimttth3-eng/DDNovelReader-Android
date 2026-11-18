@@ -57,6 +57,9 @@ class BookMeta {
   final bool parseOk;
   final String? parseError;
 
+  /// 跨端稳定的内容指纹（= 音频缓存目录一级键 = WebDAV 同步键）
+  final String contentKey;
+
   const BookMeta({
     required this.id,
     required this.title,
@@ -65,6 +68,7 @@ class BookMeta {
     required this.addedAt,
     this.parseOk = true,
     this.parseError,
+    this.contentKey = '',
   });
 
   Map<String, dynamic> toJson() => {
@@ -75,6 +79,7 @@ class BookMeta {
         'addedAt': addedAt.toIso8601String(),
         'parseOk': parseOk,
         'parseError': parseError,
+        'contentKey': contentKey,
       };
 
   factory BookMeta.fromJson(Map<String, dynamic> json) => BookMeta(
@@ -87,5 +92,9 @@ class BookMeta {
                 DateTime.fromMillisecondsSinceEpoch(0),
         parseOk: json['parseOk'] as bool? ?? true,
         parseError: json['parseError'] as String?,
+        contentKey: json['contentKey'] as String? ?? '',
       );
+
+  /// 缓存目录名：优先用 contentKey，历史数据（无 key）回退到 safeId(id)
+  String get cacheDirName => contentKey.isNotEmpty ? contentKey : id;
 }

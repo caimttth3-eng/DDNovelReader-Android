@@ -69,7 +69,7 @@ class BookCacheTask {
     for (var ci = 0; ci < book.chapters.length; ci++) {
       if (fromChapter != null && ci < fromChapter) continue;
       final ch = book.chapters[ci];
-      final offs = chapterTtsSentenceOffsets(ch);
+      final offs = chapterSentenceOffsets(ch);
       var i = 0;
       for (final p in ch.paragraphs) {
         for (final s in p.sentences) {

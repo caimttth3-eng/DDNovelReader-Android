@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
+import 'tts_text.dart';
 
 /// 恢复的进度记录（total 与当前任务不符即作废；from* 记录缓存起点）
 typedef CacheProgress = ({
@@ -18,25 +19,40 @@ typedef CacheProgress = ({
 
 /// 全书语音缓存：磁盘持久化的 Edge TTS 合成音频缓存。
 ///
-/// 设计对齐 PC 端（novelreader/tts_engine.py WholeBookCacher）：
-/// - 目录：`<appSupport>/tts_cache/<bookId>/<voice>/<rateKey>/`
-/// - 文件：`{章:04d}_{章内tts偏移:08d}.mp3`——坐标即指纹：
-///   书重新解析、切句规则变化时，只要句子文本没动，偏移不变缓存仍命中；
-///   文本动了偏移自然变 → 自动失效防错位。
-/// - 原子写：先写 `.tmp` 再 rename 发布，朗读线程永远读不到半截文件。
-/// - 进度持久化 `progress.json`（bookId/voice/rate/total/done/completed/state），
-///   total 不匹配即作废；续传时剔除「标记完成但文件缺失」的任务防谎报。
+/// 目录契约与 PC 端完全一致（novelreader/tts_engine.py WholeBookCacher）：
+/// ` <appSupport>/tts_cache/<contentKey>/<voice>/<pct>/ `
+/// - 一级键 contentKey：书名 + 全文口径算出，跨设备可复现（见 content_key.dart）；
+/// - 语速目录 pct：直接是「传给 Edge 的百分比整数」，PC rate=300 ↔ 安卓 1.50 ↔ "50"；
+/// - 文件 `{章:04d}_{章内原文偏移:08d}.mp3`：偏移按**码点**计，与 PC clean_to_orig 同口径；
+/// - 原子写：先写 `.tmp` 再 rename 发布，朗读线程永远读不到半截文件；
+/// - 进度 `progress.json` 同时写 `bookId` 与 `book_id`（值都是 contentKey），
+///   rate 写 pct 字符串，PC 与安卓读写同一份即可续传。
 class TtsCacheStore {
+  /// 本机书籍 id（旧缓存目录名；只用于懒迁移兜底）
   final String bookId;
+
+  /// 缓存一级目录 = contentKey（跨端稳定）；为空时退化为 bookId
+  final String cacheKey;
+
   final String voice;
   final double rate;
 
-  TtsCacheStore(this.bookId, this.voice, this.rate);
+  TtsCacheStore(this.bookId, this.voice, this.rate, {String contentKey = ''})
+      : cacheKey = (contentKey.isNotEmpty ? contentKey : bookId);
 
-  /// 缓存目录 key：语速按两位小数定值，与合成参数一一对应
-  String get rateKey => rate.toStringAsFixed(2);
+  /// 语速目录名 = 合成百分比整数（与 PC rate_dir_key 同值）
+  String get rateKey => ratePctOfSpeechRate(rate).toString();
+
+  /// 安卓倍率 → 百分比整数：1.0 → 0，1.5 → 50，0.5 → -50
+  static int ratePctOfSpeechRate(double rate) {
+    final pct = ((rate - 1.0) * 100).round();
+    if (pct < -100) return -100;
+    if (pct > 200) return 200;
+    return pct;
+  }
 
   static const _progressFile = 'progress.json';
+  static const _layoutMark = '.tts_layout_v2';
 
   static Future<Directory> rootDir() async {
     final base = await getApplicationSupportDirectory();
@@ -45,11 +61,13 @@ class TtsCacheStore {
     return d;
   }
 
+  /// 当前语音/语速目录（含旧目录懒迁移）
   Future<Directory> dir() async {
     final root = await rootDir();
+    await _migrateLegacyLayout(root);
     final d = Directory([
       root.path,
-      _safe(bookId),
+      _safe(cacheKey),
       _safe(voice),
       rateKey,
     ].join(Platform.pathSeparator));
@@ -73,6 +91,82 @@ class TtsCacheStore {
   Future<String> _pathOf(int ci, int off) async {
     final d = await dir();
     return '${d.path}${Platform.pathSeparator}${fileName(ci, off)}';
+  }
+
+  // ---------- 旧布局懒迁移（只动本书，不扫全盘）----------
+
+  /// 把本机旧布局搬到新契约：
+  /// 1) 一级目录 `<book.id>` → `<contentKey>`；
+  /// 2) 语速目录 `1.00` / `1.50` → `0` / `50`（纯整数的目录视为已是新格式，跳过）。
+  /// 已迁移过（有标记文件）就只做一次 exists 判断，后续零成本。
+  Future<void> _migrateLegacyLayout(Directory root) async {
+    try {
+      final sep = Platform.pathSeparator;
+      final keyDir = Directory('${root.path}$sep${_safe(cacheKey)}');
+      final mark = File('${keyDir.path}$sep$_layoutMark');
+      if (await mark.exists()) return;
+
+      if (cacheKey != bookId) {
+        final oldDir = Directory('${root.path}$sep${_safe(bookId)}');
+        if (await oldDir.exists()) {
+          if (!await keyDir.exists()) {
+            await oldDir.rename(keyDir.path);
+          } else {
+            await _moveDirInto(oldDir, keyDir);
+          }
+        }
+      }
+
+      if (await keyDir.exists()) await _migrateRateDirs(keyDir);
+      if (!await keyDir.exists()) await keyDir.create(recursive: true);
+      await mark.writeAsString('2', flush: true);
+    } catch (_) {
+      // 迁移失败不影响读写：新目录照样会被创建，只是旧 mp3 暂不命中
+    }
+  }
+
+  static Future<void> _migrateRateDirs(Directory keyDir) async {
+    final sep = Platform.pathSeparator;
+    final rateNameRe = RegExp(r'^([0-9]+)\.([0-9]+)$');
+    await for (final voiceDir in keyDir.list(followLinks: false)) {
+      if (voiceDir is! Directory) continue;
+      await for (final sub in voiceDir.list(followLinks: false)) {
+        if (sub is! Directory) continue;
+        final name = sub.uri.pathSegments.last;
+        final m = rateNameRe.firstMatch(name);
+        if (m == null) continue; // 纯整数 pct 目录：已是新格式
+        final r = double.tryParse(name);
+        if (r == null) continue;
+        final target = Directory(
+            '${voiceDir.path}$sep${ratePctOfSpeechRate(r).toString()}');
+        if (!await target.exists()) {
+          await sub.rename(target.path);
+        } else {
+          await _moveDirInto(sub, target);
+        }
+      }
+    }
+  }
+
+  static Future<void> _moveDirInto(Directory src, Directory dst) async {
+    final sep = Platform.pathSeparator;
+    await dst.create(recursive: true);
+    await for (final e in src.list(recursive: true, followLinks: false)) {
+      if (e is! File) continue;
+      final rel = e.path.substring(src.path.length + 1);
+      final target = File('${dst.path}$sep$rel');
+      await target.parent.create(recursive: true);
+      try {
+        if (!await target.exists()) {
+          await e.rename(target.path);
+        } else {
+          await e.delete();
+        }
+      } catch (_) {}
+    }
+    try {
+      await src.delete(recursive: true);
+    } catch (_) {}
   }
 
   /// 读缓存音频；未命中或空文件返回 null
@@ -113,18 +207,17 @@ class TtsCacheStore {
 
   // ---------- 进度持久化 ----------
 
-  /// 返回进度记录；无进度或 bookId/voice/rate 不匹配返回 null
+  /// 返回进度记录；无进度或 voice 不匹配返回 null。
+  /// bookId / rate 允许旧值（懒迁移前的 book.id 与 "1.00"），以免丢进度。
   Future<CacheProgress?> loadProgress() async {
     try {
       final d = await dir();
       final p = File('${d.path}${Platform.pathSeparator}$_progressFile');
       if (!await p.exists()) return null;
       final data = jsonDecode(await p.readAsString()) as Map<String, dynamic>;
-      if (data['bookId'] != bookId ||
-          data['voice'] != voice ||
-          data['rate'] != rateKey) {
-        return null;
-      }
+      if (data['voice'] != voice) return null;
+      final bid = data['book_id'] ?? data['bookId'];
+      if (bid != null && bid != cacheKey && bid != bookId) return null;
       final done = (data['done'] as num?)?.toInt() ?? 0;
       final completed =
           (data['completed'] as List<dynamic>? ?? const [])
@@ -155,7 +248,9 @@ class TtsCacheStore {
     try {
       final d = await dir();
       final data = {
-        'bookId': bookId,
+        // 双键：PC 读 book_id，安卓历史版本读 bookId，值统一为 contentKey
+        'bookId': cacheKey,
+        'book_id': cacheKey,
         'voice': voice,
         'rate': rateKey,
         'total': total,
@@ -185,7 +280,7 @@ class TtsCacheStore {
 
   // ---------- 大小统计与清理 ----------
 
-  /// 当前 bookId/voice/rate 目录占用字节数（排除 progress.json 与 .tmp）
+  /// 当前 contentKey/voice/rate 目录占用字节数（排除 progress.json 与 .tmp）
   Future<int> sizeBytes() async {
     try {
       final d = await dir();
@@ -225,7 +320,7 @@ class TtsCacheStore {
     return n;
   }
 
-  /// 当前 bookId/voice/rate 目录下全部 mp3 文件名（不含 progress.json/.tmp），
+  /// 当前 contentKey/voice/rate 目录下全部 mp3 文件名（不含 progress.json/.tmp），
   /// 一次性列出供恢复进度时内存判断，避免逐文件 exists 的 IO 扫描。
   Future<Set<String>> listMp3Names() async {
     final result = <String>{};
@@ -287,10 +382,10 @@ class TtsCacheStore {
     return n;
   }
 
-  /// 目录名安全化（公开版，供书架按 bookId 匹配缓存目录）
+  /// 目录名安全化（公开版，供书架按 contentKey 匹配缓存目录）
   static String safeId(String s) => _safe(s);
 
-  /// 每本书缓存占用：[(bookId目录名, bytes)]，按占用降序
+  /// 每本书缓存占用：[(contentKey 目录名, bytes)]，按占用降序
   static Future<List<(String, int)>> listBookSizes() async {
     final result = <(String, int)>[];
     try {
@@ -316,12 +411,13 @@ class TtsCacheStore {
     return result;
   }
 
-  /// 清除某本书（bookId 目录名）的全部语音缓存，返回删除文件数
-  static Future<int> clearBook(String bookId) async {
+  /// 清除某本书（contentKey 目录名）的全部语音缓存，返回删除文件数
+  static Future<int> clearBook(String cacheKeyName) async {
     var n = 0;
     try {
       final root = await rootDir();
-      final d = Directory([root.path, bookId].join(Platform.pathSeparator));
+      final d = Directory(
+          [root.path, cacheKeyName].join(Platform.pathSeparator));
       if (await d.exists()) {
         await for (final e in d.list(recursive: true, followLinks: false)) {
           if (e is File) {
@@ -338,16 +434,22 @@ class TtsCacheStore {
   }
 }
 
-/// 章节内所有句子的 tts 累计字符偏移（与 reader 的 _chapterTtsSentences 同序）。
+/// 章节内所有句子的「原文偏移」（与 PC WholeBookCacher 的文件名坐标同口径）。
+///
+/// - 偏移按 Unicode 码点计（PC 是 Python 字符串下标 = 码点）；
+/// - 起点是「章内正文」中被清洗保留的首字符位置，等价 PC clean_to_orig；
+/// - 段落之间补 1 个 '\n'，与 PC content 的段落分隔一致。
 /// 播放与缓存任务共用同一套坐标，保证命中。
-List<int> chapterTtsSentenceOffsets(Chapter ch) {
+List<int> chapterSentenceOffsets(Chapter ch) {
   final offs = <int>[];
   var acc = 0;
   for (final p in ch.paragraphs) {
+    final cpMap = utf16ToCodePointMap(p.display);
     for (final s in p.sentences) {
-      offs.add(acc);
-      acc += s.tts.length;
+      final ds = s.displayStart.clamp(0, p.display.length);
+      offs.add(acc + cpMap[ds]);
     }
+    acc += codePointLength(p.display) + 1;
   }
   return offs;
 }

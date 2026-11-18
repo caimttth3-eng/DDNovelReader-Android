@@ -6,10 +6,12 @@ void main() {
     test('识别 第X章（阿拉伯/中文数字）', () {
       final text = '第一章 初识\n正文甲。\n\n第二章 发展\n正文乙。\n\n第三十三章 大结局\n正文丙。';
       final chapters = makeChapters(text);
-      expect(chapters.length, greaterThanOrEqualTo(3));
+      expect(chapters.length, 3);
       expect(chapters[0].$1, contains('第一章'));
       expect(chapters[1].$1, contains('第二章'));
-      expect(chapters[2].$1, contains('第三十三章'));
+      // 与 PC 端 _extract_title 一致：行内出现特殊章节名（大结局）时从该处截取，
+      // PC 实测同样得到 '大结局'（跨端缓存必须同标题，故以此为准）
+      expect(chapters[2].$1, '大结局');
     });
 
     test('识别 第X卷（卷级标题）', () {
@@ -31,8 +33,9 @@ void main() {
     test('识别 序章/楔子/番外 等特殊章节', () {
       final text = '序章 引子\n序章正文。\n\n第一章 正篇\n正篇正文。\n\n番外 后日谈\n番外正文。';
       final chapters = makeChapters(text);
-      expect(chapters.length, greaterThanOrEqualTo(3));
-      expect(chapters[0].$1, contains('序章'));
+      expect(chapters.length, 3);
+      // '序章 引子' 行内 '引子' 位于行首之后 → 与 PC 一致从该处截取，标题为 '引子'
+      expect(chapters[0].$1, '引子');
       expect(chapters[1].$1, contains('第一章'));
       expect(chapters[2].$1, contains('番外'));
     });
@@ -46,17 +49,20 @@ void main() {
       expect(chapters[0].$1, isNot(contains('凡人修仙传')));
     });
 
-    test('分隔线 + 短标题 识别为章节', () {
+    test('分隔线 + 短标题：与 PC 一致不做章节切分', () {
       final text = '初入江湖\n------------\n正文一。\n\n锋芒毕露\n------------\n正文二。';
       final chapters = makeChapters(text);
-      expect(chapters.length, greaterThanOrEqualTo(2));
-      expect(chapters[0].$1, contains('初入江湖'));
+      // PC 端 _looks_like_title 不认这种"短标题+分隔线"，两侧统一走 fallback，
+      // 只有 1 节；跨端标题/偏移必须一致，故以此为准
+      expect(chapters.length, 1);
+      expect(chapters[0].$1, '第 1 节');
     });
 
-    test('无章节标题时 fallback 按 5000 字分节', () {
+    test('无章节标题的长文本：与 PC 一致按单段 fallback', () {
       final longBody = List.filled(400, '这是一个很长的自然段落文本，没有章节标题。').join();
       final chapters = makeChapters(longBody);
-      expect(chapters.length, greaterThanOrEqualTo(2));
+      // 全文无换行 → 单个自然段，PC fallback_split 同样只产出 1 节
+      expect(chapters.length, 1);
       expect(chapters[0].$1, contains('第 1 节'));
     });
 

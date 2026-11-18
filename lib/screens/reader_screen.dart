@@ -958,8 +958,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _settings.voice.isEmpty ? 'zh-CN-XiaoxiaoNeural' : _settings.voice;
 
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
-  TtsCacheStore _currentCacheStore() =>
-      TtsCacheStore(widget.book.id, _effectiveVoice, _settings.speechRate);
+  /// 一级目录用 contentKey（与 PC 端同值），换设备/换机器也能命中同一批 mp3
+  TtsCacheStore _currentCacheStore() => TtsCacheStore(
+        widget.book.id,
+        _effectiveVoice,
+        _settings.speechRate,
+        contentKey: widget.book.contentKey,
+      );
 
   /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
   void _refreshTtsCache() {
@@ -1271,7 +1276,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _refreshTtsCache();
     await _tts.start(
       sentences,
-      offsets: chapterTtsSentenceOffsets(widget.book.chapters[c]),
+      offsets: chapterSentenceOffsets(widget.book.chapters[c]),
       chapterIndex: c,
       from: from,
     );
@@ -2495,7 +2500,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     int? fromOffset;
     if (_ttsChapter >= 0 && _ttsChapter < widget.book.chapters.length) {
       final offs =
-          chapterTtsSentenceOffsets(widget.book.chapters[_ttsChapter]);
+          chapterSentenceOffsets(widget.book.chapters[_ttsChapter]);
       // _ttsSentence 是段内句子序号，累加段前句子数得到章内全局序号
       var global = _ttsSentence;
       for (var pi = 0; pi < _para; pi++) {
