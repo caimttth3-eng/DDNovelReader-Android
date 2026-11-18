@@ -1,4 +1,5 @@
-﻿import 'package:audio_service/audio_service.dart';
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+import 'package:audio_service/audio_service.dart';
 import '../i18n.dart';
 
 typedef MediaPlaybackRequest = Future<void> Function();

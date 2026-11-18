@@ -1,4 +1,5 @@
-﻿import 'package:characters/characters.dart';
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+import 'package:characters/characters.dart';
 
 /// Short media-card text selected by an actual UTF-16 speech position.
 ///

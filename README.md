@@ -108,6 +108,17 @@ flutter build apk --release
 - targetSdk 33（audio_service 兼容性）
 - minSdk 21
 
+## 致谢
+
+v1.3.0 的部分阅读与朗读改进移植自社区贡献：
+
+- [NayGnehz/DDNovelReader-Android](https://github.com/NayGnehz/DDNovelReader-Android)
+- 对应 [PR #2](https://github.com/caimttth3-eng/DDNovelReader-Android/pull/2)（参考 commit `27b6a1e`）
+- 采纳：完整行分页与排版、目录索引、字词级高亮、连续拖动切句、通知栏/锁屏媒体控制（已按本项目的缓存与同步架构修改）
+- 未采纳：系统 TTS 自动兜底、书架布局、解析/分章重写
+
+详细来源、修改范围与权利说明见 [NOTICE.md](NOTICE.md)。
+
 ## 版本
 
 ### v1.2.5（2026-11-18）

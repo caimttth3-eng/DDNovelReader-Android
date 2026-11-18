@@ -1,3 +1,4 @@
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 /// Edge TTS：调用微软 Edge 神经语音在线合成中文音频（MP3）。
 /// 基于 edge-tts 7.2.8 协议逐项移植（已联网调研并核对 twn39/edgetts-dart 实现）。
 ///

@@ -1,4 +1,5 @@
-﻿import 'dart:math' as math;
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+import 'dart:math' as math;
 import 'package:flutter/painting.dart';
 
 /// All dimensions are relative to the Flutter viewport in logical pixels.
