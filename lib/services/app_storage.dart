@@ -172,6 +172,23 @@ class AppStorage {
     await sp.setString(_settingsKey, jsonEncode(_settings));
   }
 
+  // ---------- 书架打开顺序（最近打开的排最前） ----------
+  static const _openOrderKey = 'duoduo.openOrder.v1';
+
+  Future<List<String>> loadOpenOrder() async {
+    final sp = await _sp;
+    return sp.getStringList(_openOrderKey) ?? const [];
+  }
+
+  Future<void> touchOpened(String bookId) async {
+    final sp = await _sp;
+    final order = <String>[...(sp.getStringList(_openOrderKey) ?? const <String>[])];
+    order.remove(bookId);
+    order.insert(0, bookId);
+    if (order.length > 200) order.removeRange(200, order.length);
+    await sp.setStringList(_openOrderKey, order);
+  }
+
   // ---------- 最后阅读的书籍（启动时自动恢复） ----------
   Future<String?> loadLastBookId() async {
     final sp = await _sp;
@@ -196,7 +213,7 @@ class ReadingSettings {
   double brightness = 0.25;
   bool automaticBrightness = true;
   int autoPageSeconds = 20;
-  String pageTurnMode = 'tap';
+  String pageTurnMode = 'scroll';
   String pageTurnAnimation = 'off';
   bool followSystemRotation = false;
   double sentenceDragDelay = 0.2;
@@ -304,7 +321,7 @@ class ReadingSettings {
         s.setVoiceSpeechPauses(entry.key as String, SpeechPauseSettings.fromJson(value));
       }
     }
-    s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'tap';
+    s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'scroll';
     s.retainPageLine = json['retainPageLine'] as bool? ?? false;
     s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
     s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;

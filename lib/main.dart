@@ -1,4 +1,4 @@
-﻿import 'package:audio_service/audio_service.dart';
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -18,13 +18,19 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   final storage = AppStorage();
+  final storedSettings = await storage.loadSettings();
   final startupSettings = AppAppearance.initialize(
-    ReadingSettings.fromJson(await storage.loadSettings()),
+    ReadingSettings.fromJson(storedSettings),
     WidgetsBinding.instance.platformDispatcher.platformBrightness,
   );
+  // v1.3.0 起默认翻页方式 = 上下滚动：老安装一次性迁移（之后用户仍可自己改）
+  if (storedSettings['scrollDefaultV1'] != true) {
+    startupSettings.pageTurnMode = 'scroll';
+    storedSettings['scrollDefaultV1'] = true;
+  }
   // Persist before the bookshelf can reopen its last book: ReaderScreen reads
   // this same setting and must not restore last session's opposite appearance.
-  await storage.saveSettings(startupSettings.toJson());
+  await storage.saveSettings({...storedSettings, ...startupSettings.toJson()});
   AppAppearance.nightMode.value = startupSettings.themeIndex == AppAppearance.nightThemeIndex;
   // 注册用户自选字体（FontLoader 仅进程内有效，每次启动需重新注册）
   await FontManager.registerAll();

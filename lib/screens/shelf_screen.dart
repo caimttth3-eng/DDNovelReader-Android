@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -182,14 +182,24 @@ class _ShelfScreenState extends State<ShelfScreen> {
 
   Future<void> _loadAll() async {
     final books = await _storage.loadBooks();
+    // 最近打开的书排最前（第一本 = 上次打开的书），其余按最近打开顺序
+    final order = await _storage.loadOpenOrder();
+    final rank = {for (var i = 0; i < order.length; i++) order[i]: i};
+    final indexed = [for (var i = 0; i < books.length; i++) (i, books[i])];
+    indexed.sort((a, b) {
+      final ra = rank[a.$2.id] ?? 1 << 30;
+      final rb = rank[b.$2.id] ?? 1 << 30;
+      return ra != rb ? ra.compareTo(rb) : a.$1.compareTo(b.$1);
+    });
+    final ordered = [for (final e in indexed) e.$2];
     final progressMap = <String, BookProgress>{};
-    for (final b in books) {
+    for (final b in ordered) {
       final p = await _storage.loadProgress(b.id);
       if (p != null) progressMap[b.id] = p;
     }
     if (!mounted) return;
     setState(() {
-      _books = books;
+      _books = ordered;
       _progress = progressMap;
       _loading = false;
     });
@@ -405,6 +415,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   Future<void> _openBook(BookMeta meta) async {
+    // 记录打开顺序：回到书架时这本书排最前
+    await _storage.touchOpened(meta.id);
     // 先打开加载页（首帧立即出画面），解析/排版在页面出现后再跑：
     // 大书点开不再卡在书架上等，解析完成会原地切到阅读页，没有二次转场。
     Navigator.of(context).push(
@@ -452,7 +464,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
           },
         ),
       ),
-    );
+    ).then((_) { if (mounted) _loadAll(); });
   }
 
   /// 缓存管理：语音缓存总占用 + 按书籍列出占用（清理单本/清空全部）
