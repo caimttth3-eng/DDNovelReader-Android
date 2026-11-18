@@ -16,6 +16,30 @@ class AnnotationStore {
     return _prefs ??= await SharedPreferences.getInstance();
   }
 
+  // ---------- 原始 JSON（WebDAV 同步用） ----------
+  // 同步要按 id 做并集，且不能丢掉 PC 端写入的原生字段（chapter_idx/offset/
+  // offset_end/text/created_at），所以这里直接读写未解析的 Map 列表。
+  Future<List<Map<String, dynamic>>> loadRawBookmarks(String bookId) async {
+    final sp = await _sp;
+    final raw = sp.getString(_bmPrefix + bookId);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveRawBookmarks(
+      String bookId, List<Map<String, dynamic>> list) async {
+    final sp = await _sp;
+    await sp.setString(_bmPrefix + bookId, jsonEncode(list));
+  }
+
   // ---------- 书签 ----------
   Future<List<Bookmark>> loadBookmarks(String bookId) async {
     final sp = await _sp;

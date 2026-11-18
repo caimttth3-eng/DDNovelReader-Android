@@ -353,6 +353,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       paragraphIndex: _para,
       offsetInParagraph: 0,
       percent: widget.book.progressRatio(_chapter, _para),
+      updatedAt: DateTime.now().millisecondsSinceEpoch / 1000.0,
+      // 章内字符偏移（PC 的 char_offset 口径）：WebDAV 推给 PC 时按此定位
+      charOffsetInChapter: widget.book.charOffsetOf(_chapter, _para, 0),
     );
     await widget.onProgressChanged?.call(p);
   }
@@ -415,6 +418,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
       snippet = para.display.trim();
     }
     if (snippet.length > 40) snippet = snippet.substring(0, 40);
+    // 章内字符偏移（PC 的 offset 口径）：跨端同步时让 PC 能精确定位
+    final sentStart = it.sentenceIndex < para.sentences.length
+        ? para.sentences[it.sentenceIndex].displayStart
+        : 0;
+    final sentEnd = it.sentenceIndex < para.sentences.length
+        ? para.sentences[it.sentenceIndex].displayEnd
+        : para.display.length;
+    final chOff = widget.book.charOffsetOf(
+        it.chapterIndex, it.paragraphIndex, sentStart);
+    final chOffEnd = chOff + (sentEnd - sentStart);
     setState(() {
       _bookmarks.add(Bookmark(
         id: 'b${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}',
@@ -425,6 +438,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
         chapterTitle: widget.book.chapters[it.chapterIndex].title,
         snippet: snippet,
         createdAt: DateTime.now(),
+        charOffset: chOff,
+        charOffsetEnd: chOffEnd,
       ));
     });
     await _persistAnnotations();

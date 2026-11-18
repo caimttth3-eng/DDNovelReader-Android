@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -7,14 +8,17 @@ import 'package:path_provider/path_provider.dart';
 import '../i18n.dart';
 import '../models/book.dart';
 import '../models/progress.dart';
+import '../services/annotation_store.dart';
 import '../services/app_storage.dart';
 import '../services/book_cache_task.dart';
 import '../services/book_parser.dart';
+import '../services/sync_engine.dart';
 import '../services/tts_cache_store.dart';
 import '../services/updater.dart';
 import '../widgets/book_card.dart';
 import 'about_screen.dart';
 import 'reader_screen.dart';
+import 'sync_screen.dart';
 
 /// 书架首页：顶部「多多朗读」+ ⋮ 设置(添加书籍)，4 列木纹书架，无限下滑。
 class ShelfScreen extends StatefulWidget {
@@ -27,6 +31,7 @@ class ShelfScreen extends StatefulWidget {
 class _ShelfScreenState extends State<ShelfScreen> {
   final AppStorage _storage = AppStorage();
   final BookParser _parser = BookParser();
+  final AnnotationStore _annotations = AnnotationStore();
 
   List<BookMeta> _books = [];
   Map<String, BookProgress> _progress = {};
@@ -35,9 +40,111 @@ class _ShelfScreenState extends State<ShelfScreen> {
   @override
   void initState() {
     super.initState();
-    _loadAll();
+    // 加载书架 → 补齐历史书指纹 → 自动同步（顺序不能颠倒，同步依赖正确的 key）
+    _bootstrap();
     // 启动后台检查更新（失败静默，不影响启动）
     Updater.checkAuto(context);
+  }
+
+  Future<void> _bootstrap() async {
+    await _loadAll();
+    await _backfillKeys();
+    await _autoSync();
+    await _restoreLastBook();
+  }
+
+  static final RegExp _ck2Pattern = RegExp(r'^[0-9a-f]{16}$');
+
+  /// 补齐历史书（v1.2.4 之前导入）缺失的 ck2 指纹：contentKey 为空时同步会退化成
+  /// 用 book id 当 key，两端对不上。这里按与 PC 相同的算法重算并回填，
+  /// 顺带补 totalChars / chapterCount（远端记录需要）。只对异常书解析一次。
+  /// 解析放在后台 isolate，避免长书解析阻塞 UI（否则启动会 ANR）。
+  Future<void> _backfillKeys() async {
+    var changed = false;
+    final list = <BookMeta>[];
+    for (final meta in _books) {
+      var m = meta;
+      final keyOk = _ck2Pattern.hasMatch(m.contentKey);
+      if (!keyOk || m.totalChars == 0 || m.chapterCount == 0) {
+        final path = m.filePath;
+        final ext = path.contains('.') ? path.substring(path.lastIndexOf('.')) : '';
+        final fmt = BookFormatX.fromExt(ext);
+        final bid = m.id;
+        final btitle = m.title;
+        final badded = m.addedAt;
+        try {
+          final r = await Isolate.run(() async {
+            final b = await BookParser().parse(
+              id: bid,
+              filePath: path,
+              title: btitle,
+              format: fmt,
+              addedAt: badded,
+            );
+            return <Object?>[b.parseOk, b.contentKey, b.totalDisplayLength, b.chapterCount];
+          });
+          final parseOk = r[0] as bool;
+          final key = r[1] as String;
+          final total = r[2] as int;
+          final chapters = r[3] as int;
+          if (parseOk && key.isNotEmpty &&
+              (key != m.contentKey || total != m.totalChars || chapters != m.chapterCount)) {
+            m = m.copyWith(contentKey: key, totalChars: total, chapterCount: chapters);
+            changed = true;
+          }
+        } catch (_) {
+          // 文件缺失/解析异常：保持原样，同步时仍以 id 兜底
+        }
+      }
+      list.add(m);
+    }
+    if (!changed) return;
+    await _storage.saveBooks(list);
+    if (!mounted) return;
+    setState(() => _books = list);
+  }
+
+  Future<void> _autoSync() async {
+    final eng = SyncEngine(storage: _storage, annotations: _annotations);
+    final s = await eng.settings();
+    if (!((s[SyncEngine.cfgAuto] as bool?) ?? true)) return;
+    if (!eng.configured(s)) return;
+    final report = await eng.sync();
+    if (!mounted || !report.ok) return;
+    if (report.pulled > 0 || report.imported > 0) {
+      await _loadAll();
+    }
+    if (report.pulled > 0 || report.pushed > 0 || report.imported > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(report.summary), duration: const Duration(seconds: 2)),
+      );
+    }
+  }
+
+  /// 同步回来后只刷新进度腰封，不重建书架（避免打断正在看的界面）
+  Future<void> _reloadProgress() async {
+    final cur = <String, BookProgress>{};
+    for (final b in _books) {
+      final p = await _storage.loadProgress(b.id);
+      if (p != null) cur[b.id] = p;
+    }
+    if (!mounted) return;
+    setState(() => _progress = cur);
+  }
+
+  Future<void> _openSync() async {
+    await SyncScreen.show(
+      context,
+      storage: _storage,
+      annotations: _annotations,
+      onSynced: _reloadAfterSync,
+    );
+  }
+
+  /// 同步回来：可能有新书（远端独有）被拉进来，整表重载
+  Future<void> _reloadAfterSync() async {
+    await _loadAll();
+    await _reloadProgress();
   }
 
   Future<void> _loadAll() async {
@@ -53,16 +160,18 @@ class _ShelfScreenState extends State<ShelfScreen> {
       _progress = progressMap;
       _loading = false;
     });
-    // 启动恢复：若有最后阅读的书籍，直接进入阅读页
+  }
+
+  /// 启动恢复：若有最后阅读的书籍，直接进入阅读页（放在指纹回填/同步之后）
+  Future<void> _restoreLastBook() async {
     final lastId = await _storage.loadLastBookId();
-    if (lastId != null && mounted) {
-      for (final b in books) {
-        if (b.id == lastId) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _openBook(b);
-          });
-          break;
-        }
+    if (lastId == null || !mounted) return;
+    for (final b in _books) {
+      if (b.id == lastId) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _openBook(b);
+        });
+        break;
       }
     }
   }
@@ -106,6 +215,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
         parseOk: book.parseOk,
         parseError: book.parseError,
         contentKey: book.contentKey,
+        totalChars: book.totalDisplayLength,
+        chapterCount: book.chapterCount,
       );
       await _storage.addBook(meta);
       // 拷贝文件到应用私有目录（防止外部文件被清理/权限变化）
@@ -178,6 +289,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
               if (v == 'add') _addBook();
               if (v == 'about') AboutScreen.show(context);
               if (v == 'cache') _openCacheManager();
+              if (v == 'sync') _openSync();
             },
             itemBuilder: (ctx) => [
               PopupMenuItem(
@@ -197,6 +309,16 @@ class _ShelfScreenState extends State<ShelfScreen> {
                     const Icon(Icons.storage_outlined),
                     const SizedBox(width: 8),
                     Text(T('cacheManage')),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'sync',
+                child: Row(
+                  children: [
+                    const Icon(Icons.cloud_sync_outlined),
+                    const SizedBox(width: 8),
+                    Text(T('syncData')),
                   ],
                 ),
               ),
@@ -277,12 +399,21 @@ class _ShelfScreenState extends State<ShelfScreen> {
     final bookForReader = meta.contentKey.isEmpty
         ? book
         : book.withContentKey(meta.contentKey);
+    // 从 PC 拉来的进度只有章内字符偏移，这里按书内容换算成段落坐标
+    var initial = saved;
+    if (initial != null && initial.charOffsetInChapter != null) {
+      final (p, off) = bookForReader.locateByCharOffset(
+        initial.chapterIndex,
+        initial.charOffsetInChapter!,
+      );
+      initial = initial.copyWith(paragraphIndex: p, offsetInParagraph: off);
+    }
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ReaderScreen(
           book: bookForReader,
           storage: _storage,
-          initialProgress: saved,
+          initialProgress: initial,
           onProgressChanged: (p) async {
             await _storage.saveProgress(p);
             // 同步书架腰封进度

@@ -164,9 +164,43 @@ class Book {
     return (c, p);
   }
 
-  /// 计算全局百分比：0~1，依据累计字符数
-  double progressRatio(int chapterIdx, int paraIdx) {
+  /// 按「章内 display 字符偏移」定位 (段落索引, 段内偏移)。
+  ///
+  /// 口径：与 PC 端 `char_offset` 对齐 —— PC 的章内偏移是在章正文（段间以
+  /// 单个换行分隔）上数的，所以这里每跨一段补 +1 个换行字符。
+  /// 段间为多空行的书会有 ≤ 段数的正向偏差，定位到相邻段，不影响续读。
+  (int, int) locateByCharOffset(int chapterIdx, int charOffset) {
+    if (chapters.isEmpty) return (0, 0);
+    final c = chapterIdx.clamp(0, chapters.length - 1);
+    final paras = chapters[c].paragraphs;
+    if (paras.isEmpty) return (0, 0);
+    var remain = charOffset < 0 ? 0 : charOffset;
+    for (var i = 0; i < paras.length; i++) {
+      final len = paras[i].display.length;
+      if (remain <= len) return (i, remain.clamp(0, len));
+      remain -= len + 1; // +1 = 段间换行
+      if (remain < 0) remain = 0;
+    }
+    final last = paras.length - 1;
+    return (last, paras[last].display.length);
+  }
+
+  /// 把 (段落, 段内偏移) 换成 PC 口径的章内字符偏移（用于推给 PC）。
+  int charOffsetOf(int chapterIdx, int paragraphIndex, int offsetInParagraph) {
     if (chapters.isEmpty) return 0;
+    final c = chapterIdx.clamp(0, chapters.length - 1);
+    final paras = chapters[c].paragraphs;
+    if (paras.isEmpty) return 0;
+    final p = paragraphIndex.clamp(0, paras.length - 1);
+    var sum = 0;
+    for (var i = 0; i < p; i++) {
+      sum += paras[i].display.length + 1; // +1 = 段间换行
+    }
+    return sum + offsetInParagraph.clamp(0, paras[p].display.length);
+  }
+
+  /// 计算全局百分比：0~1，依据累计字符数
+  double progressRatio(int chapterIdx, int paraIdx) {    if (chapters.isEmpty) return 0;
     var c = chapterIdx.clamp(0, chapters.length - 1);
     var p = paraIdx.clamp(0, chapters[c].paragraphs.length - 1);
     var before = 0;
