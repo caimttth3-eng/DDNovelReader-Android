@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
 import 'dart:math';
 import 'dart:ui' as ui;
@@ -2276,6 +2276,48 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       from: from,
       initialTtsOffset: offset,
     );
+    // 章节边界预取：提前把下一章开头几句合成入库，换章不再等首句合成
+    unawaited(_prefetchNextChapterHead(c));
+  }
+
+  /// 预取下一章开头 3 句（并发），写进与朗读同一套 contentKey 缓存目录。
+  /// 只做“开场缓冲”，不整章缓存；失败静默，不影响当前播放。
+  Future<void> _prefetchNextChapterHead(int chapter) async {
+    final next = chapter + 1;
+    if (next >= _book.chapters.length || _effectiveVoice == TtsReader.systemVoice) {
+      return;
+    }
+    final ch = _book.chapters[next];
+    final offsets = chapterSentenceOffsets(ch);
+    final voice = _effectiveVoice;
+    final rate = _settings.speechRate;
+    final store = TtsCacheStore(_book.id, voice, rate,
+        contentKey: widget.book.contentKey);
+    final jobs = <Future<void>>[];
+    var index = 0;
+    var started = 0;
+    for (final para in ch.paragraphs) {
+      for (final sentence in para.sentences) {
+        final off = index < offsets.length ? offsets[index] : -1;
+        index++;
+        if (sentence.tts.isEmpty || off < 0) continue;
+        if (started >= 3) break;
+        if (await store.exists(next, off)) continue;
+        started++;
+        jobs.add(() async {
+          try {
+            final audio = await edgeSynth(sentence.tts,
+                voice: voice, rate: edgeRateStr(rate));
+            if (audio.isEmpty) return;
+            // 期间切了音色/语速就别写错目录
+            if (_effectiveVoice != voice || _settings.speechRate != rate) return;
+            await store.write(next, off, audio);
+          } catch (_) {}
+        }());
+      }
+      if (started >= 3) break;
+    }
+    await Future.wait(jobs);
   }
 
   void _updateMediaChapter(int chapter) {

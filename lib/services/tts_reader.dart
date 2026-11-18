@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 /// TTS 朗读服务：基于 Edge TTS 在线合成 + 后台预取队列。
 /// 逐句朗读 + 逐句高亮回调 + 暂停/继续/停止 + 定时停止。
 /// 预取后续句子（默认提前 8 句），缓存命中时无需再次在线合成。
@@ -711,28 +711,35 @@ class TtsReader {
   Future<void> _prefetchLoop() async {
     final generation = _contentGeneration;
     final worker = _prefetchGeneration;
+    // 3x 语速下串行合成追不上播放：按语速并发预取（2.5x 以上 4 路）
+    final parallelism = _speechRate >= 2.5 ? 4 : 3;
     try {
       while (!_disposed && !usesSystemVoice && _networkAvailable && _onlineNetworkFailure == null && _state == TtsState.playing && generation == _contentGeneration && worker == _prefetchGeneration) {
-        // 计算下一个要预取的位置
-        final nextToPrefetch = _prefetchIndex + 1;
         final maxPrefetch = _index + _prefetchSentences;
-        // A full window has no work. Starting the next sentence, resuming or
-        // resizing the window starts another worker; no periodic wake-up is
-        // needed, and refilling must not wait for an old 200 ms polling sleep.
-        if (nextToPrefetch > maxPrefetch || nextToPrefetch >= _sentences.length) return;
-        _prefetchIndex = nextToPrefetch;
-        // Replanning must not temporarily remove reusable audio from memory:
-        // a second resize could otherwise synthesize that same sentence again.
-        if (_prefetchCache.containsKey(nextToPrefetch)) continue;
-        // 取音频：内存/磁盘/在线（命中磁盘零网络，并异步落盘供下次）
-        final audio = await _obtainAudio(nextToPrefetch);
+        final batch = <int>[];
+        while (batch.length < parallelism) {
+          final nextToPrefetch = _prefetchIndex + 1;
+          if (nextToPrefetch > maxPrefetch || nextToPrefetch >= _sentences.length) break;
+          _prefetchIndex = nextToPrefetch;
+          if (_prefetchCache.containsKey(nextToPrefetch)) continue;
+          batch.add(nextToPrefetch);
+        }
+        if (batch.isEmpty) return;
+        // 音色/语速切换或暂停会让 generation/worker 失效，届时丢弃这批
+        final audios = await Future.wait(batch.map((i) async {
+          try {
+            return (i, await _obtainAudio(i));
+          } catch (_) {
+            return (i, Uint8List(0));
+          }
+        }));
         if (_disposed || _state != TtsState.playing || generation != _contentGeneration || worker != _prefetchGeneration) return;
-        if (audio.isNotEmpty && nextToPrefetch > _index && _inMemoryWindow(nextToPrefetch)) {
-          _prefetchCache[nextToPrefetch] = audio;
+        for (final (i, audio) in audios) {
+          if (audio.isNotEmpty && i > _index && _inMemoryWindow(i)) {
+            _prefetchCache[i] = audio;
+          }
         }
         _prunePrefetch();
-        // Keep a single synthesis request in flight, but immediately prepare
-        // its successor. Short sentences should not pay an extra 80 ms each.
       }
     } catch (_) {} finally {
       if (worker == _prefetchGeneration) _prefetching = false;
