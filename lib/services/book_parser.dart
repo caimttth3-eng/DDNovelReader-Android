@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -15,6 +15,50 @@ import 'tts_text.dart';
 /// 书籍解析器：支持 TXT / EPUB / PDF / DOCX，并自动分章。
 class BookParser {
   BookParser();
+
+  /// 阅读页会缓存格式化后的整本书；上限用来避免长期驻留超大书。
+  static const maxCachedDisplayCharacters = 4000000;
+
+  static bool fitsMemoryCache(Book book) =>
+      book.totalDisplayLength <= maxCachedDisplayCharacters;
+
+  static void clearMemoryCache() {}
+
+  /// 目录索引：默认一章一条（我们的分章已经把标题切成章），
+  /// autoExtractToc=false 时退化为每 5000 字一条的兜底目录。
+  static List<BookTocEntry> extractToc(Book source, {bool autoExtractToc = true}) {
+    final entries = <BookTocEntry>[];
+    if (!autoExtractToc) {
+      final whitespace = RegExp(r'\s');
+      var count = 0, next = 0;
+      for (var c = 0; c < source.chapters.length; c++) {
+        final paragraphs = source.chapters[c].paragraphs;
+        for (var p = 0; p < paragraphs.length; p++) {
+          final text = paragraphs[p].display;
+          for (var offset = 0; offset < text.length; offset++) {
+            if (whitespace.hasMatch(text[offset])) continue;
+            if (count >= next) {
+              entries.add(BookTocEntry(
+                  title: '第 ${entries.length + 1} 节',
+                  chapterIndex: c,
+                  paragraphIndex: p,
+                  displayOffset: offset));
+              next = count + 5000;
+            }
+            count++;
+          }
+        }
+      }
+      return entries;
+    }
+    for (var c = 0; c < source.chapters.length; c++) {
+      final ch = source.chapters[c];
+      if (ch.paragraphs.isEmpty) continue;
+      entries.add(BookTocEntry(
+          title: ch.title, chapterIndex: c, paragraphIndex: 0));
+    }
+    return entries;
+  }
 
   /// 章节标题匹配：中文「第X章/节/回/卷」或英文 Chapter N
   static final RegExp chapterTitleRe = RegExp(
@@ -406,4 +450,18 @@ class BookParser {
     }
     return Chapter(title: title, paragraphs: paragraphs);
   }
+}
+
+// ---------- 目录索引（PR2 引入，阅读页目录与自动目录共用） ----------
+
+class BookTocEntry {
+  final String title;
+  final int chapterIndex;
+  final int paragraphIndex;
+  final int displayOffset;
+  const BookTocEntry(
+      {required this.title,
+      required this.chapterIndex,
+      required this.paragraphIndex,
+      this.displayOffset = 0});
 }

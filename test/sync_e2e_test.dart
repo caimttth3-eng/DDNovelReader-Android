@@ -13,14 +13,16 @@ import 'package:duoduo_langdu/services/sync_engine.dart';
 import 'package:duoduo_langdu/services/webdav_client.dart';
 
 /// 端到端：真跑 HTTP 打到本机 mock WebDAV（tools/mock_webdav.py）。
-/// 需要 mock server 先监听 127.0.0.1:8080/dav，否则整组跳过。
-const _server = 'http://127.0.0.1:8080/dav';
+/// 默认端口 8090：8080 常被桌面版/其它服务占用，误连时会 401。
+/// 需要 mock server 监听 127.0.0.1:8090/dav，否则整组跳过。
+const _port = int.fromEnvironment('DD_MOCK_DAV_PORT', defaultValue: 8090);
+final _server = 'http://127.0.0.1:$_port/dav';
 const _user = 'demo';
 const _pass = 'demo';
 
 Future<bool> _serverUp() async {
   try {
-    final s = await Socket.connect('127.0.0.1', 8080,
+    final s = await Socket.connect('127.0.0.1', _port,
         timeout: const Duration(seconds: 1));
     s.destroy();
     return true;

@@ -1,4 +1,4 @@
-/// 一段文本的双层表示：
+﻿/// 一段文本的双层表示：
 ///  [display] 原始文本（保留标点、空白、颜文字），用于屏幕显示；
 ///  [tts] 清洗后的纯净文本（去除连续标点/空白/emoji/颜文字），用于 TTS 朗读。
 ///
@@ -125,10 +125,11 @@ class TextCleaner {
   }
 
   String _removeEmojiKaomoji(String s) {
+    String mask(Match m) => List.filled(m.end - m.start, '\u0000').join();
     return s
-        .replaceAll(_emojiRe, '')
-        .replaceAll(_controlRe, '')
-        .replaceAll(_kaomojiRe, '');
+        .replaceAllMapped(_emojiRe, mask)
+        .replaceAllMapped(_controlRe, mask)
+        .replaceAllMapped(_kaomojiRe, mask);
   }
 
   bool _isControl(int cp) {

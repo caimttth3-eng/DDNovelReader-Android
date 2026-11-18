@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
+import '../models/speech_word.dart';
 import 'tts_text.dart';
 
 /// 恢复的进度记录（total 与当前任务不符即作废；from* 记录缓存起点）
@@ -37,7 +38,12 @@ class TtsCacheStore {
   final String voice;
   final double rate;
 
-  TtsCacheStore(this.bookId, this.voice, this.rate, {String contentKey = ''})
+  /// 重新格式化后的正文指纹（PR2 引入）：非空时在语速目录下再分一层，
+  /// 避免改排版/过滤后旧音频错配；与 contentKey 并存（跨端目录仍按 contentKey）。
+  final String? textFingerprint;
+
+  TtsCacheStore(this.bookId, this.voice, this.rate,
+      {String contentKey = '', this.textFingerprint})
       : cacheKey = (contentKey.isNotEmpty ? contentKey : bookId);
 
   /// 语速目录名 = 合成百分比整数（与 PC rate_dir_key 同值）
@@ -70,6 +76,7 @@ class TtsCacheStore {
       _safe(cacheKey),
       _safe(voice),
       rateKey,
+      if (textFingerprint != null) 'text-${_safe(textFingerprint!)}',
     ].join(Platform.pathSeparator));
     if (!await d.exists()) await d.create(recursive: true);
     return d;
@@ -194,15 +201,37 @@ class TtsCacheStore {
   }
 
   /// 原子写入：先写 `.tmp` 再 rename 发布
-  Future<void> write(int ci, int off, Uint8List audio) async {
+  Future<void> write(int ci, int off, Uint8List audio,
+      {List<SpeechWord>? words}) async {
     try {
       final d = await dir();
       final finalPath = '${d.path}${Platform.pathSeparator}${fileName(ci, off)}';
       final tmpPath = '$finalPath.tmp';
       final tmp = File(tmpPath);
+      if (words != null) {
+        final metadata = File('$finalPath.words.json.tmp');
+        await metadata.writeAsString(
+            jsonEncode(words.map((w) => w.toJson()).toList()),
+            flush: true);
+        await metadata.rename('$finalPath.words.json');
+      }
       await tmp.writeAsBytes(audio, flush: true);
       await tmp.rename(finalPath);
     } catch (_) {}
+  }
+
+  /// 读取某段音频的字级时间轴（PR2 引入，系统/在线词级高亮共用）
+  Future<List<SpeechWord>> readWords(int ci, int off) async {
+    try {
+      final file = File('${await _pathOf(ci, off)}.words.json');
+      if (!await file.exists()) return [];
+      final raw = jsonDecode(await file.readAsString()) as List<dynamic>;
+      return raw
+          .map((w) => SpeechWord.fromJson(w as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   // ---------- 进度持久化 ----------
@@ -450,6 +479,19 @@ List<int> chapterSentenceOffsets(Chapter ch) {
       offs.add(acc + cpMap[ds]);
     }
     acc += codePointLength(p.display) + 1;
+  }
+  return offs;
+}
+
+/// 章节内所有句子的 tts 累计字符偏移（与阅读页/缓存任务同一坐标）。
+List<int> chapterTtsSentenceOffsets(Chapter ch) {
+  final offs = <int>[];
+  var acc = 0;
+  for (final p in ch.paragraphs) {
+    for (final s in p.sentences) {
+      offs.add(acc);
+      acc += s.tts.length;
+    }
   }
   return offs;
 }

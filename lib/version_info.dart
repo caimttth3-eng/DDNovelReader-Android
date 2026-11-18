@@ -1,4 +1,4 @@
-library;
+﻿library;
 
 // 版本信息与更新记录（安卓版）。
 // 版本号与 pubspec.yaml 的 `version` 保持一致（发布一条龙第 2 步）。
@@ -6,12 +6,16 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.2.5';
-  static const String build = '10';
+  static const String version = '1.3.0';
+  static const String build = '11';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.0：阅读体验大更新。完整行分页与翻页动画、自动目录、字号上限 64、'
+        '两端对齐、行首标点、深浅主题、刘海适配；朗读支持字词级高亮、'
+        '连续拖动切句、播放设置记忆；通知栏/锁屏可上一句、暂停、下一句、停止；'
+        '保留数据同步与语音缓存跨端共用。',
     'v1.2.5：新增「数据同步」。在书架菜单里填入 WebDAV 网盘地址'
         '（如坚果云），书架、阅读进度和书签会自动同步，换设备接着读；'
         '删除的书会同步移除。手机版和电脑版可共用同一份数据。',

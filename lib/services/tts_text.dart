@@ -1,4 +1,4 @@
-/// TTS 朗读文本预处理 + 切句（逐字节对齐 PC 端 novelreader/textproc.py 与
+﻿/// TTS 朗读文本预处理 + 切句（逐字节对齐 PC 端 novelreader/textproc.py 与
 /// tts_engine.split_sentences）。
 ///
 /// 为什么必须逐字节对齐：音频缓存文件名是「章号 + 章内原文偏移」，且 mp3 与
@@ -252,3 +252,4 @@ int codePointLength(String s) {
   }
   return max(cp, 0);
 }
+

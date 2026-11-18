@@ -1,4 +1,4 @@
-/// 支持的书籍格式
+﻿/// 支持的书籍格式
 enum BookFormat { txt, epub, pdf, docx }
 
 extension BookFormatX on BookFormat {
@@ -34,6 +34,9 @@ class Sentence {
   final String display;
   final String tts;
 
+  /// 只影响朗读节奏（句末追加静音），不改动音频内容
+  final int pauseAfterMilliseconds;
+
   /// 在所属段落的 display 文本中的起止偏移（用于高亮定位）
   final int displayStart;
   final int displayEnd;
@@ -43,6 +46,7 @@ class Sentence {
     this.tts, {
     this.displayStart = 0,
     this.displayEnd = 0,
+    this.pauseAfterMilliseconds = 0,
   });
 }
 

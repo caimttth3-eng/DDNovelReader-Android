@@ -21,6 +21,15 @@ class BookProgress {
   /// 最近一次从 PC 结构收到的 char_offset（只用于回写，不参与定位）
   int? pcCharOffset;
 
+  // ---------- 排版/视口定位（PR2 引入，用于完整行分页的精确续读） ----------
+  int? chapterAnchor;
+  int? viewportItem;
+  double viewportAlignment;
+  String layoutSignature;
+  bool atChapterTitle;
+  int? flowChapter;
+  int? flowAnchor;
+
   BookProgress({
     required this.bookId,
     this.chapterIndex = 0,
@@ -30,6 +39,13 @@ class BookProgress {
     double? updatedAt,
     this.charOffsetInChapter,
     this.pcCharOffset,
+    this.chapterAnchor,
+    this.viewportItem,
+    this.viewportAlignment = 0,
+    this.layoutSignature = '',
+    this.atChapterTitle = false,
+    this.flowChapter,
+    this.flowAnchor,
   }) : updatedAt = updatedAt ?? DateTime.now().millisecondsSinceEpoch / 1000.0;
 
   Map<String, dynamic> toJson() => {
@@ -42,6 +58,13 @@ class BookProgress {
         if (charOffsetInChapter != null)
           'charOffsetInChapter': charOffsetInChapter,
         if (pcCharOffset != null) 'pcCharOffset': pcCharOffset,
+        'chapterAnchor': chapterAnchor,
+        'viewportItem': viewportItem,
+        'viewportAlignment': viewportAlignment,
+        'layoutSignature': layoutSignature,
+        'atChapterTitle': atChapterTitle,
+        'flowChapter': flowChapter,
+        'flowAnchor': flowAnchor,
       };
 
   factory BookProgress.fromJson(Map<String, dynamic> json) => BookProgress(
@@ -53,6 +76,13 @@ class BookProgress {
         updatedAt: (json['updatedAt'] as num?)?.toDouble(),
         charOffsetInChapter: (json['charOffsetInChapter'] as num?)?.toInt(),
         pcCharOffset: (json['pcCharOffset'] as num?)?.toInt(),
+        chapterAnchor: json['chapterAnchor'] as int?,
+        viewportItem: json['viewportItem'] as int?,
+        viewportAlignment: (json['viewportAlignment'] as num?)?.toDouble() ?? 0,
+        layoutSignature: json['layoutSignature'] as String? ?? '',
+        atChapterTitle: json['atChapterTitle'] as bool? ?? false,
+        flowChapter: json['flowChapter'] as int?,
+        flowAnchor: json['flowAnchor'] as int?,
       );
 
   /// PC 兼容结构：`{chapter_idx, char_offset, percent}`。
@@ -89,6 +119,13 @@ class BookProgress {
     double? percent,
     double? updatedAt,
     int? charOffsetInChapter,
+    int? chapterAnchor,
+    int? viewportItem,
+    double? viewportAlignment,
+    String? layoutSignature,
+    bool? atChapterTitle,
+    int? flowChapter,
+    int? flowAnchor,
   }) =>
       BookProgress(
         bookId: bookId,
@@ -99,6 +136,13 @@ class BookProgress {
         updatedAt: updatedAt ?? this.updatedAt,
         charOffsetInChapter: charOffsetInChapter ?? this.charOffsetInChapter,
         pcCharOffset: pcCharOffset,
+        chapterAnchor: chapterAnchor ?? this.chapterAnchor,
+        viewportItem: viewportItem ?? this.viewportItem,
+        viewportAlignment: viewportAlignment ?? this.viewportAlignment,
+        layoutSignature: layoutSignature ?? this.layoutSignature,
+        atChapterTitle: atChapterTitle ?? this.atChapterTitle,
+        flowChapter: flowChapter ?? this.flowChapter,
+        flowAnchor: flowAnchor ?? this.flowAnchor,
       );
 }
 
