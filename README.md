@@ -1,128 +1,193 @@
 # 多多朗读 DDNovelReader
 
-安卓本地小说阅读器，支持 Edge TTS 在线朗读、智能分章、句子级高亮跟随。
+安卓 + iOS 本地小说阅读器，支持 Edge TTS 在线朗读、智能分章、句子级高亮跟随。
 
 - 中文名：多多朗读
 - 英文名：DDNovelReader
-- 包名：com.ddnovelreader
+- 包名：`com.ddnovelreader`
 
-## 多平台
+---
 
-- **Android**：本仓库 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载 APK
+## 🎉 iOS 版正式上线
+
+**v1.3.0 起支持 iPhone / iPad**，与安卓共用同一套阅读、朗读与同步能力。
+
+> iOS 版以**未签名 IPA** 形式发布（不走 App Store），需要用签名工具自签安装。
+> 这是苹果的限制，不是安装包损坏；按下面的教程操作即可。
+
+### 下载
+
+前往 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载：
+
+- iOS：`DDNovelReader_v1.3.0_unsigned.ipa`（约 9MB）
+- Android：三个架构 APK（见下方「下载」）
+
+### 系统要求
+
+- iOS / iPadOS **15.0 及以上**
+- 首次安装需要一台 Windows 或 macOS 电脑（用于签名）
+- 免费 Apple ID 即可，**不需要** 99 美元开发者账号
+
+### 签名工具怎么选
+
+| 工具 | 电脑端 | 费用 | 有效期 | 说明 |
+|---|---|---|---|---|
+| **Sideloadly**（推荐） | Windows / macOS | 免费 Apple ID | **7 天** | 最简单，拖入 IPA 即可；到期重新签一次 |
+| **AltStore + AltServer** | Windows / macOS | 免费 Apple ID | 7 天，可自动续签 | 需电脑和手机在同一 Wi-Fi，AltServer 常驻 |
+| **TrollStore** | 不需要电脑 | 免费 | 永久 | **仅支持 iOS ≤ 17.0**；iOS 18.7.7 等新系统不支持 |
+| **Apple Developer** | Windows / macOS | 688 元/年 | 1 年 | 适合长期用、多设备；也可走 TestFlight |
+
+> 你的 iPhone 是 iOS 18.x 的话，TrollStore 用不了，选 **Sideloadly** 或 **AltStore**。
+
+### 三步快速安装（Sideloadly）
+
+1. 电脑安装 **iTunes**（微软商店版）或 **Apple Devices** + [Sideloadly](https://sideloadly.io)
+2. 下载上面的 `.ipa`，iPhone 连线并点「信任此电脑」
+3. Sideloadly 里拖入 IPA → 填 Apple ID → Start → 输入密码
+
+装完后在 iPhone 上：
+
+1. 设置 → 隐私与安全性 → **开发者模式** → 打开 → 重启手机
+2. 设置 → 通用 → VPN 与设备管理 → 信任你的 Apple ID 证书
+3. 桌面打开「多多朗读」
+
+**7 天后** App 会打不开，用同样步骤重新签一次即可（覆盖安装，书架和进度保留）。
+
+👉 **完整图文教程（含 AltStore 自动续签、常见问题）**：[docs/ios-install.md](docs/ios-install.md)
+
+### iOS 版说明
+
+- 朗读走 Edge TTS 在线合成，首次播放需联网
+- 后台播放、锁屏/通知栏控制（上一句 / 暂停 / 下一句 / 停止）可用
+- **音量键逐句跳转**：iOS 不允许监听音量键，iOS 版不支持（可用耳机/锁屏控制）
+- **系统 TTS 兜底**：iOS 版未接入，在线音源正常
+- 应用内「数据同步」（WebDAV）与安卓、电脑版互通
+- 卸载 App 会清空书架和进度；**重签请用覆盖安装，不要先卸载**
+
+---
+
+## 下载
+
+- **Android**：本仓库 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载 APK（三架构）
+- **iOS**：同页下载 `DDNovelReader_v1.3.0_unsigned.ipa`，按上面的教程自签
 - **Windows / macOS / Linux**：前往 [桌面版发布页](https://github.com/caimttth3-eng/DDNovelReader) 下载（Windows 绿色免安装 exe / macOS DMG / Linux 单文件）
 
 > 桌面版功能更全：本地离线语音 + Edge 神经语音、整本语音缓存、书签划线笔记、全文搜索、多主题、定时播放。
 
 ## 功能
 
-### 书架
-- 4 列木纹卡片展示，底部腰封显示阅读进度
-- 首位固定"添加书籍"占位卡，点击调用系统文件管理器选书
-- 支持 TXT / EPUB 格式导入
-- 无限下滑滚动
+### 阅读（v1.3.0 重做）
+- 完整行分页：翻页不裁字，末行与下一页衔接
+- 翻页方式：上下滚动 / 点击翻页 / 滑动翻页；可开翻页动画
+- 浮动上下栏，不挤占正文；顶部显示章节信息
+- 自动目录索引，目录跳转后首行不裁切
+- 字号最大 64、两端对齐、行首标点处理
+- 深浅主题跟随系统，支持手动切换；刘海/安全区适配
+- 逐书保存进度；左右侧点击、滑动、上下滚动可选
 
-### 阅读
-- 全屏三区点击：上区上翻页、中区显隐 UI、下区下翻页
-- 顶部：返回 / 播放 / 设置（亮度、字体大小、行距、查找）
-- 左侧悬浮球：章节目录（打开时定位到当前章节）
-- 底部进度条：滑动跳转 + 百分比显示
-- 长按句子：添加书签 / 划线（蓝黄绿三色）/ 复制，均有操作提示
-- 书签/划线列表：动画删除、重启不丢失
-- 自动保存阅读进度，意外退出不丢失
+### 朗读
+- Edge TTS 在线合成，句子级高亮 + 逐字高亮跟随
+- 连续拖动切句；语速 0.5x–3.0x（0.02 步进）
+- 播放设置长期保存（预取、逐字高亮、亮屏时长、停顿等）
+- 预取并发 + 换章预取，减少「正在加载语音」
+- 定时播放（15 / 30 / 60 / 90 分钟）
+- 20 个多语言音色（简/繁/英/日/韩）
 
-### 朗读模式
-- 点击播放按钮进入：全屏无 UI，TTS 开始朗读，高亮逐句跟随
-- 点击屏幕暂停，底部弹出控制面板：
-  - 语速调节（0.5x – 2.0x，滑块 + 加减按钮）
-  - 定时播放（15 / 30 / 60 / 90 分钟）
-  - 切换音源（简/繁/英/日/韩 20 个音色，当前界面语言音色置顶）
-  - 退出朗读（电源按钮，恢复正常阅读 UI）
-- 上下滑动：字符级快进/快退（每像素 2 字，句子级精度）
-- 音量键：逐句跳转（朗读模式下生效）
-- 耳机播放键：控制播放/暂停（MediaSession）
-
-### 自选字体
-- 设置面板「字体更换」：教程提示、导入入口、已导入字体列表（可删除）、恢复默认
-- 导入 .ttf/.otf 字体文件即生效、重启自动加载；不内置字体，包体无增加
+### 通知栏 / 锁屏
+- 上一句、暂停/继续、下一句、停止
+- 可选显示原文
 
 ### 数据同步
-- 书架菜单「数据同步」：填入 WebDAV 网盘地址（如坚果云）、账号、密码，可测试连接、立即同步
-- 启动时自动同步 + 前台每 10 分钟同步一次；书架、阅读进度、书签双向同步，删除的书同步移除
-- 与电脑版共用同一份远端数据，远端独有的书可自动下载源文件并入书架
+- 书架菜单「数据同步」：WebDAV 网盘（如坚果云），测试连接 / 立即同步
+- 启动自动同步 + 前台每 10 分钟；书架、进度、书签双向同步，删除同步移除
+- 与电脑版、iOS/安卓共用同一份远端数据
+- 阅读页顶栏支持「一键同步」
+
+### 书架
+- 4 列木纹卡片，底部腰封显示进度
+- 首位「添加书籍」占位卡，调用系统文件管理器
+- 支持 TXT / EPUB，最近打开的书排最前
+- 无限下滑滚动
+
+### 自选字体
+- 设置面板「字体更换」：导入 .ttf/.otf，立即生效、重启自动加载；不内置字体
 
 ### 文本处理
-- 双文本底层：显示保留原文标点/空白，TTS 朗读使用去除连续标点、空白、emoji 的纯净文本
-- 智能分章：识别"第 X 章 / 第 X 卷 / Chapter N / 序章 / 楔子 / 番外"等标题格式，适配百万字级小说
-- 句子级切分，高亮精确到句子
+- 双文本底层：显示保留原文，TTS 使用纯净文本
+- TXT 编码自动识别（UTF-8 / GBK / GB18030 / Big5）
+- 智能分章：第 X 章/卷、Chapter N、序章、楔子、番外等
+
+---
 
 ## 技术架构
 
 ```
 lib/
-├── main.dart                  # 入口，全局 AudioService 初始化
+├── main.dart                  # 入口，AudioService / 音频会话初始化
 ├── models/
-│   ├── book.dart              # Book / Chapter / Paragraph / Sentence 数据模型
-│   └── progress.dart          # 阅读进度模型
+│   ├── book.dart              # Book / Chapter / Paragraph / Sentence
+│   ├── progress.dart          # 进度与书架元信息
+│   └── annotation.dart        # 书签 / 划线
 ├── screens/
-│   ├── shelf_screen.dart      # 书架页
-│   ├── sync_screen.dart       # 数据同步设置页（WebDAV）
-│   └── reader_screen.dart     # 阅读页（含朗读模式、滑动 seek、高亮跟随）
+│   ├── shelf_screen.dart      # 书架
+│   ├── book_opening_screen.dart # 打开书籍（先出加载页再解析）
+│   ├── reader_screen.dart     # 阅读/朗读页
+│   └── sync_screen.dart       # WebDAV 同步设置
 ├── services/
-│   ├── app_storage.dart       # SharedPreferences 存储（设置 + 进度）
-│   ├── book_parser.dart       # TXT / EPUB 解析
-│   ├── chapterizer.dart       # 智能分章引擎（三重检测）
-│   ├── edge_tts.dart          # 微软 Edge TTS 协议实现（WebSocket + SSML）
-│   ├── sync_engine.dart       # WebDAV 同步引擎（与电脑版同协议）
-│   ├── webdav_client.dart     # WebDAV 协议客户端
-│   ├── tts_reader.dart        # TtsReader：逐句朗读、预取、暂停/恢复、跳转
-│   ├── tts_audio_handler.dart # audio_service MediaSession（耳机按键）
-│   └── text_cleaner.dart      # 双文本清洗（显示原文 / TTS 纯净文本）
+│   ├── app_storage.dart       # 本地存储（设置/进度/书架/墓碑）
+│   ├── book_parser.dart       # TXT / EPUB / PDF / DOCX 解析
+│   ├── chapterizer.dart       # 智能分章
+│   ├── edge_tts.dart          # Edge TTS 协议（Sec-MS-GEC v2）
+│   ├── tts_reader.dart        # 逐句朗读、预取、切句
+│   ├── tts_cache_store.dart   # 跨端语音缓存
+│   ├── sync_engine.dart       # WebDAV 同步引擎
+│   ├── webdav_client.dart     # WebDAV 客户端
+│   ├── reading_text.dart      # 排版/分页文本
+│   └── tts_audio_handler.dart # MediaSession
 └── widgets/
-    └── book_card.dart         # 木纹书籍卡片 + 添加书籍占位卡
+    └── book_card.dart         # 木纹书籍卡片
 ```
 
 ### 关键依赖
-- `scrollable_positioned_list`：按 index 精确定位，句子级高亮跟随滚动
-- `audio_service`：MediaSession，耳机播放键控制
-- `audioplayers`：MP3 音频播放
-- `crypto`：Edge TTS Sec-MS-GEC 签名
-- `file_picker`：系统文件管理器选书
+- `scrollable_positioned_list`、`audio_service`、`audioplayers`、`audio_session`
+- `crypto`（Edge TTS 签名）、`file_picker`、`path_provider`
 
 ### Edge TTS 协议
 - 端点：`https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1`
-- 20 个多语言音色：简体 7（晓晓、云希、云扬、晓伊、云健、小北、小妮）、繁体 3（曉臻、曉雨、雲哲）、英语 6（Aria、Jenny、Guy、Ana、Sonia、Ryan）、日语 2（七海、慶太）、韩语 2（鮮熙、仁俊）
-- 输出格式：audio-24khz-48kbitrate-mono-mp3
+- 20 个多语言音色（简 7 / 繁 3 / 英 6 / 日 2 / 韩 2）
+- 输出：audio-24khz-48kbitrate-mono-mp3
+
+---
 
 ## 构建
 
+### Android
+
 ```bash
 flutter pub get
-flutter build apk --release
+flutter build apk --release --target-platform android-arm64   # 或 android-arm / android-x64
 ```
 
 产物：`build/app/outputs/flutter-apk/app-release.apk`
 
-### 环境要求
-- Flutter 3.x stable
-- Android SDK compileSdk 34+
-- targetSdk 33（audio_service 兼容性）
-- minSdk 21
+环境：Flutter 3.x stable、Android SDK、minSdk 21、targetSdk 35。
 
-## 致谢
+### iOS（未签名 IPA）
 
-v1.3.0 的部分阅读与朗读改进移植自社区贡献：
+```bash
+flutter build ios --release --no-codesign
+mkdir -p Payload && cp -R build/ios/iphoneos/Runner.app Payload/
+zip -qry DuoDuoLangDu-unsigned.ipa Payload
+```
 
-- [NayGnehz/DDNovelReader-Android](https://github.com/NayGnehz/DDNovelReader-Android)
-- 对应 [PR #2](https://github.com/caimttth3-eng/DDNovelReader-Android/pull/2)（参考 commit `27b6a1e`）
-- 采纳：完整行分页与排版、目录索引、字词级高亮、连续拖动切句、通知栏/锁屏媒体控制（已按本项目的缓存与同步架构修改）
-- 未采纳：系统 TTS 自动兜底、书架布局、解析/分章重写
+没有 Mac 时用仓库的 GitHub Actions：`.github/workflows/ios-ipa.yml`（macOS runner）。
 
-详细来源、修改范围与权利说明见 [NOTICE.md](NOTICE.md)。
+---
 
-## 版本
+## 版本历史
 
 ### v1.3.0（2026-11-18）
-阅读和朗读大更新。翻页更顺：支持上下滚动、整页不裁字、可开翻页动画；新增自动目录、字号最大 64、两端对齐、深浅主题、刘海适配；朗读支持逐字高亮、拖动切句、设置记忆；通知栏和锁屏可上一句、暂停、下一句、停止；数据同步与语音缓存继续保留。
+阅读和朗读大更新，**iOS 版首次上线**。翻页更顺：支持上下滚动、整页不裁字、可开翻页动画；新增自动目录、字号最大 64、两端对齐、深浅主题、刘海适配；朗读支持逐字高亮、拖动切句、设置记忆；通知栏和锁屏可上一句、暂停、下一句、停止；数据同步与语音缓存继续保留。
 
 ### v1.2.5（2026-11-18）
 新增「数据同步」。在书架菜单里填入 WebDAV 网盘地址（如坚果云），书架、阅读进度和书签会自动同步，换设备接着读；删除的书会同步移除。手机版和电脑版可共用同一份数据。
@@ -166,3 +231,21 @@ v1.3.0 的部分阅读与朗读改进移植自社区贡献：
 - 滑动 seek：字符级定位，句子级精度
 - 耳机播放键联动 + 音量键逐句
 - 智能分章 + 双文本底层 + 进度自动保存
+
+---
+
+## 致谢
+
+v1.3.0 的部分阅读与朗读改进移植自社区贡献：
+
+- [NayGnehz/DDNovelReader-Android](https://github.com/NayGnehz/DDNovelReader-Android)
+- 对应 [PR #2](https://github.com/caimttth3-eng/DDNovelReader-Android/pull/2)（参考 commit `27b6a1e`）
+- 采纳：完整行分页与排版、目录索引、字词级高亮、连续拖动切句、通知栏/锁屏媒体控制（已按本项目的缓存与同步架构修改）
+- 未采纳：系统 TTS 自动兜底、书架布局、解析/分章重写
+
+详细来源、修改范围与权利说明见 [NOTICE.md](NOTICE.md)。
+
+## 免责声明
+
+本 App 仅提供本地文本阅读与在线语音合成能力，不提供、不内置任何书籍内容。
+请使用你有权阅读的文本文件。朗读语音由微软 Edge TTS 在线合成。
