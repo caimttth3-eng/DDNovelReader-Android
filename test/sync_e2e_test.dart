@@ -104,7 +104,7 @@ void main() {
     expect(rec['total_chars'], 1234);
     expect(rec['progress']['chapter_idx'], 3);
     expect(rec['progress']['char_offset'], 4321);
-    expect(rec['progress']['percent'], 0.75);
+    expect(rec['progress']['percent'], 75.0); // 远端 percent 是 0~100 口径
   });
 
   test('pull：本地进度清空后能拉回同一进度', () async {

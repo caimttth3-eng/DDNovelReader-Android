@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -36,6 +37,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
   List<BookMeta> _books = [];
   Map<String, BookProgress> _progress = {};
   bool _loading = true;
+  Timer? _syncTimer;
+  bool _syncing = false;
 
   @override
   void initState() {
@@ -50,7 +53,22 @@ class _ShelfScreenState extends State<ShelfScreen> {
     await _loadAll();
     await _backfillKeys();
     await _autoSync();
+    _startPeriodicSync();
     await _restoreLastBook();
+  }
+
+  /// 与 PC 端对齐：启动同步一次 + 前台每 10 分钟一次，让删除/进度不必等手动点同步。
+  void _startPeriodicSync() {
+    _syncTimer?.cancel();
+    _syncTimer = Timer.periodic(const Duration(minutes: 10), (_) {
+      _autoSync(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncTimer?.cancel();
+    super.dispose();
   }
 
   static final RegExp _ck2Pattern = RegExp(r'^[0-9a-f]{16}$');
@@ -104,19 +122,33 @@ class _ShelfScreenState extends State<ShelfScreen> {
     setState(() => _books = list);
   }
 
-  Future<void> _autoSync() async {
+  Future<void> _autoSync({bool silent = false}) async {
+    if (_syncing) return;
     final eng = SyncEngine(storage: _storage, annotations: _annotations);
     final s = await eng.settings();
-    if (!((s[SyncEngine.cfgAuto] as bool?) ?? true)) return;
+    final autoOn = (s[SyncEngine.cfgAuto] as bool?) ?? true;
+    // 定时同步只在开启自动同步时跑；删除/手动这类明确操作即使关了自动同步也要推
+    if (silent && !autoOn) return;
     if (!eng.configured(s)) return;
-    final report = await eng.sync();
+    _syncing = true;
+    SyncReport report;
+    try {
+      report = await eng.sync();
+    } finally {
+      _syncing = false;
+    }
     if (!mounted || !report.ok) return;
-    if (report.pulled > 0 || report.imported > 0) {
+    if (report.pulled > 0 || report.imported > 0 || report.removed > 0) {
       await _loadAll();
     }
-    if (report.pulled > 0 || report.pushed > 0 || report.imported > 0) {
+    if (!silent &&
+        (report.pulled > 0 ||
+            report.pushed > 0 ||
+            report.imported > 0 ||
+            report.removed > 0 ||
+            report.deleted > 0)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(report.summary), duration: const Duration(seconds: 2)),
+        SnackBar(content: Text(report.summary), duration: const Duration(seconds: 3)),
       );
     }
   }
@@ -672,6 +704,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
     if (ok == true) {
       await _storage.removeBook(meta.id);
       await _loadAll();
+      // 删完立刻把墓碑推上去（不等定时同步），否则另一端会一直留着这本书
+      await _autoSync(silent: false);
     }
   }
 }

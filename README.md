@@ -1,4 +1,4 @@
-﻿# 多多朗读 DDNovelReader
+# 多多朗读 DDNovelReader
 
 安卓本地小说阅读器，支持 Edge TTS 在线朗读、智能分章、句子级高亮跟随。
 
@@ -45,6 +45,11 @@
 - 设置面板「字体更换」：教程提示、导入入口、已导入字体列表（可删除）、恢复默认
 - 导入 .ttf/.otf 字体文件即生效、重启自动加载；不内置字体，包体无增加
 
+### 数据同步
+- 书架菜单「数据同步」：填入 WebDAV 网盘地址（如坚果云）、账号、密码，可测试连接、立即同步
+- 启动时自动同步 + 前台每 10 分钟同步一次；书架、阅读进度、书签双向同步，删除的书同步移除
+- 与电脑版共用同一份远端数据，远端独有的书可自动下载源文件并入书架
+
 ### 文本处理
 - 双文本底层：显示保留原文标点/空白，TTS 朗读使用去除连续标点、空白、emoji 的纯净文本
 - 智能分章：识别"第 X 章 / 第 X 卷 / Chapter N / 序章 / 楔子 / 番外"等标题格式，适配百万字级小说
@@ -60,12 +65,15 @@ lib/
 │   └── progress.dart          # 阅读进度模型
 ├── screens/
 │   ├── shelf_screen.dart      # 书架页
+│   ├── sync_screen.dart       # 数据同步设置页（WebDAV）
 │   └── reader_screen.dart     # 阅读页（含朗读模式、滑动 seek、高亮跟随）
 ├── services/
 │   ├── app_storage.dart       # SharedPreferences 存储（设置 + 进度）
 │   ├── book_parser.dart       # TXT / EPUB 解析
 │   ├── chapterizer.dart       # 智能分章引擎（三重检测）
 │   ├── edge_tts.dart          # 微软 Edge TTS 协议实现（WebSocket + SSML）
+│   ├── sync_engine.dart       # WebDAV 同步引擎（与电脑版同协议）
+│   ├── webdav_client.dart     # WebDAV 协议客户端
 │   ├── tts_reader.dart        # TtsReader：逐句朗读、预取、暂停/恢复、跳转
 │   ├── tts_audio_handler.dart # audio_service MediaSession（耳机按键）
 │   └── text_cleaner.dart      # 双文本清洗（显示原文 / TTS 纯净文本）
@@ -101,6 +109,9 @@ flutter build apk --release
 - minSdk 21
 
 ## 版本
+
+### v1.2.5（2026-11-18）
+新增「数据同步」。在书架菜单里填入 WebDAV 网盘地址（如坚果云），书架、阅读进度和书签会自动同步，换设备接着读；删除的书会同步移除。手机版和电脑版可共用同一份数据。
 
 ### v1.2.4（2026-11-18）
 语音缓存与桌面版统一。

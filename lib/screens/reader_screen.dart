@@ -168,6 +168,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Timer? _saveDebounce;
 
+  /// 本阅读页手里这个位置的进度版本时间（= BookProgress.updatedAt）。
+  /// 同步把别的设备的更新进度写进存储后，这里还停在旧值，
+  /// 若不比对就直接落盘，会把刚拉下来的新进度用旧位置盖回去。
+  double _ownProgressAt = 0;
+
   double get _fontSize => _settings.fontSize;
   double get _lineHeight => _settings.lineHeight;
   String get _fontFamily => _settings.fontFamily;
@@ -339,6 +344,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         BookProgress(bookId: widget.book.id);
     _chapter = p.chapterIndex;
     _para = p.paragraphIndex;
+    _ownProgressAt = p.updatedAt;
     if (_chapter >= widget.book.chapters.length) _chapter = 0;
     if (_para >= widget.book.chapters[_chapter].paragraphs.length) _para = 0;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -346,17 +352,44 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
   }
 
+  /// 采纳一条外部（同步）写进来的进度：只移动阅读位置并重绘，不再落盘。
+  void _adoptProgress(BookProgress p) {
+    var ch = p.chapterIndex;
+    var pa = p.paragraphIndex;
+    if (ch < 0 || ch >= widget.book.chapters.length) ch = 0;
+    final paras = widget.book.chapters[ch].paragraphs.length;
+    if (pa < 0 || pa >= paras) pa = 0;
+    final changed = ch != _chapter || pa != _para;
+    _chapter = ch;
+    _para = pa;
+    _ownProgressAt = p.updatedAt;
+    if (!changed) return;
+    if (mounted) setState(() {});
+    _jumpToItem(_itemIndexOf(_chapter, _para), animate: false);
+    _showToast(T('progressSynced'));
+  }
+
   Future<void> _saveProgress() async {
+    // 同步守卫：存储里的进度比本页手里的位置更新（别的设备/同步写进来的），
+    // 说明本次要保存的是过期位置——先采纳存储里的，绝不把它盖回去。
+    final stored = await widget.storage.loadProgress(widget.book.id);
+    final storedAt = stored?.updatedAt ?? 0.0;
+    if (stored != null && storedAt > _ownProgressAt + 0.5) {
+      _adoptProgress(stored);
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch / 1000.0;
     final p = BookProgress(
       bookId: widget.book.id,
       chapterIndex: _chapter,
       paragraphIndex: _para,
       offsetInParagraph: 0,
       percent: widget.book.progressRatio(_chapter, _para),
-      updatedAt: DateTime.now().millisecondsSinceEpoch / 1000.0,
+      updatedAt: now,
       // 章内字符偏移（PC 的 char_offset 口径）：WebDAV 推给 PC 时按此定位
       charOffsetInChapter: widget.book.charOffsetOf(_chapter, _para, 0),
     );
+    _ownProgressAt = now;
     await widget.onProgressChanged?.call(p);
   }
 

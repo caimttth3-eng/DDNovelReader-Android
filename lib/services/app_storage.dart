@@ -47,14 +47,86 @@ class AppStorage {
     if (books.any((b) => b.filePath == meta.filePath)) return;
     books.add(meta);
     await saveBooks(books);
+    // 重新导入同一本书 = 撤销它的删除墓碑，否则同步会把它再删一次
+    if (meta.contentKey.trim().isNotEmpty) {
+      await clearDeletion(meta.contentKey.trim());
+    }
   }
 
-  Future<void> removeBook(String bookId) async {
+  /// 从书架删除一本书，并留下删除墓碑（WebDAV 同步用它把删除传到其它设备）。
+  /// [deletedAt] 不传取当前时间；应用远端删除时必须传远端时间，
+  /// 否则本机时间会把对端的删除事件"变新"，导致两端反复拉锯。
+  ///
+  /// 墓碑 key 必须与"当初上传时用的 key"一致：
+  /// contentKey 有值时用 contentKey；没有值时（老书还没回填 ck2，上传时用 book id 兜底）
+  /// 就必须用 book id，否则远端那条记录永远收不到删除。
+  /// 同时把 book id 记进墓碑条目的 id_key，同步时顺手把远端遗留的 id_key 孤儿记录也清掉。
+  Future<void> removeBook(String bookId, {double? deletedAt}) async {
     final books = await loadBooks();
+    String key = '';
+    String title = '';
+    for (final b in books) {
+      if (b.id == bookId) {
+        key = b.contentKey.trim();
+        title = b.title;
+        break;
+      }
+    }
     books.removeWhere((b) => b.id == bookId);
     await saveBooks(books);
     final sp = await _sp;
     await sp.remove(_progressPrefix + bookId);
+    if (key.isNotEmpty) {
+      await markDeleted(key, title, deletedAt: deletedAt, idKey: bookId);
+    } else {
+      await markDeleted(bookId, title, deletedAt: deletedAt);
+    }
+  }
+
+  // ---------- 删除墓碑 ----------
+  static const _deletionsKey = 'duoduo.deletions.v1';
+
+  /// {content_key: {"deleted_at": 秒, "title": 书名, "id_key": 当初兜底上传用的 book id}}
+  Future<Map<String, dynamic>> loadDeletions() async {
+    final sp = await _sp;
+    final raw = sp.getString(_deletionsKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final m = jsonDecode(raw);
+      if (m is Map) return m.map((k, v) => MapEntry(k.toString(), v));
+    } catch (_) {}
+    return {};
+  }
+
+  Future<void> saveDeletions(Map<String, dynamic> deletions) async {
+    final sp = await _sp;
+    await sp.setString(_deletionsKey, jsonEncode(deletions));
+  }
+
+  Future<void> markDeleted(String contentKey, String title,
+      {double? deletedAt, String? idKey}) async {
+    final key = contentKey.trim();
+    if (key.isEmpty) return;
+    final deletions = await loadDeletions();
+    final t = deletedAt ?? DateTime.now().millisecondsSinceEpoch / 1000.0;
+    final old = deletions[key];
+    final oldT = old is Map ? (old['deleted_at'] as num?)?.toDouble() ?? 0.0 : 0.0;
+    // 只保留最新一次删除事件
+    if (t >= oldT) {
+      deletions[key] = {
+        'deleted_at': t,
+        'title': title,
+        if (idKey != null && idKey.trim().isNotEmpty) 'id_key': idKey.trim(),
+      };
+      await saveDeletions(deletions);
+    }
+  }
+
+  Future<void> clearDeletion(String contentKey) async {
+    final key = contentKey.trim();
+    if (key.isEmpty) return;
+    final deletions = await loadDeletions();
+    if (deletions.remove(key) != null) await saveDeletions(deletions);
   }
 
   // ---------- 进度 ----------

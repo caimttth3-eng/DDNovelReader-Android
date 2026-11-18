@@ -6,12 +6,15 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.2.4';
-  static const String build = '9';
+  static const String version = '1.2.5';
+  static const String build = '10';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.2.5：新增「数据同步」。在书架菜单里填入 WebDAV 网盘地址'
+        '（如坚果云），书架、阅读进度和书签会自动同步，换设备接着读；'
+        '删除的书会同步移除。手机版和电脑版可共用同一份数据。',
     'v1.2.4：语音缓存与桌面版统一。缓存目录改用书籍内容指纹命名，'
         '语速目录改为整数百分比，进度文件键名两端兼容，'
         '桌面版已生成的整本语音缓存可直接复用；'
