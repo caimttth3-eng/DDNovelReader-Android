@@ -668,7 +668,9 @@ class TtsReader {
         // AudioPlayer.play seeks after preparation and before starting audio.
         await _player.stop();
         if (_disposed || generation != _playGeneration || sentence != _index) return false;
-        await _player.play(BytesSource(audio), position: resumePosition > Duration.zero ? resumePosition : null)
+        await _player.play(
+            BytesSource(audio, mimeType: 'audio/mpeg'),
+            position: resumePosition > Duration.zero ? resumePosition : null)
           .timeout(const Duration(seconds: 15));
         if (_disposed || generation != _playGeneration || sentence != _index || _state != TtsState.playing) return false;
         _activeAudioIndex = sentence; _position = resumePosition;

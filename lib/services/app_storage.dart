@@ -1,6 +1,8 @@
 ﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/progress.dart';
@@ -29,12 +31,67 @@ class AppStorage {
     if (raw == null || raw.isEmpty) return [];
     try {
       final list = jsonDecode(raw) as List<dynamic>;
-      return list
+      final books = list
           .map((e) => BookMeta.fromJson(e as Map<String, dynamic>))
           .toList();
+      return await _repairBookPaths(books);
     } catch (_) {
       return [];
     }
+  }
+
+  /// 修复书籍文件路径：iOS 重装后容器 UUID 会变，历史记录里是旧绝对路径；
+  /// 另外早期导入存的是系统选择器临时路径。这里按「bookId + 扩展名」或
+  /// 文件名回落到当前 Documents/books 下，并写回书架。
+  Future<List<BookMeta>> _repairBookPaths(List<BookMeta> books) async {
+    if (books.isEmpty) return books;
+    Directory? booksDir;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      booksDir = Directory('${dir.path}/books');
+    } catch (_) {
+      return books;
+    }
+    var changed = false;
+    final out = <BookMeta>[];
+    for (final b in books) {
+      var path = b.filePath;
+      bool exists(String p) {
+        try {
+          return p.isNotEmpty && File(p).existsSync();
+        } catch (_) {
+          return false;
+        }
+      }
+
+      if (!exists(path)) {
+        final ext = switch (b.format) {
+          'epub' => '.epub',
+          'pdf' => '.pdf',
+          'docx' => '.docx',
+          _ => '.txt',
+        };
+        final base = path.split(RegExp(r'[/\\]')).last;
+        final candidates = <String>[
+          '${booksDir.path}/${b.id}$ext',
+          if (base.isNotEmpty) '${booksDir.path}/$base',
+        ];
+        for (final c in candidates) {
+          if (exists(c)) {
+            path = c;
+            break;
+          }
+        }
+      }
+      if (path != b.filePath) {
+        changed = true;
+        out.add(b.copyWith(filePath: path));
+      } else {
+        out.add(b);
+      }
+    }
+    if (changed) await saveBooks(out);
+    return out;
   }
 
   Future<void> saveBooks(List<BookMeta> books) async {

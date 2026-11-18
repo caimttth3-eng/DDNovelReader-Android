@@ -211,6 +211,7 @@ class BookMeta {
   String get cacheDirName => contentKey.isNotEmpty ? contentKey : id;
 
   BookMeta copyWith({
+    String? filePath,
     String? contentKey,
     int? totalChars,
     int? chapterCount,
@@ -218,7 +219,7 @@ class BookMeta {
       BookMeta(
         id: id,
         title: title,
-        filePath: filePath,
+        filePath: filePath ?? this.filePath,
         format: format,
         addedAt: addedAt,
         parseOk: parseOk,

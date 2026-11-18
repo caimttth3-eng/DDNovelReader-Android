@@ -248,11 +248,14 @@ class _ShelfScreenState extends State<ShelfScreen> {
         addedAt: DateTime.now(),
       );
 
+      // 先复制到应用私有目录（iOS 系统选择器的临时路径重签后会失效）
+      final privatePath = await _copyToPrivate(path, id, format);
+
       // 若解析失败但文件存在，仍加入书架以便提示
       final meta = BookMeta(
         id: id,
         title: title,
-        filePath: path,
+        filePath: privatePath ?? path,
         format: format.name,
         addedAt: DateTime.now(),
         parseOk: book.parseOk,
@@ -262,13 +265,11 @@ class _ShelfScreenState extends State<ShelfScreen> {
         chapterCount: book.chapterCount,
       );
       await _storage.addBook(meta);
-      // 拷贝文件到应用私有目录（防止外部文件被清理/权限变化）
-      await _copyToPrivate(path, id, format);
     }
     await _loadAll();
   }
 
-  Future<void> _copyToPrivate(String srcPath, String bookId, BookFormat fmt) async {
+  Future<String?> _copyToPrivate(String srcPath, String bookId, BookFormat fmt) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
       final bookDir = Directory('${dir.path}/books');
@@ -278,8 +279,10 @@ class _ShelfScreenState extends State<ShelfScreen> {
           : '.txt';
       final dst = '${bookDir.path}/$bookId$ext';
       await File(srcPath).copy(dst);
+      return dst;
     } catch (_) {
       // 拷贝失败不影响书架显示
+      return null;
     }
   }
 
