@@ -134,6 +134,7 @@ class TtsReader {
   void setNetworkAvailable(bool available) {
     if (_networkAvailable == available) return;
     _networkAvailable = available;
+    if (available) _onlineNetworkFailure = null;
     // This is a passive OS signal, never a connectivity probe. Completed
     // prefetches and the retained current sentence survive disconnection.
     if (!available) {
@@ -358,6 +359,8 @@ class TtsReader {
       return;
     }
     _contentGeneration++;
+    // 用户重新开始朗读时，清掉上次的连接失败标记，允许重新联网合成
+    _onlineNetworkFailure = null;
     _wordCache.clear();
     final stopping = _stopInternal();
     final generation = _playGeneration;
@@ -520,10 +523,12 @@ class TtsReader {
         return disk;
       }
     }
-    if (!_networkAvailable || _onlineNetworkFailure != null) {
-      _audioFailures[idx] = _onlineNetworkFailure ?? const EdgeTtsException('connection');
+    if (!_networkAvailable) {
+      _audioFailures[idx] = const EdgeTtsException('connection');
       return Uint8List(0);
     }
+    // 不因一次失败永久封死：每次取音频都允许重试（网络抖动/微软限流很常见）
+    _onlineNetworkFailure = null;
     Uint8List audio;
     List<SpeechWord> words = [];
     final key = '$generation/$idx';

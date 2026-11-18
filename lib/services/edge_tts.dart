@@ -1,4 +1,4 @@
-﻿/// Edge TTS：调用微软 Edge 神经语音在线合成中文音频（MP3）。
+/// Edge TTS：调用微软 Edge 神经语音在线合成中文音频（MP3）。
 /// 基于 edge-tts 7.2.8 协议逐项移植（已联网调研并核对 twn39/edgetts-dart 实现）。
 ///
 /// 关键点（debug 排坑所得）：
@@ -506,7 +506,8 @@ Future<Uint8List> edgeSynth(String text,
     {String voice = 'zh-CN-XiaoxiaoNeural', String rate = '+0%',
     void Function(List<SpeechWord>)? onWords, EdgeSynthCancelToken? cancelToken}) async {
   final token = cancelToken ?? EdgeSynthCancelToken();
-  for (var attempt = 0; attempt < 2; attempt++) {
+  // 3 次尝试：403 先校时重试；连接超时/5xx/空音频退避重试（移动网络抖动常见）
+  for (var attempt = 0; attempt < 3; attempt++) {
     token.check();
     try {
       final words = SpeechWordCollector(text);
@@ -515,8 +516,20 @@ Future<Uint8List> edgeSynth(String text,
       if (result == null || result.isEmpty) throw const EdgeTtsException('no_audio');
       onWords?.call(words.words); return result;
     } on EdgeTtsException catch (error) {
-      if (error.status != 403 || attempt > 0 || token.cancelled) rethrow;
-      await _syncClock();
+      if (token.cancelled) rethrow;
+      if (error.status == 403) {
+        if (attempt == 0) { await _syncClock(); continue; }
+        rethrow;
+      }
+      final retryable = error.kind == 'connection' ||
+          error.kind == 'timeout' ||
+          error.kind == 'no_audio' ||
+          (error.kind == 'service' && (error.status ?? 500) >= 500);
+      if (retryable && attempt < 2) {
+        await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+        continue;
+      }
+      rethrow;
     }
   }
   throw const EdgeTtsException('no_audio');

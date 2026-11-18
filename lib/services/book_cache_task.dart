@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
@@ -31,7 +31,8 @@ class BookCacheTask {
   final String bookId;
   final TtsCacheStore store;
 
-  static const int workerCount = 3;
+  // 边听边缓存时留出带宽给朗读，2 路更稳
+  static const int workerCount = 2;
   static const int saveInterval = 20;
 
   List<(int, int, String)> _tasks = [];
@@ -265,16 +266,21 @@ class BookCacheTask {
         _markDone(idx);
         continue;
       }
-      final Uint8List audio;
-      try {
-        audio = await edgeSynth(
-          text,
-          voice: store.voice,
-          rate: edgeRateStr(store.rate),
-        );
-      } catch (_) {
-        continue; // 网络/合成失败：不标记完成，留待续传重试
+      Uint8List audio = Uint8List(0);
+      for (var attempt = 0; attempt < 2 && audio.isEmpty; attempt++) {
+        try {
+          audio = await edgeSynth(
+            text,
+            voice: store.voice,
+            rate: edgeRateStr(store.rate),
+          );
+        } catch (_) {
+          if (attempt == 0) {
+            await Future<void>.delayed(const Duration(milliseconds: 600));
+          }
+        }
       }
+      if (audio.isEmpty) continue; // 多次失败：不标记完成，留待续传重试
       if (audio.isEmpty) continue;
       await store.write(ci, off, audio);
       _markDone(idx);
