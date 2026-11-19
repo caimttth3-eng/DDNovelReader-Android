@@ -109,7 +109,7 @@ void main() {
   }
 
   for (final mode in ['tap', 'scroll']) {
-    testWidgets('speech holds complete pages and continues a split sentence without word events in $mode mode', (tester) async {
+    testWidgets('speech turns at the reported next page without restarting the sentence in $mode mode', (tester) async {
       final text = List.generate(160, (i) => i.toString().padLeft(3, '0') + '甲乙丙丁').join() + '。';
       final speech = await open(tester, source('page-only-$mode', [text]), pageTurnMode: mode);
       List<(int, double)> viewport() => list(tester).itemPositionsNotifier!.itemPositions.value
@@ -129,33 +129,22 @@ void main() {
       final layoutOffset = render.getPositionForOffset(Offset(nextRow.left - 1, nextRow.center.dy)).offset;
       final boundary = ReaderTypography.sourceOffset(text, layoutOffset);
       expect(boundary, greaterThan(0)); expect(boundary, lessThan(text.length));
-      expect(spoken.single['text'], const TextCleaner().clean(text.substring(0, boundary)).tts,
-        reason: 'Even an engine with no range events must not speak text on the next page.');
-      final firstId = spoken.single['id'];
-      await emit(tester, 'range', {'id': firstId, 'start': 3, 'end': 5});
+      expect(spoken.single['text'], const TextCleaner().clean(text).tts);
+      final id = spoken.single['id'];
+      await emit(tester, 'range', {'id': id, 'start': boundary - 3, 'end': boundary - 1});
       await tester.pumpAndSettle(); expect(viewport(), initial);
-      await emit(tester, 'range', {'id': firstId, 'start': boundary - 3, 'end': boundary - 1});
-      await tester.pumpAndSettle(); expect(viewport(), initial);
-      await emit(tester, 'done', {'id': firstId});
-      await _until(tester, () => spoken.length == 2, 'Only the completed page may advance to its continuation.');
+      await emit(tester, 'range', {'id': id, 'start': boundary, 'end': boundary + 1});
       await tester.pumpAndSettle();
       expect(viewport(), isNot(initial)); expect(speech.currentTtsOffset, boundary);
-      expect(speech.currentIndex, 0, reason: 'A page edge is not a new logical sentence.');
+      expect(speech.currentIndex, 0);
+      expect(spoken, hasLength(1), reason: 'The page turn must not start another utterance.');
       final second = viewport();
       binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
       binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
-      expect(viewport(), second, reason: 'Returning to the same active page must not align the cursor to its top.');
-      expect(spoken, hasLength(2));
-      for (var page = 0; page < 20 && speech.state == TtsState.playing; page++) {
-        final count = spoken.length;
-        await emit(tester, 'done', {'id': spoken.last['id']});
-        await _until(tester, () => spoken.length > count || speech.state != TtsState.playing,
-          'Each completed fragment must advance or finish.');
-        await tester.pumpAndSettle();
-      }
-      expect(speech.state, TtsState.stopped);
-      expect(spoken.map((request) => request['text'] as String).join(), const TextCleaner().clean(text).tts,
-        reason: 'Automatic pages must neither skip nor repeat the retained/manual overlap line.');
+      expect(viewport(), second);
+      await emit(tester, 'done', {'id': id});
+      await _until(tester, () => speech.state == TtsState.stopped, 'The single utterance finishes the chapter.');
+      expect(spoken, hasLength(1));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     }, timeout: const Timeout(Duration(seconds: 45)));
@@ -180,7 +169,7 @@ void main() {
 
   testWidgets('backgrounding during page preparation releases speech without waiting for a frame', (tester) async {
     final text = List.filled(120, '甲乙丙丁戊己庚辛壬癸').join() + '。';
-    await open(tester, source('background-page', [text]));
+    await open(tester, source('background-page', ['甲乙。$text']));
     await start(tester);
     final first = spoken.single['id'];
     final delivered = Completer<void>();
@@ -191,7 +180,7 @@ void main() {
     binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     await tester.idle();
     expect(spoken, hasLength(2), reason: 'No widget frames are pumped while waiting for background audio.');
-    expect(spoken.map((request) => request['text'] as String).join(), const TextCleaner().clean(text).tts);
+    expect(spoken.map((request) => request['text'] as String).join(), '甲乙。${const TextCleaner().clean(text).tts}');
     binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
     expect(spoken, hasLength(2), reason: 'Foreground alignment must not restart the active background utterance.');

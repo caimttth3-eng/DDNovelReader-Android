@@ -663,36 +663,27 @@ void main() {
     expect(requested, [title, title.substring(title.indexOf('一')), title, title]);
   });
 
-  test('page fragments finish without word events, retain sentence coordinates and never poison whole-sentence caches', () async {
+  test('page preparation keeps whole-sentence audio cacheable without word events', () async {
     final player = _ResumePlayer(), cache = _DeferredWriteCache();
     final requested = <String>[], starts = <(int, int)>[];
-    Future<Uint8List> synth(String text, {required String voice, required String rate,
-      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
-      requested.add(text); onWords([]); return Uint8List.fromList([requested.length]);
-    }
-    final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(0)..setCache(cache);
+    final reader = TtsReader(player: player, synthesize: (text, {required voice,
+      required rate, required onWords, required cancelToken}) async {
+      requested.add(text); return Uint8List.fromList([1]);
+    })..setPrefetchSentences(0)..setCache(cache);
     addTearDown(() async { if (!cache.release.isCompleted) cache.release.complete(); await reader.dispose(); });
     var completed = 0;
     reader.onCompleted = () => completed++;
-    reader.onPlaybackRange = (index, start, isCurrent) async {
-      starts.add((index, start)); return start < 3 ? 3 : start < 6 ? 6 : null;
-    };
+    reader.onPreparePlayback = (index, start, isCurrent) async { starts.add((index, start)); };
     await reader.start(['abcdefghi'], offsets: [10]);
-    expect(requested, ['abc']); expect(completed, 0);
+    expect(requested, ['abcdefghi']);
+    expect(starts, [(0, 0)]);
+    expect(cache.started.isCompleted, isTrue);
     player.completed.add(null);
-    await waitFor(() => player.played.length == 2, 'Completing page one must prepare its continuation, even without word metadata.');
-    expect(requested, ['abc', 'def']); expect(reader.currentIndex, 0); expect(reader.currentTtsOffset, 3);
-    await reader.pause(); await reader.resume();
-    expect(requested, ['abc', 'def'], reason: 'Pause/resume must retain only the current page fragment.');
-    player.completed.add(null);
-    await waitFor(() => requested.length == 3 && player.played.length == 4, 'Page two must continue from its exclusive boundary.');
-    expect(requested.join(), 'abcdefghi'); expect(starts, [(0, 0), (0, 3), (0, 6)]);
-    expect(cache.started.isCompleted, isFalse, reason: 'Fragments must not be written under the full-sentence cache coordinate.');
-    player.completed.add(null);
-    await waitFor(() => completed == 1, 'Only the final page completes the sentence/chapter.');
+    await waitFor(() => completed == 1, 'One audio completion finishes the entire sentence.');
+    expect(player.played, [1]);
   });
 
-  test('fragment word coordinates and paused manual seeks remain relative to the original sentence', () async {
+  test('manual seek word coordinates and paused manual seeks remain relative to the original sentence', () async {
     final player = _ResumePlayer(), requested = <String>[];
     Future<Uint8List> synth(String text, {required String voice, required String rate,
       required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
@@ -702,31 +693,30 @@ void main() {
     }
     final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(0);
     addTearDown(reader.dispose);
-    reader.onPlaybackRange = (index, start, isCurrent) async => start < 4 ? 4 : 8;
     await reader.start(['abcdefghij'], initialTtsOffset: 2);
     player.tick(10); await Future<void>.delayed(Duration.zero);
     expect(reader.currentWordStart, 2); expect(reader.currentWordEnd, 4);
     await reader.pause(); await reader.jumpTo(0, ttsOffset: 5); await reader.resume();
-    expect(requested, ['cd', 'fgh']);
+    expect(requested, ['cdefghij', 'fghij']);
     player.tick(10); await Future<void>.delayed(Duration.zero);
     expect(reader.currentWordStart, 5); expect(reader.currentWordEnd, 7);
   });
 
-  test('stopping during pagination invalidates its late playback range', () async {
-    final player = _ResumePlayer(), page = Completer<int?>();
+  test('stopping during pagination invalidates its late playback preparation', () async {
+    final player = _ResumePlayer(), page = Completer<void>();
     final reader = TtsReader(player: player)..setPrefetchSentences(0);
     addTearDown(reader.dispose);
     bool Function()? current;
-    reader.onPlaybackRange = (index, start, isCurrent) { current = isCurrent; return page.future; };
+    reader.onPreparePlayback = (index, start, isCurrent) { current = isCurrent; return page.future; };
     final starting = reader.start(['unread']);
     await waitFor(() => current != null, 'The reader must be waiting for page preparation.');
     await reader.stop(); expect(current!(), isFalse);
-    page.complete(3); await starting;
+    page.complete(); await starting;
     expect(player.played, isEmpty); expect(reader.state, TtsState.stopped);
   });
 
-  test('pausing during page preparation replans its boundary before resuming', () async {
-    final player = _ResumePlayer(), page = Completer<int?>(), requested = <String>[];
+  test('pausing during page preparation retries positioning before resuming', () async {
+    final player = _ResumePlayer(), page = Completer<void>(), requested = <String>[];
     Future<Uint8List> synth(String text, {required String voice, required String rate,
       required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
       requested.add(text); onWords([]); return Uint8List.fromList([1]);
@@ -734,14 +724,14 @@ void main() {
     final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(0);
     addTearDown(reader.dispose);
     var prepares = 0;
-    reader.onPlaybackRange = (index, start, isCurrent) async => ++prepares == 1 ? await page.future : 4;
+    reader.onPreparePlayback = (index, start, isCurrent) async { if (++prepares == 1) await page.future; };
     final starting = reader.start(['abcdef'], initialTtsOffset: 2);
     await waitFor(() => prepares == 1, 'The initial page boundary must still be pending.');
     await reader.pause();
     await reader.resume();
-    expect(prepares, 2); expect(requested, ['cd']);
-    page.complete(5); await starting;
-    expect(requested, ['cd'], reason: 'The old page boundary must not revive stale audio.');
+    expect(prepares, 2); expect(requested, ['cdef']);
+    page.complete(); await starting;
+    expect(requested, ['cdef'], reason: 'The old page boundary must not revive stale audio.');
   });
 
   test('jump, voice and rate changes discard the paused audio position', () async {

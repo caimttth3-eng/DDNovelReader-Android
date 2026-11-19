@@ -5,7 +5,7 @@
 | 用途 | 路径 |
 |---|---|
 | 唯一源码与 Git 历史 | `DDNovelReader/` |
-| 最新成功完整 ARM64 v1.3.2 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.2/` |
+| 最新成功完整 ARM64 v1.3.3 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.3/` |
 | 本地最新 APK 选择入口 | `DDNovelReader/scripts/LocalApk.ps1 -Action Path` |
 | 当前构建与独立调试符号 | `_cache/projects/ddnovelreader/main/build/`（符号位于 `debug-symbols/`） |
 | 当前签名资料（仅核元数据） | `_data/ddnovelreader/signing/` |
@@ -112,6 +112,10 @@ LocalApk 原子接收后已清退旧 1.2.27 完整包及相同签名输入副本
 本地离线 `DeliverApk` 成功（2 分 43 秒，421 个任务：37 执行、384 已最新），使用既有固定签名验签并归位。当前 APK 为 `_releases/ddnovelreader/v1.3.2/DDNovelReader-v1.3.2-arm64-v8a.apk`，19,618,321 字节，SHA-256 `4c256f82902ab7f6833bf8073fb8d34c20fa0b516d65560827a76b6e50c7120d`。共享 Android SDK 完整树审计通过，旧包已清退，接收无待处理项。未安装设备或远端发布。
 
 106 项定向测试通过，涵盖主页主题与视图记忆、状态栏返回恢复、数据同步表单、关于和缓存管理。静态分析退出码 0，无错误（保留 160 条 warning/info）；锁文件未改。源根临时测试输出经 `Finalize` 清退 12 文件、65,025,928 字节；未生成 UI 截图。
+
+### 跨页连续朗读：1.3.3（37）
+
+129 项定向测试通过，静态分析无错误。离线 `DeliverApk` 成功（1 分 53 秒），固定证书验签及共享 Android SDK 完整树审计均通过。当前 ARM64 APK 为 19,618,321 字节，SHA-256 `c8e1c8e843a9b2fdf7d4ad5480c6df3bd42ac1e60704e8cef7d44aaada77b1d8`。旧包已清退，接收无待处理项；源根测试输出已清退。未安装设备或远端发布。
 
 ## 本地构建收尾与 APK 选择
 

@@ -6,12 +6,13 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.3.2';
-  static const String build = '36';
+  static const String version = '1.3.3';
+  static const String build = '37';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.3：自动翻页不再切断同一句朗读；移除网络失败转系统音源开关的说明文字。',
     'v1.3.2：主页新增深浅主题和书架／列表切换，修复返回主页时状态栏图标对比度，并适配同步与其它子页。',
     'v1.3.1：修复严格 WebDAV 服务首次同步时远端根目录未创建的问题，完成本地真实 HTTP 推送、拉取及书源导入回归。',
     'v1.3.0：合并上游数据同步、多编码识别、跨端缓存与网络重试；保留整页朗读，默认上下滚动；网络失败转系统音源改为可选开关，默认关闭。',

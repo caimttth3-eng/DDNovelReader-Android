@@ -241,7 +241,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   String _wordMapKey = '';
   CleanedText? _wordMap;
   Future<bool>? _speechPageFollow;
-  Completer<int?>? _speechPageRange;
+  Completer<void>? _speechPagePreparation;
   bool _isPlaying = false;
   int _playbackGeneration = 0;
   _SentenceDragSession? _sentenceDrag;
@@ -329,7 +329,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _networkSubscription = NetworkConnectivity().availability.listen(_tts.setNetworkAvailable);
     _tts.onSentenceChanged = _onTtsSentenceChanged;
     _tts.onWordChanged = _onTtsWordChanged;
-    _tts.onPlaybackRange = _prepareSpeechRange;
+    _tts.onPreparePlayback = _prepareSpeechPage;
     _tts.onCompleted = _onTtsCompleted;
     _tts.onError = _onTtsError;
     _tts.onStateChanged = _syncSpeechPlaybackState;
@@ -405,7 +405,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void dispose() {
-    _releaseSpeechPageRange();
+    _releaseSpeechPagePreparation();
     _sentenceDrag = null;
     AppAppearance.nightMode.removeListener(_onAppearanceChanged);
     _networkSubscription?.cancel();
@@ -1490,7 +1490,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         final left = render.getPositionForOffset(Offset(rect.left - 1, rect.center.dy)).offset;
         final right = render.getPositionForOffset(Offset(rect.right + 1, rect.center.dy)).offset;
         final start = min(left, right);
-        result.add(_PageLine('${entry.key}/$start', top + rect.top, top + rect.bottom, entry.key, start));
+        result.add(_PageLine('${entry.key}/$start', top + rect.top, top + rect.bottom, entry.key));
       }
     }
     result.sort((a,b) => a.top.compareTo(b.top));
@@ -1906,7 +1906,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 彻底退出朗读模式：停止TTS，恢复正常阅读页UI
   Future<void> _exitReadingMode() async {
-    _releaseSpeechPageRange();
+    _releaseSpeechPagePreparation();
     _sentenceDrag = null;
     final generation = ++_playbackGeneration;
     _permissionGate?.cancel();
@@ -1991,7 +1991,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) _releaseSpeechPageRange();
+    if (state != AppLifecycleState.resumed) _releaseSpeechPagePreparation();
     if (state != AppLifecycleState.resumed) _cancelSentenceDrag();
     _volumeForeground = state == AppLifecycleState.resumed;
     _syncScreenAwake();
@@ -2372,7 +2372,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _mediaSpeechOffset = left - base;
     setState(() { _wordStart = left; _wordEnd = right; });
     _updateMediaChapter(_chapter);
-    if (_speechPageFollow == null) _followSpeechPage(_chapter, _para, _ttsSentence, character: left);
+    final chapter = _chapter, paragraph = _para, index = _ttsSentence, playback = _playbackGeneration;
+    unawaited(_followSpeechPage(chapter, paragraph, index, character: left,
+      isCurrent: () => _playbackGeneration == playback && (_chapter, _para, _ttsSentence, _wordStart) == (chapter, paragraph, index, left)));
   }
 
   void _flushPendingTtsUpdates() {
@@ -2440,48 +2442,39 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     return false;
   }
 
-  void _releaseSpeechPageRange() {
-    final range = _speechPageRange;
-    _speechPageRange = null;
-    if (range != null && !range.isCompleted) range.complete(null);
+  void _releaseSpeechPagePreparation() {
+    final range = _speechPagePreparation;
+    _speechPagePreparation = null;
+    if (range != null && !range.isCompleted) range.complete();
   }
 
-  Future<int?> _prepareSpeechRange(int idx, int start, bool Function() isCurrent) {
-    if (!_volumeForeground) return Future<int?>.value(null);
-    _releaseSpeechPageRange();
-    final range = Completer<int?>();
-    _speechPageRange = range;
+  Future<void> _prepareSpeechPage(int idx, int start, bool Function() isCurrent) {
+    if (!_volumeForeground) return Future<void>.value();
+    _releaseSpeechPagePreparation();
+    final range = Completer<void>();
+    _speechPagePreparation = range;
     // Leaving the foreground releases audio even if Flutter stops drawing
     // halfway through a page transition. Its late UI work is then invalid.
-    _computeSpeechRange(idx, start, () => isCurrent() && identical(_speechPageRange, range)).then<void>(
-      (end) { if (!range.isCompleted) range.complete(end); },
+    _positionBeforeSpeech(idx, start, () => isCurrent() && identical(_speechPagePreparation, range)).then<void>(
+      (_) { if (!range.isCompleted) range.complete(); },
       onError: (Object error, StackTrace stack) { if (!range.isCompleted) range.completeError(error, stack); });
-    return range.future.whenComplete(() { if (identical(_speechPageRange, range)) _speechPageRange = null; });
+    return range.future.whenComplete(() { if (identical(_speechPagePreparation, range)) _speechPagePreparation = null; });
   }
 
-  Future<int?> _computeSpeechRange(int idx, int start, bool Function() isCurrent) async {
+  Future<void> _positionBeforeSpeech(int idx, int start, bool Function() isCurrent) async {
     final playback = _playbackGeneration, c = _ttsChapter;
     var s = idx, p = 0;
     final paragraphs = _book.chapters[c].paragraphs;
     while (p < paragraphs.length && s >= paragraphs[p].sentences.length) { s -= paragraphs[p].sentences.length; p++; }
     if (p >= paragraphs.length) throw StateError('Speech sentence is outside its chapter');
     await WidgetsBinding.instance.endOfFrame;
-    if (!mounted || !_inReadingMode || !isCurrent() || playback != _playbackGeneration) return null;
+    if (!mounted || !_inReadingMode || !isCurrent() || playback != _playbackGeneration) return;
     _updatePageGeometry();
     final offset = _sentenceDisplayOffset(c, p, s, start);
     if (!await _followSpeechPage(c, p, s, character: offset, isCurrent: isCurrent)) {
-      if (!mounted || !_volumeForeground || _paging || !isCurrent() || playback != _playbackGeneration) return null;
+      if (!mounted || !_volumeForeground || _paging || !isCurrent() || playback != _playbackGeneration) return;
       throw StateError('Cannot paginate to the current speech position');
     }
-    final item = _itemIndexOf(c, p);
-    final next = _pageLines().where((line) => line.itemIndex == item && line.top >= -0.25 && line.bottom > _ttsVisibleBottom + 0.25);
-    if (next.isEmpty) return null;
-    final boundary = ReaderTypography.sourceOffset(paragraphs[p].display, next.first.layoutOffset,
-      lineBreakAt: _lineBreakFor(c, p));
-    if (boundary >= paragraphs[p].sentences[s].displayEnd) return null;
-    final end = _sentenceTtsOffset(c, p, s, boundary);
-    if (end <= start) throw StateError('Speech page contains no remaining text');
-    return end;
   }
 
   Future<void> _followSentence(int c, int p, int sentence, {int? character}) async {
@@ -3266,7 +3259,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             subtitle: Text(T('prefetchDescription')), trailing: const Icon(Icons.tune),
             onTap: () async { await _openPrefetchSettings(); if (ctx.mounted) update(() {}); }),
           SwitchListTile(key: const ValueKey('system-fallback-enabled'),
-            title: Text(T('systemFallbackEnabled')), subtitle: Text(T('systemFallbackDescription')),
+            title: Text(T('systemFallbackEnabled')),
             value: _settings.systemFallbackEnabled, onChanged: _applyingSpeechPauses ? null : (value) async {
               if (!value && _settings.systemFallbackActive) {
                 final desired = ReadingSettings.fromJson(_settings.toJson())
@@ -4947,8 +4940,8 @@ class _ReaderLineAnchor {
 class _PageLine {
   final String key;
   final double top, bottom;
-  final int itemIndex, layoutOffset;
-  const _PageLine(this.key, this.top, this.bottom, this.itemIndex, this.layoutOffset);
+  final int itemIndex;
+  const _PageLine(this.key, this.top, this.bottom, this.itemIndex);
 }
 
 class _ReaderPageClipper extends CustomClipper<Rect> {
