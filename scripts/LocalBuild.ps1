@@ -42,6 +42,7 @@ $layout = [ordered]@{
 if ($Action -eq 'Resolve') { return [pscustomobject]$layout }
 if ($Online -and $Action -notin @('Prepare', 'Restore')) { throw 'Network access is only allowed for explicit dependency preparation.' }
 if ($ConfigureOnly -and $Action -ne 'BuildApk') { throw 'ConfigureOnly is only valid for BuildApk.' }
+if (($TestName -or $DartDefines.Count) -and $Action -ne 'Test') { throw 'TestName and DartDefines are only valid for Test.' }
 
 function Restore-Runtime([string]$ManifestName, [string]$Destination, [string]$Executable) {
     $manifest = Get-Content -LiteralPath (Join-Path $environmentRoot "manifests\$ManifestName.json") -Raw | ConvertFrom-Json

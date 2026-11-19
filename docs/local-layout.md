@@ -5,7 +5,7 @@
 | 用途 | 路径 |
 |---|---|
 | 唯一源码与 Git 历史 | `DDNovelReader/` |
-| 最新成功完整 ARM64 v1.2.28 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.2.28/` |
+| 最新成功完整 ARM64 v1.3.1 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.1/` |
 | 本地最新 APK 选择入口 | `DDNovelReader/scripts/LocalApk.ps1 -Action Path` |
 | 当前构建与独立调试符号 | `_cache/projects/ddnovelreader/main/build/`（符号位于 `debug-symbols/`） |
 | 当前签名资料（仅核元数据） | `_data/ddnovelreader/signing/` |
@@ -90,6 +90,22 @@ LocalApk 原子接收后已清退旧 1.2.27 完整包及相同签名输入副本
 | 合计 | **55,527** | **3,181,388,794** | **11,099** |
 
 两条旧路径已不存在，保留 Flutter、pub/Maven、Gradle/Android 用户缓存、build 产物/符号和项目日志，未读取或变动私有凭据。精确删除回执为实例 `temp/delivery-static-retirement-20261119.json`。随后真实 `LocalApk Finalize` 再次验签成功、`cleanupPending: []`；`LocalBuild Finalize` 确认无遗留源根测试输出，签名脚本的临时目录已自行清理。自有一次性验证/退役脚本已删除，不保留无用探针；构建/签名/审计原始日志及前后清单按用户要求保留。源码未因清理丢弃或重置，未绕过此前 Git 权限拒绝重试提交。
+
+### 合并原作者 1.3 与本地 1.3.1 交付（2026-11-19）
+
+用户要求比较并合并原作者 1.3。已核其公开 `v1.3.0` 发布及最新 `master` `1f156914739fe09a47892108f11a37cd95175386`，共同祖先为 `9838ccb`。上游已吸收本项目较早 PR 的阅读/朗读栈，但尚无本项目最新整页朗读；不能整体覆盖。本地已验收 1.2.28 源码先保存为 `63ee903`，随后正常 merge，保留全部历史；本轮新要求构成新的 Git 操作授权，未重写旧提交或推送。
+
+按用户随后明确的取舍：整页朗读及手动翻页首字起读保留；普通阅读默认上下滚动，可在设置改点击/滑动，已有显式选择不强制重置；网络失败自动转系统音源增加开关且默认关闭。合入 WebDAV（配置后按上游自动同步及删除传播）、最近打开排序、多编码解码、跨端内容键/码点缓存坐标、有限重试与并发预取。iOS 源码/原始图标保留，但在线 workflow 固定停用，未宣称 iOS 或手机验收。显示原始断行和缩进保留，以共享映射联结桌面规范化码点坐标、排版后位置、高亮、进度和缓存；新 `words2` 坐标分区隔离旧音频，迁移冲突不删除不同内容。
+
+依赖仍使用已接收的完整原锁 SHA-256 `b5fb94b4365c6c4a321e04f64c6dc205d60de7f12c17c6801402c8d5c3363c2e`。`audio_session 0.2.4` 原就在同一闭包，现由 pubspec 直接声明；标准离线 `pub get --enforce-lockfile` 成功验证同一选定包集，保留锁快照的展示性 transitive 分类，实际 `package_graph` 已确认直接依赖。没有新下载、pub upgrade、工具版本变化或 `_env` 写入。曾尝试为仅依赖角色变化的新锁申请共享准入，首次路由返回 `Unknown chat owner`；最终未采用该新锁，不需更改共享清单。用户提供可用会话链接后，已成功通知维护者不要执行过期请求；未把失败发送冒充送达。
+
+完整 Flutter 套件 **401 项通过、3 项显式可选探测跳过**；本轮真实 HTTP WebDAV 服务仅监听自动分配的 `127.0.0.1` 端口，使用进程内合成数据和固定测试账号，没有探测其他服务、连接真实网盘、读取真实书籍或私人配置。严格新目录联调发现并修复上游未先创建 remoteDir 根目录导致 409 的问题，因此最终应用补丁版为 **1.3.1（35）**；先前 1.3.0（34）本地构建保留为历史执行事实，随后被正常替代。Analyze exit 0，无 error，158 条 warning/info 保留。日志为实例 `temp/upstream131-full-tests.log`、`upstream131-analyze.log`，测试可用 `LocalBuild -Action Test -TestName ... -DartDefines DD_MOCK_DAV_PORT=...` 定向选择；端口必须是本轮自有、已就绪的 mock。
+
+合并提交为 **`a09ac75`**，已验证 `upstream/master` 是其祖先；无 merge 冲突残留。最终 1.3.1 源码执行本地离线 `DeliverApk` 成功，`BUILD SUCCESSFUL in 2m 38s`，421 任务中 35 执行、386 up-to-date。成品 `_releases/ddnovelreader/v1.3.1/DDNovelReader-v1.3.1-arm64-v8a.apk` 为 **19,548,689 字节**，SHA-256 **`d72f10aa139b125fc7826df85847980cd4fe53ee246ab60929423c100e85e451`**，固定证书仍为 `088b9569c7e74b31dd9840b335e4755f1af5a51667d0c51ade9c5b83e0f57db1`。版本/包名/ARM64、签名及对齐、LocalApk 独立证书验签均通过；完整 SDK 树（包括 XML 和 `.knownPackages`）前后未变，守护句柄保持到进程后代自然退出及后验完成。接收回执 `previousRemoved: true`、`cleanupPending: []`，未远端发布或安装。
+
+本轮源码 Git 操作均为本地：未创建/推送 PR。若向原仓库贡献，应从其 1.3 基线整理通用朗读/可选兜底/兼容修复及测试的增量，不把本项目固定证书、AGENTS、共享环境入口、本地版本号或成品记录混入上游 PR；这不是 APK 二进制补丁。
+
+父消费者结束后，自有 mock 已停止；核对合成书籍的固定内容后退役 4 文件、244 字节及相应临时目录，源根 owner 测试输出经 `Finalize` 清退 15 文件、231,069,304 字节。合并解析器、mock 脚本/端口和换行对照差异文件清退；SDK/pub/Maven/增量缓存、必要符号及日志保留，没有新增纯 UI 截图。最新 APK 选择入口已指向 1.3.1。
 
 ## 本地构建收尾与 APK 选择
 
