@@ -5,7 +5,7 @@
 | 用途 | 路径 |
 |---|---|
 | 唯一源码与 Git 历史 | `DDNovelReader/` |
-| 最新成功完整 ARM64 v1.3.6 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.6/` |
+| 最新成功完整 ARM64 v1.3.7 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.7/` |
 | 本地最新 APK 选择入口 | `DDNovelReader/scripts/LocalApk.ps1 -Action Path` |
 | 当前构建与独立调试符号 | `_cache/projects/ddnovelreader/main/build/`（符号位于 `debug-symbols/`） |
 | 当前签名资料（仅核元数据） | `_data/ddnovelreader/signing/` |
@@ -128,6 +128,10 @@ LocalApk 原子接收后已清退旧 1.2.27 完整包及相同签名输入副本
 ### 新页裁切后显示：1.3.6（40）
 
 78 项定向测试通过，静态分析无错误。新增逐帧断言覆盖关闭动画时向两个方向翻页，以及旧页遮盖撤下后的首个可见帧。离线 `DeliverApk` 成功（2 分 8 秒），固定证书验签及共享 Android SDK 完整树审计均通过。当前 ARM64 APK 为 19,618,321 字节，SHA-256 `e2164ac1ded844ba3a1c365bf0e4b0f4472486bf812fd23a715dca7888e53e82`。接收无待处理项，源根测试输出已清退；未安装设备或远端发布。
+
+### 朗读手动翻页与高亮：1.3.7（41）
+
+106 项定向测试通过，覆盖双向手动翻页的实际系统音源请求、旧语音回调和隐藏行的背景。离线构建、固定证书验签及共享 Android SDK 审计通过。当前 ARM64 APK 为 19,618,321 字节，SHA-256 `ffda06151210737f53c4c8b79f31fafbb9487ea6de29c82febb753fe8d3b3e06`；无待清理接收项。未安装设备或远端发布。
 
 ## 本地构建收尾与 APK 选择
 

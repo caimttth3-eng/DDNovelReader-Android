@@ -130,6 +130,15 @@ void main() {
       final boundary = ReaderTypography.sourceOffset(text, layoutOffset);
       expect(boundary, greaterThan(0)); expect(boundary, lessThan(text.length));
       expect(spoken.single['text'], const TextCleaner().clean(text).tts);
+      final highlight = StringBuffer();
+      void collect(InlineSpan span) {
+        if (span is! TextSpan) return;
+        if (span.style?.backgroundColor == const Color(0x44FFC107)) highlight.write(span.text);
+        for (final child in span.children ?? const <InlineSpan>[]) { collect(child); }
+      }
+      collect(render.text);
+      expect(highlight.toString().replaceAll('\u200B', ''), text.substring(0, boundary),
+        reason: 'The hidden next line must not paint a sentence background');
       final id = spoken.single['id'];
       await emit(tester, 'range', {'id': id, 'start': boundary - 3, 'end': boundary - 1});
       await tester.pumpAndSettle(); expect(viewport(), initial);
@@ -149,6 +158,36 @@ void main() {
       await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     }, timeout: const Timeout(Duration(seconds: 45)));
   }
+
+  testWidgets('manual turns seek to the landed page first glyph and ignore outgoing audio', (tester) async {
+    final text = List.generate(180, (i) => '${i.toString().padLeft(3, '0')}甲乙丙丁').join() + '。';
+    await open(tester, source('manual-page-speech', [text]), pageTurnMode: 'tap');
+    await start(tester);
+    final body = find.byKey(const ValueKey('reader-body'));
+    final clipFinder = find.byKey(const ValueKey('reader-page-clip'));
+    for (final x in [360.0, 360.0, 70.0]) {
+      final old = spoken.last['id'], count = spoken.length;
+      await tester.tapAt(Offset(x, 360));
+      await tester.pump();
+      await emit(tester, 'range', {'id': old, 'start': text.length - 8, 'end': text.length - 7});
+      await _until(tester, () => spoken.length > count, 'The manual turn must seek once.');
+      await tester.pumpAndSettle();
+      expect(spoken.length, count + 1);
+      final render = paragraph(tester, '000甲乙丙丁');
+      final origin = render.localToGlobal(Offset.zero).dy - tester.getTopLeft(body).dy;
+      final plain = render.text.toPlainText();
+      final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: plain.length),
+        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+      final clip = tester.widget<ClipRect>(clipFinder).clipper!.getClip(tester.getSize(clipFinder));
+      final row = boxes.firstWhere((box) => box.top + origin >= -.25 && box.bottom + origin <= clip.bottom + .25);
+      final offset = ReaderTypography.sourceOffset(text,
+        render.getPositionForOffset(Offset(-1, (row.top + row.bottom) / 2)).offset);
+      expect(offset, greaterThan(0));
+      expect(spoken.last['text'], const TextCleaner().clean(text.substring(offset)).tts);
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
 
   testWidgets('indented paragraph starts use complete glyph rows at page boundaries', (tester) async {
     final paragraphs = List.generate(24, (i) => '第${i}段' + List.filled(8, '甲乙丙丁').join() + '。');

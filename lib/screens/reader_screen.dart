@@ -166,6 +166,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   double? _pageClipBottom;
   bool _pageGeometryScheduled = false;
   String? _pageEndKey;
+  (int, int)? _pageHighlightEnd;
   Object? _pageMetricsKey;
   final Map<String, LongPressGestureRecognizer> _sentenceRecognizers = {};
   int _navigationGeneration = 0;
@@ -1113,6 +1114,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (leading > 0) spans.add(WidgetSpan(alignment: ui.PlaceholderAlignment.middle,
       child: SizedBox(width: _indentWidth(para), height: 1)));
     var cursor = leading;
+    final highlightBoundary = _pageHighlightEnd;
+    final pageHighlightLimit = highlightBoundary != null &&
+      _itemIndexOf(it.chapterIndex, it.paragraphIndex) == highlightBoundary.$1 ? highlightBoundary.$2 : null;
     for (var i = 0; i < para.sentences.length; i++) {
       final sentence = para.sentences[i];
       final start = sentence.displayStart.clamp(cursor, para.display.length);
@@ -1123,6 +1127,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (recognizer != null) recognizer.onLongPress = () => _onSentenceLongPress(_Item.sentence(it.chapterIndex, it.paragraphIndex, i), para);
       final marks = _hlIndex[_hlKey(it.chapterIndex, it.paragraphIndex)] ?? [];
       final points = <int>{start, end};
+      final highlightEnd = pageHighlightLimit?.clamp(start, end) ?? end;
+      if (current) points.add(highlightEnd);
       if (_settings.wordHighlightEnabled && current && _wordStart >= 0 && _wordEnd > _wordStart) {
         points.add(_wordStart.clamp(start, end)); points.add(_wordEnd.clamp(start, end));
       }
@@ -1133,10 +1139,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       for (var j = 0; j + 1 < sorted.length; j++) {
         final left = sorted[j], right = sorted[j + 1];
         final marked = marks.where((h) => h.charStart < right && h.charEnd > left);
-        final word = _settings.wordHighlightEnabled && current && _wordStart < right && _wordEnd > left && _wordStart >= 0;
+        final spoken = current && left < highlightEnd;
+        final word = _settings.wordHighlightEnabled && spoken && _wordStart < right && _wordEnd > left && _wordStart >= 0;
         spans.add(TextSpan(text: _layoutSegment(it, para.display.substring(left, right), left), recognizer: recognizer,
           style: TextStyle(color: word ? const Color(0xFF102A3A) : null,
-            backgroundColor: word ? const Color(0xFF9BC5DD) : current ? const Color(0x44FFC107) : marked.isEmpty ? null : Color(marked.last.color),
+            backgroundColor: word ? const Color(0xFF9BC5DD) : spoken ? const Color(0x44FFC107) : marked.isEmpty ? null : Color(marked.last.color),
             fontWeight: FontWeight.normal)));
       }
       cursor = end;
@@ -1321,6 +1328,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     });
     _applySystemUi();
     var moved = false, positioning = false;
+    (int, int, int, int)? speechTarget;
     try {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted || navigation != _navigationGeneration) return false;
@@ -1359,9 +1367,16 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       moved = visible.first.index != old.first.index ||
           (visible.first.itemLeadingEdge - old.first.itemLeadingEdge).abs() > 0.002;
       if (!moved) return false;
-      var targetItem = target.itemIndex;
-      while (targetItem < _items.length - 1 && _items[targetItem].isTitle) { targetItem++; }
-      if (seekSpeech) _updatePositionFromItem(targetItem);
+      if (seekSpeech) {
+        final targetItem = target.itemIndex;
+        if (_inReadingMode) {
+          speechTarget = _speechPositionAtPageStart(target);
+        } else {
+          var item = targetItem;
+          while (item < _items.length - 1 && _items[item].isTitle) { item++; }
+          _updatePositionFromItem(item);
+        }
+      }
       // Paint the new clip behind the old page before exposing it. Otherwise
       // the scroll can paint once using the previous page's clip.
       await WidgetsBinding.instance.endOfFrame;
@@ -1371,8 +1386,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         setState(() => _pageReady = true);
         await _pageAnimation.forward().orCancel;
       }
-      if (mounted && _inReadingMode && seekSpeech) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence),
-        displayOffset: _visibleDisplayOffset(_chapter, _para));
       return true;
     } on TickerCanceled {
       return false;
@@ -1385,7 +1398,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (mounted) {
         final image = _pageImage; _pageImage = null;
         setState(() { _outgoingPage = null; _pageReady = false; _paging = false; });
-        _flushPendingTtsUpdates();
+        final seek = speechTarget;
+        if (seek != null && _inReadingMode && navigation == _navigationGeneration) {
+          _pendingTtsSentence = null; _pendingTtsWord = null;
+          _playbackGeneration++;
+          setState(() {
+            _chapter = seek.$1; _para = seek.$2; _ttsSentence = seek.$3;
+            _wordStart = -1; _wordEnd = -1;
+          });
+          _speechPauseResumeCursor = seek;
+          _ttsFollowSeek(seek.$1, seek.$2, seek.$3, displayOffset: seek.$4);
+        } else {
+          _flushPendingTtsUpdates();
+        }
         WidgetsBinding.instance.addPostFrameCallback((_) => image?.dispose());
         _scheduleSave();
         if (!automatic && _autoActive && !_autoPaused) _autoClock.forward(from: 0);
@@ -1512,7 +1537,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       }
       for (final line in lines.entries) {
         result.add(_PageLine('${entry.key}/${line.key}', top + line.value.top,
-          top + line.value.bottom, entry.key));
+          top + line.value.bottom, entry.key, line.key));
       }
     }
     result.sort((a,b) => a.top.compareTo(b.top));
@@ -1537,13 +1562,43 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   void _updatePageGeometry() {
     if (_settings.pageTurnMode == 'scroll' && !_inReadingMode) {
-      if (_pageClipBottom != null) setState(() => _pageClipBottom = null);
+      if (_pageClipBottom != null || _pageHighlightEnd != null) setState(() {
+        _pageClipBottom = null; _pageHighlightEnd = null;
+      });
       return;
     }
     final rows = _pageLines();
     final page = _pageWindow(rows);
     final bottom = page == null ? _pageViewportHeight : min(_pageViewportHeight, rows[page.last].bottom);
-    if (_pageClipBottom != bottom) setState(() => _pageClipBottom = bottom);
+    final next = page == null || page.last + 1 >= rows.length ? null : rows[page.last + 1];
+    final highlightEnd = next == null ? null : (next.itemIndex, _pageLineDisplayOffset(next));
+    if (_pageClipBottom != bottom || _pageHighlightEnd != highlightEnd) setState(() {
+      _pageClipBottom = bottom;
+      _pageHighlightEnd = highlightEnd;
+    });
+  }
+
+  int _pageLineDisplayOffset(_PageLine line) {
+    final item = _items[line.itemIndex];
+    if (item.isTitle) return 0;
+    final paragraph = _book.chapters[item.chapterIndex].paragraphs[item.paragraphIndex];
+    return ReaderTypography.sourceOffset(paragraph.display, line.layoutOffset,
+      lineBreakAt: _lineBreakFor(item.chapterIndex, item.paragraphIndex));
+  }
+
+  (int, int, int, int)? _speechPositionAtPageStart(_PageLine line) {
+    for (var i = line.itemIndex; i < _items.length; i++) {
+      final item = _items[i];
+      if (item.isTitle) continue;
+      final paragraph = _book.chapters[item.chapterIndex].paragraphs[item.paragraphIndex];
+      final offset = i == line.itemIndex ? _pageLineDisplayOffset(line) : 0;
+      final sentence = paragraph.sentences.indexWhere((sentence) => sentence.displayEnd > offset);
+      if (sentence >= 0) {
+        return (item.chapterIndex, item.paragraphIndex, sentence,
+          max(offset, paragraph.sentences[sentence].displayStart));
+      }
+    }
+    return null;
   }
 
   bool _fitsPage(double bottom) => bottom <= _pageViewportHeight + 0.000001;
@@ -4983,8 +5038,8 @@ class _ReaderLineAnchor {
 class _PageLine {
   final String key;
   final double top, bottom;
-  final int itemIndex;
-  const _PageLine(this.key, this.top, this.bottom, this.itemIndex);
+  final int itemIndex, layoutOffset;
+  const _PageLine(this.key, this.top, this.bottom, this.itemIndex, this.layoutOffset);
 }
 
 class _ReaderPageClipper extends CustomClipper<Rect> {

@@ -639,11 +639,16 @@ void main() {
       speech.onSentenceChanged?.call(idx); speech.onWordChanged?.call(0, 3);
       await assertCursor(idx);
     }
-    // Deliver a complete sentence/word event while the 80 ms horizontal page
-    // animation is active. It must be replayed after the page settles.
+    // An event from the outgoing audio must not override the manual seek.
+    speech.recordJumps = true;
     await tester.tapAt(const Offset(360, 360)); await tester.pump(const Duration(milliseconds: 16));
     speech.onSentenceChanged?.call(60); speech.onWordChanged?.call(0, 3);
-    await assertCursor(60);
+    await tester.pumpAndSettle();
+    expect(speech.jumpCalls, 1);
+    expect(speech.currentIndex, isNot(60));
+    final position = speech.currentIndex;
+    speech.onSentenceChanged?.call(position); speech.onWordChanged?.call(0, 3);
+    await assertCursor(position);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
@@ -696,7 +701,8 @@ void main() {
         expect(blueText, expectedSentence == 0 ? '第1' : '山间',
           reason: 'A scroll notification must not move the word cursor back to the viewport start');
         final yellowText = yellow.map((span) => span.toPlainText().replaceAll('\u200B', '')).join();
-        expect(yellowText, expectedSentence == 0 ? '章第${expectedParagraph + 1}段。' : '的风吹过树林，远方传来朋友的问候。');
+        final trailing = expectedSentence == 0 ? '章第${expectedParagraph + 1}段。' : '的风吹过树林，远方传来朋友的问候。';
+        expect(trailing, startsWith(yellowText));
         final positions = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value;
         expect(positions.any((p) => p.index == expectedParagraph + 1 && p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0), isTrue);
         expect(tester.takeException(), isNull);
@@ -737,7 +743,8 @@ void main() {
       }
       final expected = sentence(idx ~/ 2, idx % 2);
       expect(blue, [expected.substring(0, 2)]);
-      expect(yellow.join(), expected.substring(2));
+      expect(expected.substring(2), startsWith(yellow.join()),
+        reason: 'Only the on-page part of the sentence gets a yellow background');
       expect(paragraph, contains(expected));
     }
     emit(5); await tester.pumpAndSettle(); assertCursor(5);
