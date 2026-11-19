@@ -1312,7 +1312,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final navigation = ++_navigationGeneration;
     final boundary = _pageBoundary.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     try {
-      if (_settings.pageTurnAnimation == 'slide' && boundary != null && !boundary.debugNeedsPaint) {
+      if ((direction < 0 || _settings.pageTurnAnimation == 'slide') && boundary != null && !boundary.debugNeedsPaint) {
         _pageImage = boundary.toImageSync(pixelRatio: MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.0));
       }
     } catch (_) { /* A page turn still works if a frame cannot be captured. */ }
@@ -1330,29 +1330,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted || navigation != _navigationGeneration) return false;
       final rows = _pageLines();
-      final clip = _pageClipBottom ?? _bodyHeight;
-      final complete = rows.where((r) => r.top >= -0.5 && r.bottom <= clip + 0.5).toList();
+      final complete = _completePageRows(rows);
       if (complete.isEmpty) return false;
       final retain = seekSpeech && _settings.pageTurnMode != 'scroll' && _settings.retainPageLine && complete.length > 1;
-      _PageLine? target;
+      final _PageLine? target;
       if (direction > 0) {
-        final last = complete.last;
-        final candidates = rows.where((r) => r.top >= last.bottom - 0.5 && r.key != last.key).toList();
-        if (candidates.isEmpty) return false;
-        target = retain ? last : candidates.first;
+        final next = rows.indexOf(complete.last) + 1;
+        if (next >= rows.length) return false;
+        target = retain ? complete.last : rows[next];
         _pageEndKey = null;
       } else {
-        final first = complete.first;
-        final candidates = rows.where((r) => retain ? r.top <= first.top + 0.5 : r.bottom <= first.top + 0.5).toList();
-        if (candidates.isEmpty || retain && candidates.every((line) => line.key == first.key)) {
-          target = await _preparePreviousPage(first, navigation, retain: retain);
-          if (target == null) return false;
-        } else {
-          final end = candidates.last;
-          final fitting = candidates.where((r) => end.bottom - r.top <= _bodyHeight + 0.5).toList();
-          if (fitting.isEmpty) return false;
-          target = fitting.first; _pageEndKey = end.key;
-        }
+        target = _previousPageTarget(rows, complete.first.key, retain: retain) ??
+          await _preparePreviousPage(complete.first, navigation, retain: retain);
+        if (target == null || target.key == complete.first.key) return false;
       }
       // Move to an actual text-line boundary behind the frozen outgoing page.
       if (!await _alignPageLine(target, navigation)) return false;
@@ -1365,7 +1355,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       moved = visible.first.index != old.first.index ||
           (visible.first.itemLeadingEdge - old.first.itemLeadingEdge).abs() > 0.002;
       if (!moved) return false;
-      var targetItem = visible.first.index;
+      var targetItem = target.itemIndex;
       while (targetItem < _items.length - 1 && _items[targetItem].isTitle) { targetItem++; }
       if (seekSpeech) _updatePositionFromItem(targetItem);
       if (_settings.pageTurnAnimation == 'slide') {
@@ -1405,30 +1395,27 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (!mounted || navigation != _navigationGeneration) return null;
     final previous = _pageLines().where((line) => line.itemIndex == previousItem).toList();
     if (previous.isEmpty) return null;
-    var endKey = previous.last.key;
-    await _pageScrollController.animateScroll(offset: previous.last.bottom - _bodyHeight,
+    final endKey = previous.last.key;
+    await _pageScrollController.animateScroll(offset: previous.last.bottom - _pageViewportHeight,
       duration: const Duration(milliseconds: 1));
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || navigation != _navigationGeneration) return null;
-    var rows = _pageLines();
-    if (retain) {
-      final overlap = rows.where((line) => line.key == first.key);
-      if (overlap.isNotEmpty) {
-        endKey = first.key;
-        await _pageScrollController.animateScroll(offset: overlap.first.bottom - _bodyHeight,
-          duration: const Duration(milliseconds: 1));
-        await WidgetsBinding.instance.endOfFrame;
-        if (!mounted || navigation != _navigationGeneration) return null;
-        rows = _pageLines();
-      }
-    }
-    final ends = rows.where((line) => line.key == endKey);
-    if (ends.isEmpty) return null;
-    final end = ends.first;
-    final fitting = rows.where((line) => line.bottom <= end.bottom + 0.5 && end.bottom - line.top <= _bodyHeight + 0.5).toList();
-    if (fitting.isEmpty) return null;
+    final rows = _pageLines();
+    return _previousPageTarget(rows, first.key, retain: retain, fallbackEndKey: endKey);
+  }
+
+  _PageLine? _previousPageTarget(List<_PageLine> rows, String firstKey,
+      {required bool retain, String? fallbackEndKey}) {
+    final first = rows.indexWhere((line) => line.key == firstKey);
+    final endIndex = first > 0 ? first - (retain ? 0 : 1) :
+      rows.indexWhere((line) => line.key == fallbackEndKey);
+    if (endIndex < 0) return null;
+    final end = rows[endIndex];
+    var start = endIndex;
+    while (start > 0 && _fitsPage(end.bottom - rows[start - 1].top)) { start--; }
+    if (first >= 0 && start >= first) return null;
     _pageEndKey = end.key;
-    return fitting.first;
+    return rows[start];
   }
 
   Future<bool> _alignPageLine(_PageLine target, int navigation) async {
@@ -1479,18 +1466,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       final text = render.text.toPlainText();
       final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
         boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
-      final lines = <Rect>[];
+      final lines = <int, Rect>{};
       for (final box in boxes) {
         final rect = box.toRect();
         if (rect.width < 0.01 || rect.height < 2) continue;
-        final row = lines.indexWhere((r) => (r.top - rect.top).abs() < 0.5);
-        if (row < 0) lines.add(rect); else lines[row] = lines[row].expandToInclude(rect);
-      }
-      for (final rect in lines) {
-        final left = render.getPositionForOffset(Offset(rect.left - 1, rect.center.dy)).offset;
-        final right = render.getPositionForOffset(Offset(rect.right + 1, rect.center.dy)).offset;
+        // A visual row can contain several boxes (font fallback, bidi and
+        // indentation). Use the caret positions of the entire row as its key.
+        final left = render.getPositionForOffset(Offset(-1, rect.center.dy)).offset;
+        final right = render.getPositionForOffset(Offset(render.size.width + 1, rect.center.dy)).offset;
         final start = min(left, right);
-        result.add(_PageLine('${entry.key}/$start', top + rect.top, top + rect.bottom, entry.key));
+        lines.update(start, (row) => row.expandToInclude(rect), ifAbsent: () => rect);
+      }
+      for (final line in lines.entries) {
+        result.add(_PageLine('${entry.key}/${line.key}', top + line.value.top,
+          top + line.value.bottom, entry.key));
       }
     }
     result.sort((a,b) => a.top.compareTo(b.top));
@@ -1519,14 +1508,17 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       return;
     }
     final rows = _pageLines();
-    var limit = _bodyExtent;
-    if (_pageEndKey != null) {
-      final ends = rows.where((r) => r.key == _pageEndKey);
-      if (ends.isNotEmpty) limit = min(limit, ends.first.bottom);
-    }
-    final full = rows.where((r) => r.bottom <= limit + 0.25 && r.top >= -0.25).toList();
-    final bottom = full.isEmpty ? _bodyExtent : min(_bodyExtent, full.last.bottom);
-    if (_pageClipBottom == null || (_pageClipBottom! - bottom).abs() > 0.25) setState(() => _pageClipBottom = bottom);
+    final full = _completePageRows(rows);
+    final bottom = full.isEmpty ? _pageViewportHeight : min(_pageViewportHeight, full.last.bottom);
+    if (_pageClipBottom != bottom) setState(() => _pageClipBottom = bottom);
+  }
+
+  bool _fitsPage(double bottom) => bottom <= _pageViewportHeight + 0.000001;
+
+  List<_PageLine> _completePageRows(List<_PageLine> rows) {
+    final end = rows.indexWhere((row) => row.key == _pageEndKey);
+    final candidates = end < 0 ? rows : rows.take(end + 1);
+    return candidates.where((row) => row.top >= -0.25 && _fitsPage(row.bottom)).toList();
   }
 
   // Skip chapter headings and empty sentences, including at chapter boundaries.
@@ -2392,16 +2384,16 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _schedulePageGeometry();
   }
 
-  RenderBox? get _ttsBodyBox {
+  RenderBox? get _pageBodyBox {
     final render = _pageBoundary.currentContext?.findRenderObject();
     return render is RenderBox && render.hasSize ? render : null;
   }
 
-  double get _ttsBodyHeight => _ttsBodyBox?.size.height ?? _bodyExtent;
-  double get _ttsVisibleBottom => min(_ttsBodyHeight, _pageClipBottom ?? _ttsBodyHeight);
+  double get _pageViewportHeight => _pageBodyBox?.size.height ?? _bodyExtent;
+  double get _ttsVisibleBottom => min(_pageViewportHeight, _pageClipBottom ?? _pageViewportHeight);
 
   Rect? _ttsGlyphRect(int c, int p, int offset) {
-    final body = _ttsBodyBox;
+    final body = _pageBodyBox;
     final render = _paragraphKeys[_itemIndexOf(c, p)]?.currentContext?.findRenderObject();
     if (body == null || render is! RenderParagraph || !render.hasSize) return null;
     final paragraph = _book.chapters[c].paragraphs[p];
@@ -2487,7 +2479,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       textScaler: MediaQuery.textScalerOf(context));
     if (ReaderTypography.leadingLength(paragraph.display) > 0) painter.setPlaceholderDimensions([
       PlaceholderDimensions(size: Size(_indentWidth(paragraph), 1), alignment: ui.PlaceholderAlignment.middle)]);
-    painter.layout(maxWidth: (_ttsBodyBox?.size.width ?? MediaQuery.sizeOf(context).width) - 32);
+    painter.layout(maxWidth: (_pageBodyBox?.size.width ?? MediaQuery.sizeOf(context).width) - 32);
     final boxes = painter.getBoxesForSelection(TextSelection(baseOffset: _renderOffset(c, p, offset),
       extentOffset: _renderOffset(c, p, min(offset + 1, paragraph.display.length))));
     final top = boxes.isEmpty ? 0.0 : boxes.first.top + 10;

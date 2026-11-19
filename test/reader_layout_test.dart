@@ -1891,6 +1891,12 @@ void main() {
             expect(row.top, greaterThanOrEqualTo(clip.top - 0.5), reason: 'A TOC jump followed by previous page must not expose a clipped first row');
             expect(row.bottom, lessThanOrEqualTo(clip.bottom + 0.5), reason: 'The previous page must end on a whole row');
           }
+          for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: render.text.toPlainText().length))) {
+            final glyph = box.toRect().shift(origin);
+            if (glyph.width < 0.01 || glyph.bottom <= clip.top + 0.01 || glyph.top >= clip.bottom - 0.01) continue;
+            expect(glyph.bottom, lessThanOrEqualTo(clip.bottom + 0.01),
+              reason: 'The clip must not reveal a sliver of the next glyph at fractional offsets');
+          }
         }
         expect(visible, isNotEmpty);
         if (checkToolbar) {
@@ -1922,7 +1928,14 @@ void main() {
           final target = previous.isEmpty || previous.last.$2.bottom - previous.first.$2.top < bounds.height - 0.5
             ? null : previous.firstWhere((row) => previous.last.$2.bottom - row.$2.top <= bounds.height + 0.5).$1;
           final precedingBoundary = previous.isEmpty ? null : previous.last.$1;
-          await tester.tapAt(const Offset(60, 360)); await tester.pumpAndSettle();
+          await tester.tapAt(const Offset(60, 360));
+          await tester.pump();
+          final outgoing = find.byKey(const ValueKey('page-outgoing-transform'));
+          expect(outgoing, findsOneWidget, reason: 'The previous-page search must not expose its intermediate viewport');
+          expect(tester.widget<FractionalTranslation>(outgoing).translation, Offset.zero,
+            reason: 'Turning animation is disabled; keep the old page stationary until the new one is ready');
+          await tester.pumpAndSettle();
+          expect(outgoing, findsNothing);
           expect(viewportAnchor(), isNot(before), reason: 'Each left-side tap must really move to the previous page');
           final landed = laidOutRows().firstWhere((row) => row.$2.bottom > tester.getRect(body).top + 0.5);
           if (target != null) {
