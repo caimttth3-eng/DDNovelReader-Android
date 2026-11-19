@@ -7,8 +7,7 @@ import '../services/sync_engine.dart';
 
 /// 数据同步（WebDAV）。与 PC 版「设置 → 数据同步」同一套协议：
 /// 远端 v1/books/<content_key>.json、v1/devices/<device_id>.json、v1/meta.json。
-/// 只同步书架元信息、阅读进度与书签；正文与音频缓存不上传
-/// （音频缓存靠两端相同的 content_key 目录名互相复用）。
+/// 同步书架、进度、书签、书源文件和删除记录；音频缓存不上传。
 class SyncScreen extends StatefulWidget {
   final AppStorage storage;
   final AnnotationStore annotations;
@@ -42,8 +41,7 @@ class SyncScreen extends StatefulWidget {
 }
 
 class _SyncScreenState extends State<SyncScreen> {
-  static const _paper = Color(0xFFF7F0E3);
-  static const _ink = Color(0xFF5D3A1A);
+  ColorScheme get _colors => Theme.of(context).colorScheme;
 
   final _serverCtl = TextEditingController();
   final _userCtl = TextEditingController();
@@ -63,6 +61,12 @@ class _SyncScreenState extends State<SyncScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    for (final controller in [_serverCtl, _userCtl, _passCtl, _dirCtl]) { controller.dispose(); }
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -150,28 +154,28 @@ class _SyncScreenState extends State<SyncScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF8A7360))),
+              style: TextStyle(fontSize: 12, color: _colors.onSurfaceVariant)),
           const SizedBox(height: 4),
           TextField(
             controller: ctl,
             obscureText: obscure,
             keyboardType: type,
-            style: const TextStyle(fontSize: 14),
+            style: TextStyle(fontSize: 14, color: _colors.onSurface),
             decoration: InputDecoration(
               isDense: true,
               hintText: hint,
-              hintStyle: const TextStyle(fontSize: 12, color: Color(0xFFA99680)),
+              hintStyle: TextStyle(fontSize: 12, color: _colors.onSurfaceVariant),
               filled: true,
-              fillColor: Colors.white,
+              fillColor: _colors.surfaceContainerHighest,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: Color(0xFFD8C7AE)),
+                borderSide: BorderSide(color: _colors.outline),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: Color(0xFFD8C7AE)),
+                borderSide: BorderSide(color: _colors.outline),
               ),
             ),
           ),
@@ -184,7 +188,7 @@ class _SyncScreenState extends State<SyncScreen> {
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     return Dialog(
-      backgroundColor: _paper,
+      backgroundColor: _colors.surface,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
@@ -200,15 +204,15 @@ class _SyncScreenState extends State<SyncScreen> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.cloud_sync_outlined, color: _ink),
+                  Icon(Icons.cloud_sync_outlined, color: _colors.primary),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       T('syncData'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: _ink,
+                        color: _colors.onSurface,
                       ),
                     ),
                   ),
@@ -221,9 +225,10 @@ class _SyncScreenState extends State<SyncScreen> {
               const SizedBox(height: 4),
               Text(
                 _lastText,
-                style: const TextStyle(fontSize: 12, color: Color(0xFF8A7360)),
+                style: TextStyle(fontSize: 12, color: _colors.onSurfaceVariant),
               ),
               const SizedBox(height: 10),
+              Text(T('syncScope'), style: TextStyle(fontSize: 12, color: _colors.onSurfaceVariant)),
               Flexible(
                 child: SingleChildScrollView(
                   child: Column(
@@ -271,8 +276,7 @@ class _SyncScreenState extends State<SyncScreen> {
                     _status,
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B5B4B)),
+                    style: TextStyle(fontSize: 12, color: _colors.onSurface),
                   ),
                 ),
               const SizedBox(height: 4),
@@ -296,10 +300,6 @@ class _SyncScreenState extends State<SyncScreen> {
                   const SizedBox(width: 8),
                   FilledButton(
                     onPressed: _busy ? null : () => _run(false),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _ink,
-                      foregroundColor: Colors.white,
-                    ),
                     child: Text(_busy ? T('syncRunning') : T('syncRun')),
                   ),
                 ],

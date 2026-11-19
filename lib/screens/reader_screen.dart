@@ -1,6 +1,5 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
@@ -33,7 +32,6 @@ import '../services/annotation_store.dart';
 import '../services/app_storage.dart';
 import '../services/book_cache_task.dart';
 import '../services/edge_tts.dart';
-import '../services/diag_log.dart';
 import '../services/font_manager.dart';
 import '../services/tts_audio_handler.dart';
 import '../services/playback_notifications.dart';
@@ -169,13 +167,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   double? _pageClipBottom;
   bool _pageGeometryScheduled = false;
   String? _pageEndKey;
+  (int, int)? _pageHighlightEnd;
+  Object? _pageMetricsKey;
   final Map<String, LongPressGestureRecognizer> _sentenceRecognizers = {};
   int _navigationGeneration = 0;
   bool _restoringProgress = true;
-
-  /// 本页手里的进度版本时间（= BookProgress.updatedAt），用于同步守卫：
-  /// 存储里若有更新的进度（别的设备推来的），不要用旧位置覆盖它。
   double _ownProgressAt = 0;
+  bool _syncing = false;
   bool _restoringViewport = false;
   int? _flowChapter, _flowParagraph, _flowOffset;
   int _viewRevision = 0;
@@ -245,7 +243,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   (int, int)? _pendingTtsWord;
   String _wordMapKey = '';
   CleanedText? _wordMap;
-  bool _followingWord = false;
+  Future<bool>? _speechPageFollow;
+  Completer<void>? _speechPagePreparation;
   bool _isPlaying = false;
   int _playbackGeneration = 0;
   _SentenceDragSession? _sentenceDrag;
@@ -260,9 +259,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   MediaSpeechText? _mediaSpeechText;
   // TTS 合成加载中（点击播放/恢复后等待首句出声；期间防误触）
   bool _ttsLoading = false;
-
-  /// 阅读页「一键同步」进行中
-  bool _syncing = false;
 
   // 系统媒体音量（音量键正常调节，暂停面板也提供滑条）
   double _mediaVolume = 1.0;
@@ -336,6 +332,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _networkSubscription = NetworkConnectivity().availability.listen(_tts.setNetworkAvailable);
     _tts.onSentenceChanged = _onTtsSentenceChanged;
     _tts.onWordChanged = _onTtsWordChanged;
+    _tts.onPreparePlayback = _prepareSpeechPage;
     _tts.onCompleted = _onTtsCompleted;
     _tts.onError = _onTtsError;
     _tts.onStateChanged = _syncSpeechPlaybackState;
@@ -411,6 +408,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void dispose() {
+    _releaseSpeechPagePreparation();
     _sentenceDrag = null;
     AppAppearance.nightMode.removeListener(_onAppearanceChanged);
     _networkSubscription?.cancel();
@@ -429,9 +427,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _saveProgress();
     _sleepTimer?.cancel();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-    if (Platform.isAndroid) {
-      _volumeChannel.invokeMethod('resetScreenBrightness').catchError((Object _) {});
-    }
+    _volumeChannel.invokeMethod('resetScreenBrightness');
     // 恢复系统默认系统栏样式（书架页浅色背景使用深色图标）
     _restoreSystemUiForExit();
     _gestureTipTimer?.cancel();
@@ -487,10 +483,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _leavingReader = true; _playbackGeneration++; _permissionGate?.cancel(); _sentenceDrag = null;
     _syncScreenAwake();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge).catchError((Object _) {});
-    final dark = AppAppearance.nightMode.value;
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(statusBarColor: Colors.transparent,
-      statusBarIconBrightness: dark ? Brightness.light : Brightness.dark, systemNavigationBarColor: Colors.transparent,
-      systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark));
+    SystemChrome.setSystemUIOverlayStyle(AppAppearance.systemUiStyle(
+      AppAppearance.nightMode.value ? Brightness.dark : Brightness.light));
   }
 
   ReaderHeaderLayout get _headerLayout {
@@ -566,7 +560,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       indent: _settings.firstLineIndent,
       pauseSettings: _settings.effectiveSpeechPauses,
       filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none');
-    _installFormattedBook(book, 'words1-${ReadingText.fingerprint(book)}');
+    _installFormattedBook(book, 'words2-${ReadingText.fingerprint(book)}');
     _rebuildToc();
   }
 
@@ -670,14 +664,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _applySystemUi();
     _tts.setSpeechRate(_settings.speechRate);
     _tts.setPrefetchSentences(_settings.prefetchSentences);
+    _tts.setSystemFallbackEnabled(_settings.systemFallbackEnabled);
     _applyRotationPreference();
     final restoreFallback = _settings.systemFallbackActive;
     _tts.setVoice(_settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice);
     _tts.restoreSystemFallback(restoreFallback);
     final atTitle = p == null || p.atChapterTitle ||
-      (p.layoutSignature.isEmpty && p.paragraphIndex == 0 && p.offsetInParagraph == 0);
+      (p.layoutSignature.isEmpty && p.paragraphIndex == 0 && p.offsetInParagraph == 0 && (p.charOffsetInChapter ?? 0) == 0);
     _lastProgress = p;
     _ownProgressAt = p?.updatedAt ?? 0;
+    if (p?.charOffsetInChapter != null) {
+      final c = p!.chapterIndex.clamp(0, _book.chapters.length - 1);
+      final location = widget.book.locateByCharOffset(c, p.charOffsetInChapter!);
+      p = p.copyWith(chapterAnchor: ReadingText.anchor(widget.book, c, location.$1, location.$2));
+    }
     if (p != null && p.flowChapter != null && p.flowAnchor != null && p.flowChapter! < _book.chapters.length) {
       final location = ReadingText.locate(_book, p.flowChapter!, p.flowAnchor!);
       _setFlowBreak(p.flowChapter!, location.$1, location.$2);
@@ -711,12 +711,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _saveProgress() async {
     if (!_settingsLoaded || _restoringProgress) return;
-    // 同步守卫：存储里的进度比本页更新时，放弃本次保存（避免旧位置盖掉新进度）
     final stored = await widget.storage.loadProgress(_book.id);
-    if (stored != null && stored.updatedAt > _ownProgressAt + 0.5) {
-      _ownProgressAt = stored.updatedAt;
-      return;
-    }
+    if (stored != null && stored.updatedAt > _ownProgressAt + 0.5) return;
     final visible = mounted ? _visibleItems() : <ItemPosition>[];
     final first = visible.isEmpty ? null : visible.first;
     final it = first == null ? null : _items[first.index];
@@ -726,10 +722,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final offset = _inReadingMode && _ttsSentence >= 0 && _ttsSentence < para.sentences.length
       ? para.sentences[_ttsSentence].displayStart : first != null && !(it?.isTitle ?? true)
         ? _visibleOffset(first) : 0;
-    final now = DateTime.now().millisecondsSinceEpoch / 1000.0;
+    final sourceAnchor = ReadingText.anchor(_book, c, paraIndex, offset);
+    final sourcePosition = ReadingText.locate(widget.book, c, sourceAnchor);
     final p = BookProgress(bookId: _book.id, chapterIndex: c, paragraphIndex: paraIndex,
-      updatedAt: now,
-      charOffsetInChapter: _book.charOffsetOf(c, paraIndex, offset),
+      charOffsetInChapter: widget.book.charOffsetOf(c, sourcePosition.$1, sourcePosition.$2),
       offsetInParagraph: offset, chapterAnchor: ReadingText.anchor(_book, c, paraIndex, offset),
       percent: _percent, viewportItem: first?.index ?? _lastProgress?.viewportItem,
       viewportAlignment: first?.itemLeadingEdge ?? _lastProgress?.viewportAlignment ?? 0,
@@ -738,28 +734,29 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       flowChapter: _flowChapter, flowAnchor: _flowChapter != null && _flowParagraph != null && _flowOffset != null
         ? ReadingText.anchor(_book, _flowChapter!, _flowParagraph!, _flowOffset!) : null);
     _lastProgress = p;
-    _ownProgressAt = now;
+    _ownProgressAt = p.updatedAt;
     await widget.storage.saveProgress(p);
     await widget.onProgressChanged?.call(p);
   }
 
-  /// 阅读页一键同步：与书架「数据同步」同一引擎，成功后提示结果
+  // ---------- 书签与划线 ----------
+
   Future<void> _syncNow() async {
     if (_syncing) return;
-    final engine =
-        SyncEngine(storage: widget.storage, annotations: AnnotationStore());
-    final s = await engine.settings();
-    if (!engine.configured(s)) {
-      _showToast(T('syncNotConfigured'));
+    final engine = SyncEngine(storage: widget.storage, annotations: AnnotationStore());
+    if (!engine.configured(await engine.settings())) {
+      if (mounted) _showToast(T('syncNotConfigured'));
       return;
     }
+    if (!mounted) return;
     setState(() => _syncing = true);
     final report = await engine.sync();
     if (!mounted) return;
     setState(() => _syncing = false);
-    _showToast(report.ok ? report.summary : (report.error ?? T('syncFailed')));
+    _showToast(report.ok ? report.summary : report.error);
+    if (report.removedIds.contains(_book.id)) Navigator.of(context).pop();
+    else if (report.ok) await _loadAnnotations();
   }
-  // ---------- 书签与划线 ----------
 
   Future<void> _loadAnnotations() async {
     final store = AnnotationStore();
@@ -1118,6 +1115,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (leading > 0) spans.add(WidgetSpan(alignment: ui.PlaceholderAlignment.middle,
       child: SizedBox(width: _indentWidth(para), height: 1)));
     var cursor = leading;
+    final highlightBoundary = _pageHighlightEnd;
+    final pageHighlightLimit = highlightBoundary != null &&
+      _itemIndexOf(it.chapterIndex, it.paragraphIndex) == highlightBoundary.$1 ? highlightBoundary.$2 : null;
     for (var i = 0; i < para.sentences.length; i++) {
       final sentence = para.sentences[i];
       final start = sentence.displayStart.clamp(cursor, para.display.length);
@@ -1128,6 +1128,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (recognizer != null) recognizer.onLongPress = () => _onSentenceLongPress(_Item.sentence(it.chapterIndex, it.paragraphIndex, i), para);
       final marks = _hlIndex[_hlKey(it.chapterIndex, it.paragraphIndex)] ?? [];
       final points = <int>{start, end};
+      final highlightEnd = pageHighlightLimit?.clamp(start, end) ?? end;
+      if (current) points.add(highlightEnd);
       if (_settings.wordHighlightEnabled && current && _wordStart >= 0 && _wordEnd > _wordStart) {
         points.add(_wordStart.clamp(start, end)); points.add(_wordEnd.clamp(start, end));
       }
@@ -1138,10 +1140,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       for (var j = 0; j + 1 < sorted.length; j++) {
         final left = sorted[j], right = sorted[j + 1];
         final marked = marks.where((h) => h.charStart < right && h.charEnd > left);
-        final word = _settings.wordHighlightEnabled && current && _wordStart < right && _wordEnd > left && _wordStart >= 0;
+        final spoken = current && left < highlightEnd;
+        final word = _settings.wordHighlightEnabled && spoken && _wordStart < right && _wordEnd > left && _wordStart >= 0;
         spans.add(TextSpan(text: _layoutSegment(it, para.display.substring(left, right), left), recognizer: recognizer,
           style: TextStyle(color: word ? const Color(0xFF102A3A) : null,
-            backgroundColor: word ? const Color(0xFF9BC5DD) : current ? const Color(0x44FFC107) : marked.isEmpty ? null : Color(marked.last.color),
+            backgroundColor: word ? const Color(0xFF9BC5DD) : spoken ? const Color(0x44FFC107) : marked.isEmpty ? null : Color(marked.last.color),
             fontWeight: FontWeight.normal)));
       }
       cursor = end;
@@ -1250,7 +1253,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || generation != _navigationGeneration) return;
     if (alignment < 0) {
-      final height = _bodyHeight;
+      final height = _pageViewportHeight;
       await _pageScrollController.animateScroll(offset: -alignment * height, duration: const Duration(milliseconds: 1));
       await WidgetsBinding.instance.endOfFrame;
     }
@@ -1303,22 +1306,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   void _pageDown() => _turnPage(1);
 
-  Future<bool> _turnPage(int direction, {bool automatic = false}) async {
-    if (_ttsLoading || _paging || _items.isEmpty || !_itemScrollController.isAttached) return false;
+  Future<bool> _turnPage(int direction, {bool automatic = false, bool seekSpeech = true}) async {
+    if (_ttsLoading && !automatic || _paging || _items.isEmpty || !_itemScrollController.isAttached) return false;
     final old = _visibleItems();
     if (old.isEmpty) return false;
     final oldEndKey = _pageEndKey, oldClipBottom = _pageClipBottom;
     if (!automatic && _autoActive) _autoClock.stop();
     _paging = true;
+    // Automatic motion must retain words received after the sentence callback.
+    if (!seekSpeech && _pendingTtsSentence == null && _ttsSentence >= 0) {
+      _pendingTtsSentence = (_ttsChapter, _chapterSentenceStart(_chapter, _para) + _ttsSentence);
+    }
     _pendingScrollIndex = null;
     final navigation = ++_navigationGeneration;
-    final boundary = _pageBoundary.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    try {
-      if (_settings.pageTurnAnimation == 'slide' && boundary != null && !boundary.debugNeedsPaint) {
-        _pageImage = boundary.toImageSync(pixelRatio: MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.0));
-      }
-    } catch (_) { /* A page turn still works if a frame cannot be captured. */ }
-    if (!mounted) { _pageImage?.dispose(); _pageImage = null; return false; }
+    _captureOutgoingPage();
     setState(() {
       // Returning to the page dismisses overlay bars. In a cutout layout the
       // toolbar can extend below the fixed header and otherwise hide its first row.
@@ -1327,61 +1328,70 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _outgoingPage = _pageImage == null ? null : RawImage(image: _pageImage, fit: BoxFit.fill);
     });
     _applySystemUi();
-    var moved = false;
+    var moved = false, positioning = false;
+    (int, int, int, int)? speechTarget;
     try {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted || navigation != _navigationGeneration) return false;
-      final rows = _pageLines();
-      final clip = _pageClipBottom ?? _bodyHeight;
-      final complete = rows.where((r) => r.top >= -0.5 && r.bottom <= clip + 0.5).toList();
-      if (complete.isEmpty) return false;
-      final retain = _settings.pageTurnMode != 'scroll' && _settings.retainPageLine && complete.length > 1;
-      _PageLine? target;
-      if (direction > 0) {
-        final last = complete.last;
-        final candidates = rows.where((r) => r.top >= last.bottom - 0.5 && r.key != last.key).toList();
-        if (candidates.isEmpty) return false;
-        target = retain ? last : candidates.first;
-        _pageEndKey = null;
-      } else {
-        final first = complete.first;
-        final candidates = rows.where((r) => retain ? r.top <= first.top + 0.5 : r.bottom <= first.top + 0.5).toList();
-        if (candidates.isEmpty || retain && candidates.every((line) => line.key == first.key)) {
-          target = await _preparePreviousPage(first, navigation, retain: retain);
-          if (target == null) return false;
-        } else {
-          final end = candidates.last;
-          final fitting = candidates.where((r) => end.bottom - r.top <= _bodyHeight + 0.5).toList();
-          if (fitting.isEmpty) return false;
-          target = fitting.first; _pageEndKey = end.key;
-        }
+      if (_pageImage == null) {
+        // A repaint pending at the tap is now complete, before any scrolling.
+        _captureOutgoingPage();
+        if (_pageImage != null) setState(() => _outgoingPage = RawImage(image: _pageImage, fit: BoxFit.fill));
       }
-      // Move to an actual text-line boundary behind the frozen outgoing page.
+      final rows = _pageLines();
+      final page = _pageWindow(rows);
+      if (page == null) return false;
+      final retain = seekSpeech && _settings.pageTurnMode != 'scroll' && _settings.retainPageLine && page.last > page.first;
+      final _PageLine target;
+      String? endKey;
+      if (direction > 0) {
+        final next = page.last + 1;
+        if (next >= rows.length) return false;
+        target = rows[retain ? page.last : next];
+      } else {
+        final first = rows[page.first];
+        var previous = _previousPageTarget(rows, first.key, retain: retain);
+        if (previous == null && first.itemIndex > 0) {
+          positioning = true;
+          previous = await _preparePreviousPage(first, navigation, retain: retain);
+        }
+        if (previous == null || previous.start.key == first.key) return false;
+        target = previous.start;
+        endKey = previous.endKey;
+      }
+      positioning = true;
       if (!await _alignPageLine(target, navigation)) return false;
+      _pageEndKey = endKey;
       _updatePageGeometry();
       final visible = _visibleItems();
-      if (visible.isEmpty) {
-        await _positionViewport(old.first.index, old.first.itemLeadingEdge);
-        return false;
-      }
+      if (visible.isEmpty) return false;
       moved = visible.first.index != old.first.index ||
           (visible.first.itemLeadingEdge - old.first.itemLeadingEdge).abs() > 0.002;
       if (!moved) return false;
-      var targetItem = visible.first.index;
-      while (targetItem < _items.length - 1 && _items[targetItem].isTitle) { targetItem++; }
-      _updatePositionFromItem(targetItem);
+      if (seekSpeech) {
+        final targetItem = target.itemIndex;
+        if (_inReadingMode) {
+          speechTarget = _speechPositionAtPageStart(target);
+        } else {
+          var item = targetItem;
+          while (item < _items.length - 1 && _items[item].isTitle) { item++; }
+          _updatePositionFromItem(item);
+        }
+      }
+      // Paint the new clip behind the old page before exposing it. Otherwise
+      // the scroll can paint once using the previous page's clip.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || navigation != _navigationGeneration) return false;
       if (_settings.pageTurnAnimation == 'slide') {
         _pageAnimation.value = 0;
         setState(() => _pageReady = true);
         await _pageAnimation.forward().orCancel;
       }
-      if (mounted && _inReadingMode) _ttsFollowSeek(_chapter, _para, max(0, _ttsSentence),
-        displayOffset: _visibleDisplayOffset(_chapter, _para));
       return true;
     } on TickerCanceled {
       return false;
     } finally {
-      if (mounted && !moved && navigation == _navigationGeneration) {
+      if (mounted && positioning && !moved && navigation == _navigationGeneration) {
         _pageEndKey = oldEndKey;
         await _positionViewport(old.first.index, old.first.itemLeadingEdge);
         if (mounted) _pageClipBottom = oldClipBottom;
@@ -1389,7 +1399,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (mounted) {
         final image = _pageImage; _pageImage = null;
         setState(() { _outgoingPage = null; _pageReady = false; _paging = false; });
-        _flushPendingTtsUpdates();
+        final seek = speechTarget;
+        if (seek != null && _inReadingMode && navigation == _navigationGeneration) {
+          _pendingTtsSentence = null; _pendingTtsWord = null;
+          _playbackGeneration++;
+          setState(() {
+            _chapter = seek.$1; _para = seek.$2; _ttsSentence = seek.$3;
+            _wordStart = -1; _wordEnd = -1;
+          });
+          _speechPauseResumeCursor = seek;
+          _ttsFollowSeek(seek.$1, seek.$2, seek.$3, displayOffset: seek.$4);
+        } else {
+          _flushPendingTtsUpdates();
+        }
         WidgetsBinding.instance.addPostFrameCallback((_) => image?.dispose());
         _scheduleSave();
         if (!automatic && _autoActive && !_autoPaused) _autoClock.forward(from: 0);
@@ -1397,7 +1419,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
   }
 
-  Future<_PageLine?> _preparePreviousPage(_PageLine first, int navigation, {bool retain = false}) async {
+  void _captureOutgoingPage() {
+    final boundary = _pageBoundary.currentContext?.findRenderObject();
+    if (boundary is! RenderRepaintBoundary || boundary.debugNeedsPaint) return;
+    try {
+      _pageImage = boundary.toImageSync(pixelRatio: MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.0));
+    } catch (_) { /* The transition can still finish without a snapshot. */ }
+  }
+
+  Future<({_PageLine start, String endKey})?> _preparePreviousPage(_PageLine first, int navigation, {bool retain = false}) async {
     if (first.itemIndex <= 0) return null;
     final previousItem = first.itemIndex - 1;
     // A distant TOC jump centres a new indexed list. Its preceding sliver can
@@ -1407,30 +1437,26 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (!mounted || navigation != _navigationGeneration) return null;
     final previous = _pageLines().where((line) => line.itemIndex == previousItem).toList();
     if (previous.isEmpty) return null;
-    var endKey = previous.last.key;
-    await _pageScrollController.animateScroll(offset: previous.last.bottom - _bodyHeight,
+    final endKey = previous.last.key;
+    await _pageScrollController.animateScroll(offset: previous.last.bottom - _pageViewportHeight,
       duration: const Duration(milliseconds: 1));
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || navigation != _navigationGeneration) return null;
-    var rows = _pageLines();
-    if (retain) {
-      final overlap = rows.where((line) => line.key == first.key);
-      if (overlap.isNotEmpty) {
-        endKey = first.key;
-        await _pageScrollController.animateScroll(offset: overlap.first.bottom - _bodyHeight,
-          duration: const Duration(milliseconds: 1));
-        await WidgetsBinding.instance.endOfFrame;
-        if (!mounted || navigation != _navigationGeneration) return null;
-        rows = _pageLines();
-      }
-    }
-    final ends = rows.where((line) => line.key == endKey);
-    if (ends.isEmpty) return null;
-    final end = ends.first;
-    final fitting = rows.where((line) => line.bottom <= end.bottom + 0.5 && end.bottom - line.top <= _bodyHeight + 0.5).toList();
-    if (fitting.isEmpty) return null;
-    _pageEndKey = end.key;
-    return fitting.first;
+    final rows = _pageLines();
+    return _previousPageTarget(rows, first.key, retain: retain, fallbackEndKey: endKey);
+  }
+
+  ({_PageLine start, String endKey})? _previousPageTarget(List<_PageLine> rows, String firstKey,
+      {required bool retain, String? fallbackEndKey}) {
+    final first = rows.indexWhere((line) => line.key == firstKey);
+    final endIndex = first > 0 ? first - (retain ? 0 : 1) :
+      rows.indexWhere((line) => line.key == fallbackEndKey);
+    if (endIndex < 0) return null;
+    final end = rows[endIndex];
+    var start = endIndex;
+    while (start > 0 && _fitsPage(end.bottom - rows[start - 1].top)) { start--; }
+    if (first >= 0 && start >= first) return null;
+    return (start: rows[start], endKey: end.key);
   }
 
   Future<bool> _alignPageLine(_PageLine target, int navigation) async {
@@ -1462,35 +1488,57 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         FractionalTranslation(key: const ValueKey('page-incoming-transform'),
           translation: Offset(_pageReady ? _pageDirection * (1-v) : 0, 0), child: child),
         if (_viewSnapshot != null) RawImage(image: _viewSnapshot, fit: BoxFit.fill),
+        if (_paging && !_pageReady && _outgoingPage == null && _viewSnapshot == null) ColoredBox(color: _theme.bg),
         if (_outgoingPage != null) FractionalTranslation(key: const ValueKey('page-outgoing-transform'),
           translation: Offset(-_pageDirection * v, 0),
           child: ColoredBox(color: _theme.bg, child: _outgoingPage!)),
       ])));
     });
 
+  ({RenderAbstractViewport viewport, double origin})? _pageCoordinates(RenderBox body) {
+    for (final position in _visibleItems()) {
+      final key = _titleKeys[position.index] ?? _paragraphKeys[position.index];
+      final render = key?.currentContext?.findRenderObject();
+      if (render is! RenderParagraph || !render.attached || !render.hasSize) continue;
+      final viewport = RenderAbstractViewport.maybeOf(render);
+      if (viewport == null) continue;
+      final top = render.localToGlobal(Offset.zero, ancestor: body).dy;
+      final origin = top - viewport.getOffsetToReveal(render, 0).offset;
+      if (origin.isFinite) return (viewport: viewport, origin: origin);
+    }
+    return null;
+  }
+
   List<_PageLine> _pageLines() {
-    final boundary = _pageBoundary.currentContext?.findRenderObject();
-    if (boundary is! RenderBox || !boundary.hasSize) return [];
-    final origin = boundary.localToGlobal(Offset.zero).dy;
+    final body = _pageBodyBox;
+    final coordinates = body == null ? null : _pageCoordinates(body);
+    if (coordinates == null) return [];
     final result = <_PageLine>[];
     for (final entry in {..._titleKeys, ..._paragraphKeys}.entries) {
       final render = entry.value.currentContext?.findRenderObject();
-      if (render is! RenderParagraph || !render.hasSize) continue;
-      final top = render.localToGlobal(Offset.zero).dy - origin;
-      if (top > _bodyExtent * 2 || top + render.size.height < -_bodyExtent) continue;
+      if (render is! RenderParagraph || !render.attached || !render.hasSize ||
+          RenderAbstractViewport.maybeOf(render) != coordinates.viewport) continue;
+      // An indexed viewport may clamp the paint transform of cached slivers
+      // before its center. Reveal offsets remain in one scroll coordinate space.
+      final top = coordinates.viewport.getOffsetToReveal(render, 0).offset + coordinates.origin;
+      if (!top.isFinite) continue;
       final text = render.text.toPlainText();
       final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
         boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
-      final lines = <Rect>[];
+      final lines = <int, Rect>{};
       for (final box in boxes) {
         final rect = box.toRect();
         if (rect.width < 0.01 || rect.height < 2) continue;
-        final row = lines.indexWhere((r) => (r.top - rect.top).abs() < 0.5);
-        if (row < 0) lines.add(rect); else lines[row] = lines[row].expandToInclude(rect);
+        // A visual row can contain several boxes (font fallback, bidi and
+        // indentation). Use the caret positions of the entire row as its key.
+        final left = render.getPositionForOffset(Offset(-1, rect.center.dy)).offset;
+        final right = render.getPositionForOffset(Offset(render.size.width + 1, rect.center.dy)).offset;
+        final start = min(left, right);
+        lines.update(start, (row) => row.expandToInclude(rect), ifAbsent: () => rect);
       }
-      for (final rect in lines) {
-        final start = render.getPositionForOffset(Offset(-10000, rect.center.dy)).offset;
-        result.add(_PageLine('${entry.key}/$start', top + rect.top, top + rect.bottom, entry.key));
+      for (final line in lines.entries) {
+        result.add(_PageLine('${entry.key}/${line.key}', top + line.value.top,
+          top + line.value.bottom, entry.key, line.key));
       }
     }
     result.sort((a,b) => a.top.compareTo(b.top));
@@ -1498,8 +1546,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _schedulePageGeometry() {
-    // 滚动模式没有页边界，不需要每帧测量行锚/页几何（这是滚动掉帧的主因）
-    if (_settings.pageTurnMode == 'scroll') return;
     if (_pageGeometryScheduled || !mounted) return;
     _pageGeometryScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1516,19 +1562,63 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _updatePageGeometry() {
-    if (_settings.pageTurnMode == 'scroll') {
-      if (_pageClipBottom != null) setState(() => _pageClipBottom = null);
+    if (_settings.pageTurnMode == 'scroll' && !_inReadingMode) {
+      if (_pageClipBottom != null || _pageHighlightEnd != null) setState(() {
+        _pageClipBottom = null; _pageHighlightEnd = null;
+      });
       return;
     }
     final rows = _pageLines();
-    var limit = _bodyExtent;
-    if (_pageEndKey != null) {
-      final ends = rows.where((r) => r.key == _pageEndKey);
-      if (ends.isNotEmpty) limit = min(limit, ends.first.bottom);
+    final page = _pageWindow(rows);
+    final bottom = page == null ? _pageViewportHeight : min(_pageViewportHeight, rows[page.last].bottom);
+    final next = page == null || page.last + 1 >= rows.length ? null : rows[page.last + 1];
+    final highlightEnd = next == null ? null : (next.itemIndex, _pageLineDisplayOffset(next));
+    if (_pageClipBottom != bottom || _pageHighlightEnd != highlightEnd) setState(() {
+      _pageClipBottom = bottom;
+      _pageHighlightEnd = highlightEnd;
+    });
+  }
+
+  int _pageLineDisplayOffset(_PageLine line) {
+    final item = _items[line.itemIndex];
+    if (item.isTitle) return 0;
+    final paragraph = _book.chapters[item.chapterIndex].paragraphs[item.paragraphIndex];
+    return ReaderTypography.sourceOffset(paragraph.display, line.layoutOffset,
+      lineBreakAt: _lineBreakFor(item.chapterIndex, item.paragraphIndex));
+  }
+
+  (int, int, int, int)? _speechPositionAtPageStart(_PageLine line) {
+    for (var i = line.itemIndex; i < _items.length; i++) {
+      final item = _items[i];
+      if (item.isTitle) continue;
+      final paragraph = _book.chapters[item.chapterIndex].paragraphs[item.paragraphIndex];
+      final offset = i == line.itemIndex ? _pageLineDisplayOffset(line) : 0;
+      final sentence = paragraph.sentences.indexWhere((sentence) => sentence.displayEnd > offset);
+      if (sentence >= 0) {
+        return (item.chapterIndex, item.paragraphIndex, sentence,
+          max(offset, paragraph.sentences[sentence].displayStart));
+      }
     }
-    final full = rows.where((r) => r.bottom <= limit + 0.25 && r.top >= -0.25).toList();
-    final bottom = full.isEmpty ? _bodyExtent : min(_bodyExtent, full.last.bottom);
-    if (_pageClipBottom == null || (_pageClipBottom! - bottom).abs() > 0.25) setState(() => _pageClipBottom = bottom);
+    return null;
+  }
+
+  bool _fitsPage(double bottom) => bottom <= _pageViewportHeight + 0.000001;
+
+  ({int first, int last})? _pageWindow(List<_PageLine> rows) {
+    final height = _pageViewportHeight;
+    final first = rows.indexWhere((row) => row.top >= -0.25 && row.top < height);
+    if (first >= 0 && _fitsPage(rows[first].bottom)) {
+      final end = rows.indexWhere((row) => row.key == _pageEndKey);
+      final limit = end >= first ? end : rows.length - 1;
+      var last = first;
+      while (last < limit && _fitsPage(rows[last + 1].bottom)) { last++; }
+      return (first: first, last: last);
+    }
+    // Restored/reflowed offsets can leave two partial rows with no complete
+    // row between them. Keep the first intersecting row as the anchor so
+    // clipping and both directions still have an unambiguous boundary.
+    final intersecting = rows.indexWhere((row) => row.bottom > 0 && row.top < height);
+    return intersecting < 0 ? null : (first: intersecting, last: intersecting);
   }
 
   // Skip chapter headings and empty sentences, including at chapter boundaries.
@@ -1665,8 +1755,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
   TtsCacheStore _currentCacheStore() =>
-      TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate,
-        contentKey: widget.book.contentKey);
+      TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate, contentKey: _book.contentKey, textFingerprint: _cacheFingerprint);
 
 
   /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
@@ -1739,7 +1828,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   int _sentenceTtsOffset(int c, int p, int s, int? displayOffset) {
-    if (!_tts.usesSystemVoice || displayOffset == null) return 0;
+    if (displayOffset == null) return 0;
     final sentence = _book.chapters[c].paragraphs[p].sentences[s];
     final relative = displayOffset - sentence.displayStart;
     // Stale/end-of-line coordinates are not a request to read only the last
@@ -1783,7 +1872,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       }
     }
     if (_autoActive) _stopAutoPage();
-    _clearTtsPageBoundary();
     // 朗读起点 = 视口当前显示的位置（进度 = 滑到哪读到哪）
     final pos = _viewportPosition();
     final startC = pos?.$1 ?? _chapter;
@@ -1910,6 +1998,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 彻底退出朗读模式：停止TTS，恢复正常阅读页UI
   Future<void> _exitReadingMode() async {
+    _releaseSpeechPagePreparation();
     _sentenceDrag = null;
     final generation = ++_playbackGeneration;
     _permissionGate?.cancel();
@@ -1962,8 +2051,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _applyReaderBrightness() {
-    // iOS 没有对应亮度通道，跳过（后续用 UIScreen 实现）
-    if (!Platform.isAndroid) return;
     if (_settings.automaticBrightness) {
       _volumeChannel.invokeMethod('resetScreenBrightness');
     } else {
@@ -1996,6 +2083,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) _releaseSpeechPagePreparation();
     if (state != AppLifecycleState.resumed) _cancelSentenceDrag();
     _volumeForeground = state == AppLifecycleState.resumed;
     _syncScreenAwake();
@@ -2028,7 +2116,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         _tts.state != TtsState.playing || playback != _playbackGeneration || navigation != _navigationGeneration) return;
       _onTtsSentenceChanged(_tts.currentIndex, follow: false);
       final offset = _wordStart >= 0 ? _wordStart : _sentenceDisplayOffset(_chapter, _para, max(0, _ttsSentence), _tts.currentTtsOffset);
-      _followSentence(_chapter, _para, max(0, _ttsSentence), character: offset, alignToTop: true);
+      _followSpeechPage(_chapter, _para, max(0, _ttsSentence), character: offset);
     });
     WidgetsBinding.instance.ensureVisualUpdate();
   }
@@ -2270,7 +2358,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     });
     _updateMediaChapter(c);
     if (_inReadingMode) globalAudioHandler?.notifyPlaying();
-    _followSentence(c, p, s, character: offset > 0 ? _sentenceDisplayOffset(c, p, s, offset) : null);
     _scheduleSave();
     _refreshTtsCache();
     await _tts.start(
@@ -2282,48 +2369,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       from: from,
       initialTtsOffset: offset,
     );
-    // 章节边界预取：提前把下一章开头几句合成入库，换章不再等首句合成
-    unawaited(_prefetchNextChapterHead(c));
-  }
-
-  /// 预取下一章开头 3 句（并发），写进与朗读同一套 contentKey 缓存目录。
-  /// 只做“开场缓冲”，不整章缓存；失败静默，不影响当前播放。
-  Future<void> _prefetchNextChapterHead(int chapter) async {
-    final next = chapter + 1;
-    if (next >= _book.chapters.length || _effectiveVoice == TtsReader.systemVoice) {
-      return;
-    }
-    final ch = _book.chapters[next];
-    final offsets = chapterSentenceOffsets(ch);
-    final voice = _effectiveVoice;
-    final rate = _settings.speechRate;
-    final store = TtsCacheStore(_book.id, voice, rate,
-        contentKey: widget.book.contentKey);
-    final jobs = <Future<void>>[];
-    var index = 0;
-    var started = 0;
-    for (final para in ch.paragraphs) {
-      for (final sentence in para.sentences) {
-        final off = index < offsets.length ? offsets[index] : -1;
-        index++;
-        if (sentence.tts.isEmpty || off < 0) continue;
-        if (started >= 3) break;
-        if (await store.exists(next, off)) continue;
-        started++;
-        jobs.add(() async {
-          try {
-            final audio = await edgeSynth(sentence.tts,
-                voice: voice, rate: edgeRateStr(rate));
-            if (audio.isEmpty) return;
-            // 期间切了音色/语速就别写错目录
-            if (_effectiveVoice != voice || _settings.speechRate != rate) return;
-            await store.write(next, off, audio);
-          } catch (_) {}
-        }());
-      }
-      if (started >= 3) break;
-    }
-    await Future.wait(jobs);
   }
 
   void _updateMediaChapter(int chapter) {
@@ -2389,9 +2434,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _scheduleSave();
     }
     _updateMediaChapter(c);
-    // A replay after a page animation may already have the right sentence but
-    // still need to bring it back inside the newly laid out viewport.
-    if (follow && _volumeForeground && _itemScrollController.isAttached) _followSentence(c, p, s, character: _tts.currentTtsOffset > 0
+    if (follow && _volumeForeground && _speechPageFollow == null && _itemScrollController.isAttached) _followSpeechPage(c, p, s, character: _tts.currentTtsOffset > 0
       ? _sentenceDisplayOffset(c, p, s, _tts.currentTtsOffset) : null);
   }
 
@@ -2421,7 +2464,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _mediaSpeechOffset = left - base;
     setState(() { _wordStart = left; _wordEnd = right; });
     _updateMediaChapter(_chapter);
-    _ensureWordVisible(left);
+    final chapter = _chapter, paragraph = _para, index = _ttsSentence, playback = _playbackGeneration;
+    unawaited(_followSpeechPage(chapter, paragraph, index, character: left,
+      isCurrent: () => _playbackGeneration == playback && (_chapter, _para, _ttsSentence, _wordStart) == (chapter, paragraph, index, left)));
   }
 
   void _flushPendingTtsUpdates() {
@@ -2439,48 +2484,92 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _schedulePageGeometry();
   }
 
-  RenderBox? get _ttsBodyBox {
+  RenderBox? get _pageBodyBox {
     final render = _pageBoundary.currentContext?.findRenderObject();
     return render is RenderBox && render.hasSize ? render : null;
   }
 
-  double get _ttsBodyHeight => _ttsBodyBox?.size.height ?? _bodyExtent;
-  double get _ttsVisibleBottom => min(_ttsBodyHeight,
-    _settings.pageTurnMode == 'scroll' ? _ttsBodyHeight : (_pageClipBottom ?? _ttsBodyHeight));
+  double get _pageViewportHeight => _pageBodyBox?.size.height ?? _bodyExtent;
+  double get _ttsVisibleBottom => min(_pageViewportHeight, _pageClipBottom ?? _pageViewportHeight);
 
   Rect? _ttsGlyphRect(int c, int p, int offset) {
-    final body = _ttsBodyBox;
+    final body = _pageBodyBox;
     final render = _paragraphKeys[_itemIndexOf(c, p)]?.currentContext?.findRenderObject();
     if (body == null || render is! RenderParagraph || !render.hasSize) return null;
     final paragraph = _book.chapters[c].paragraphs[p];
-    final boxes = render.getBoxesForSelection(TextSelection(baseOffset: _renderOffset(c, p, offset),
-      extentOffset: _renderOffset(c, p, min(offset + 1, paragraph.display.length))),
+    final glyphOffset = max(offset, ReaderTypography.leadingLength(paragraph.display));
+    if (glyphOffset >= paragraph.display.length) return null;
+    final boxes = render.getBoxesForSelection(TextSelection(baseOffset: _renderOffset(c, p, glyphOffset),
+      extentOffset: _renderOffset(c, p, glyphOffset + 1)),
       boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
     if (boxes.isEmpty) return null;
     return boxes.first.toRect().shift(render.localToGlobal(Offset.zero, ancestor: body));
   }
 
-  bool _ttsGlyphVisible(Rect glyph) => glyph.top >= -0.25 && glyph.bottom <= _ttsVisibleBottom + 0.25;
+  // Entering from free scrolling must not realign its already-clipped top row.
+  bool _ttsGlyphVisible(Rect glyph) =>
+    (glyph.top >= -0.25 || _settings.pageTurnMode == 'scroll' && glyph.bottom > 0) && glyph.bottom <= _ttsVisibleBottom + 0.25;
 
-  Future<void> _ensureWordVisible(int offset) async {
-    if (!_volumeForeground || _paging || _followingWord || _pendingScrollIndex != null || !_itemScrollController.isAttached) return;
-    _clearTtsPageBoundary();
-    final glyph = _ttsGlyphRect(_chapter, _para, offset);
-    if (glyph == null) {
-      _followSentence(_chapter, _para, max(0, _ttsSentence), character: offset);
-      return;
-    }
-    if (_ttsGlyphVisible(glyph)) return;
-    _followingWord = true;
+  Future<bool> _followSpeechPage(int c, int p, int sentence, {int? character, bool Function()? isCurrent}) async {
+    while (_speechPageFollow != null) { await _speechPageFollow; }
+    if (!mounted || !_volumeForeground || _paging || isCurrent?.call() == false || !_itemScrollController.isAttached) return false;
+    final operation = _positionSpeechPage(c, p, sentence, character: character, isCurrent: isCurrent);
+    _speechPageFollow = operation;
     try {
-      await _pageScrollController.animateScroll(offset: glyph.top - _ttsBodyHeight * 0.2,
-        duration: const Duration(milliseconds: 1));
-    } finally { _followingWord = false; }
-    if (mounted) _scheduleSave();
+      return await operation;
+    } finally { if (identical(_speechPageFollow, operation)) _speechPageFollow = null; }
   }
 
-  Future<void> _followSentence(int c, int p, int sentence, {int? character, bool alignToTop = false}) async {
-    _clearTtsPageBoundary();
+  Future<bool> _positionSpeechPage(int c, int p, int sentence, {int? character, bool Function()? isCurrent}) async {
+    final offset = character ?? _book.chapters[c].paragraphs[p].sentences[sentence].displayStart;
+    final playback = _playbackGeneration;
+    while (mounted && _inReadingMode && _volumeForeground && playback == _playbackGeneration && isCurrent?.call() != false) {
+      final glyph = _ttsGlyphRect(c, p, offset);
+      if (glyph != null && _ttsGlyphVisible(glyph)) return true;
+      final visible = _visibleItems();
+      if (visible.isEmpty) return false;
+      final direction = glyph != null && glyph.top < 0 || _itemIndexOf(c, p) < visible.first.index ? -1 : 1;
+      if (!await _turnPage(direction, automatic: true, seekSpeech: false)) return false;
+    }
+    return false;
+  }
+
+  void _releaseSpeechPagePreparation() {
+    final range = _speechPagePreparation;
+    _speechPagePreparation = null;
+    if (range != null && !range.isCompleted) range.complete();
+  }
+
+  Future<void> _prepareSpeechPage(int idx, int start, bool Function() isCurrent) {
+    if (!_volumeForeground) return Future<void>.value();
+    _releaseSpeechPagePreparation();
+    final range = Completer<void>();
+    _speechPagePreparation = range;
+    // Leaving the foreground releases audio even if Flutter stops drawing
+    // halfway through a page transition. Its late UI work is then invalid.
+    _positionBeforeSpeech(idx, start, () => isCurrent() && identical(_speechPagePreparation, range)).then<void>(
+      (_) { if (!range.isCompleted) range.complete(); },
+      onError: (Object error, StackTrace stack) { if (!range.isCompleted) range.completeError(error, stack); });
+    return range.future.whenComplete(() { if (identical(_speechPagePreparation, range)) _speechPagePreparation = null; });
+  }
+
+  Future<void> _positionBeforeSpeech(int idx, int start, bool Function() isCurrent) async {
+    final playback = _playbackGeneration, c = _ttsChapter;
+    var s = idx, p = 0;
+    final paragraphs = _book.chapters[c].paragraphs;
+    while (p < paragraphs.length && s >= paragraphs[p].sentences.length) { s -= paragraphs[p].sentences.length; p++; }
+    if (p >= paragraphs.length) throw StateError('Speech sentence is outside its chapter');
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || !_inReadingMode || !isCurrent() || playback != _playbackGeneration) return;
+    _updatePageGeometry();
+    final offset = _sentenceDisplayOffset(c, p, s, start);
+    if (!await _followSpeechPage(c, p, s, character: offset, isCurrent: isCurrent)) {
+      if (!mounted || !_volumeForeground || _paging || !isCurrent() || playback != _playbackGeneration) return;
+      throw StateError('Cannot paginate to the current speech position');
+    }
+  }
+
+  Future<void> _followSentence(int c, int p, int sentence, {int? character}) async {
     final index = _itemIndexOf(c, p);
     final paragraph = _book.chapters[c].paragraphs[p];
     if (paragraph.sentences.isEmpty) return;
@@ -2490,22 +2579,21 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       textScaler: MediaQuery.textScalerOf(context));
     if (ReaderTypography.leadingLength(paragraph.display) > 0) painter.setPlaceholderDimensions([
       PlaceholderDimensions(size: Size(_indentWidth(paragraph), 1), alignment: ui.PlaceholderAlignment.middle)]);
-    painter.layout(maxWidth: (_ttsBodyBox?.size.width ?? MediaQuery.sizeOf(context).width) - 32);
+    painter.layout(maxWidth: (_pageBodyBox?.size.width ?? MediaQuery.sizeOf(context).width) - 32);
     final boxes = painter.getBoxesForSelection(TextSelection(baseOffset: _renderOffset(c, p, offset),
       extentOffset: _renderOffset(c, p, min(offset + 1, paragraph.display.length))));
     final top = boxes.isEmpty ? 0.0 : boxes.first.top + 10;
     painter.dispose();
     final glyph = _ttsGlyphRect(c, p, offset);
-    if (!alignToTop && glyph != null && _ttsGlyphVisible(glyph)) return;
+    if (glyph != null && _ttsGlyphVisible(glyph)) return;
+    _clearTtsPageBoundary();
     final before = _navigationGeneration;
-    final playback = _playbackGeneration;
     await _positionViewport(index, 0);
-    if (!mounted || _paging || _navigationGeneration != before + 1 || alignToTop && playback != _playbackGeneration) return;
+    if (!mounted || _paging || _navigationGeneration != before + 1) return;
     _pendingScrollIndex = null;
     final generation = _navigationGeneration;
     final positionedGlyph = _ttsGlyphRect(c, p, offset);
-    final contextSpace = _inReadingMode && !alignToTop ? _ttsBodyHeight * 0.2 : 0.0;
-    await _pageScrollController.animateScroll(offset: max(0.0, (positionedGlyph?.top ?? top) - contextSpace),
+    await _pageScrollController.animateScroll(offset: max(0.0, positionedGlyph?.top ?? top),
       duration: const Duration(milliseconds: 1));
     if (generation == _navigationGeneration) _scheduleSave();
   }
@@ -2522,7 +2610,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         _ttsSentence = 0;
         _wordStart = -1; _wordEnd = -1;
       });
-      _jumpToItem(_itemIndexOf(next, 0));
       _scheduleSave();
       // A new chapter must never inherit the previous chapter's word cursor.
       _startTtsFrom(next, 0, 0, displayOffset: 0);
@@ -2532,9 +2619,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _onTtsError() {
-    final failure = _tts.lastFailure;
-    unawaited(diagLog('tts error: ${failure.runtimeType}: $failure'));
     if (!mounted || !_inReadingMode) return;
+    final failure = _tts.lastFailure;
     final message = failure is PlatformException ? T(_tts.usesSystemVoice ? 'systemTtsUnavailable' : 'voicePlaybackFailed')
       : failure is TimeoutException || failure is EdgeTtsException && failure.kind == 'timeout'
         ? T(_tts.usesSystemVoice ? 'systemTtsTimeout' : 'onlineTtsTimeout')
@@ -2542,7 +2628,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       : T('voicePlaybackFailed');
     _exitReadingMode();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$message（$failure）')),
+      SnackBar(content: Text(message)),
     );
   }
 
@@ -2846,6 +2932,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _viewportSize = MediaQuery.sizeOf(context);
     _headerReservedExtent = _chapterTopArea();
     _bodyExtent = _bodyHeight;
+    final pageMetrics = (_layoutSignature, _bodyExtent, Directionality.of(context), MediaQuery.textScalerOf(context));
+    if (_pageMetricsKey != pageMetrics) {
+      _pageMetricsKey = pageMetrics;
+      _pageEndKey = null;
+      _pageClipBottom = null;
+      _schedulePageGeometry();
+    }
     final header = _headerLayout.chapterTitle(_chapterBarTitle(_chapter));
     return PopScope(
       onPopInvokedWithResult: (didPop, result) { if (didPop) _restoreSystemUiForExit(); },
@@ -3019,7 +3112,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Widget _buildBody() {
     return ClipRect(key: const ValueKey('reader-page-clip'), clipper: _ReaderPageClipper(
-      _settings.pageTurnMode == 'scroll' ? null : _pageClipBottom),
+      _settings.pageTurnMode == 'scroll' && !_inReadingMode ? null : _pageClipBottom),
       child: KeyedSubtree(key: ValueKey(_textSignature), child: ScrollablePositionedList.builder(
       key: const ValueKey('reader-body'),
       itemScrollController: _itemScrollController,
@@ -3031,8 +3124,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       physics: _inReadingMode || _settings.pageTurnMode != 'scroll' ? const NeverScrollableScrollPhysics() : const ClampingScrollPhysics(),
       // 增大缓存区：跳转后能渲染更多 item，加速精确定位
       minCacheExtent: 1500,
-      // 顶部留白由 Column 的标题栏承担；底部留 120 给进度条/朗读面板
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+      // Trailing space lets even the last short page align to a complete row.
+      padding: EdgeInsets.fromLTRB(16, 8, 16,
+        _inReadingMode || _settings.pageTurnMode != 'scroll' ? max(100.0, _bodyExtent) : 100),
       itemCount: _items.length,
       itemBuilder: (ctx, i) {
         final it = _items[i];
@@ -3263,6 +3357,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           ListTile(key: const ValueKey('reading-prefetch'), title: Text(T('prefetchSentences', {'n': '${_settings.prefetchSentences}'})),
             subtitle: Text(T('prefetchDescription')), trailing: const Icon(Icons.tune),
             onTap: () async { await _openPrefetchSettings(); if (ctx.mounted) update(() {}); }),
+          SwitchListTile(key: const ValueKey('system-fallback-enabled'),
+            title: Text(T('systemFallbackEnabled')),
+            value: _settings.systemFallbackEnabled, onChanged: _applyingSpeechPauses ? null : (value) async {
+              if (!value && _settings.systemFallbackActive) {
+                final desired = ReadingSettings.fromJson(_settings.toJson())
+                  ..systemFallbackEnabled = false..systemFallbackActive = false;
+                await _applySpeechConfiguration(desired, updateVoice: true);
+              } else {
+                setState(() => _settings.systemFallbackEnabled = value);
+                _tts.setSystemFallbackEnabled(value);
+                await widget.storage.saveSettings(_settings.toJson());
+              }
+              if (ctx.mounted) update(() {});
+            }),
           ListTile(title: Text(T('sentenceDragDelay', {'n': _settings.sentenceDragDelay.toStringAsFixed(1)}))),
           Slider(key: const ValueKey('sentence-drag-delay'), value: _settings.sentenceDragDelay,
             min: 0, max: 0.5, divisions: 5, onChanged: (value) {
@@ -3308,6 +3416,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _commitPauseConfiguration(ReadingSettings desired, {required bool updateVoice}) {
+    _settings.systemFallbackEnabled = desired.systemFallbackEnabled;
+    _tts.setSystemFallbackEnabled(desired.systemFallbackEnabled);
     _settings.speechPauses = desired.speechPauses;
     _settings.perVoiceSpeechPauses..clear()..addAll(desired.perVoiceSpeechPauses);
     if (updateVoice) {
@@ -3622,8 +3732,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     prepared?.attachSourceMaps();
     final cacheBook = prepared?.book ?? _book, fingerprint = prepared?.fingerprint ?? _cacheFingerprint;
     final cacheKey = '${cacheBook.id}/$fingerprint/$voice/${rate.toStringAsFixed(2)}';
-    final store = TtsCacheStore(cacheBook.id, voice, rate,
-        contentKey: cacheBook.contentKey);
+    final store = TtsCacheStore(cacheBook.id, voice, rate, contentKey: cacheBook.contentKey, textFingerprint: fingerprint);
     final task = activeBookCaches[cacheKey] ??
         (activeBookCaches[cacheKey] = BookCacheTask(
               book: cacheBook,
@@ -3849,8 +3958,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         onSentenceDragEnd: inReading ? _finishSentenceDrag : null,
         onPreviousSentence: _prevSentence,
         onNextSentence: _nextSentence,
-        onPreviousPage: () { if (_settings.pageTurnMode == 'swipe') _pageUp(); },
-        onNextPage: () { if (_settings.pageTurnMode == 'swipe') _pageDown(); },
+        onPreviousPage: () { if (inReading || _settings.pageTurnMode == 'swipe') _pageUp(); },
+        onNextPage: () { if (inReading || _settings.pageTurnMode == 'swipe') _pageDown(); },
         onTapUp: _autoActive
             ? (_) => setState(() { _showAutoPanel = !_showAutoPanel; _showControls = _showAutoPanel; })
             : inReading
@@ -3873,7 +3982,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   bool _tapPage(TapUpDetails details) {
-    if (_settings.pageTurnMode != 'tap') return false;
+    if (!_inReadingMode && _settings.pageTurnMode != 'tap') return false;
     final width = MediaQuery.sizeOf(context).width;
     if (details.globalPosition.dx < width / 3) { _pageUp(); return true; }
     if (details.globalPosition.dx > width * 2 / 3) { _pageDown(); return true; }
@@ -3896,10 +4005,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             const Spacer(),
             IconButton(tooltip: T('read'), icon: const ReaderIcon(ReaderSymbol.headphones, color: Colors.white70),
               onPressed: _ttsLoading ? null : () => _play(requestNotificationPermission: true)),
-            IconButton(key: const ValueKey('reader-sync'), tooltip: T('syncNow'),
-              icon: Icon(Icons.sync, size: 22,
-                color: _syncing ? const Color(0xFF9BC5DD) : Colors.white70),
-              onPressed: _syncing ? null : _syncNow),
             IconButton(key: const ValueKey('night-mode'), tooltip: T(_isNight ? 'dayMode' : 'nightMode'),
               icon: ReaderIcon(_isNight ? ReaderSymbol.sun : ReaderSymbol.moon, color: Colors.white70), onPressed: _toggleNight),
             IconButton(key: const ValueKey('reader-menu'), tooltip: T('readerMenu'),
@@ -3954,7 +4059,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   _quickAction(ReaderSymbol.play, T('autoPage'), _openAutoPage),
                 ]),
                 Row(children: [
-                  const Expanded(child: SizedBox()),
+                  Expanded(child: IconButton(key: const ValueKey('reader-sync'), tooltip: T('syncNow'),
+                    icon: Icon(Icons.sync, color: _syncing ? const Color(0xFF9BC5DD) : Colors.white70),
+                    onPressed: _syncing ? null : _syncNow)),
                   _quickAction(ReaderSymbol.bookmark, T('addBookmark'), _addCurrentBookmark),
                   _quickAction(ReaderSymbol.rotate, T('rotateScreen'), _toggleOrientation),
                   _quickAction(ReaderSymbol.settings, T('readerSettings'), () => _openSettingsPanel('all')),
@@ -4454,8 +4561,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(T('default'),
-                          style: const TextStyle(
-                              fontSize: 13, color: Colors.grey)),
+                          style: TextStyle(fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant)),
                     )
                   else
                     ...fonts.map((f) => ListTile(
@@ -4703,7 +4809,7 @@ class _BookmarkSheetState extends State<_BookmarkSheet> {
                     if (_items.isEmpty)
                       Center(
                         child: Text(T('noBookmark'),
-                            style: const TextStyle(color: Colors.grey)),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                       ),
                   ],
                 ),
@@ -4887,7 +4993,7 @@ class _HighlightSheetState extends State<_HighlightSheet> {
                     if (_items.isEmpty)
                       Center(
                         child: Text(T('noHighlight'),
-                            style: const TextStyle(color: Colors.grey)),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                       ),
                   ],
                 ),
@@ -4933,8 +5039,8 @@ class _ReaderLineAnchor {
 class _PageLine {
   final String key;
   final double top, bottom;
-  final int itemIndex;
-  const _PageLine(this.key, this.top, this.bottom, this.itemIndex);
+  final int itemIndex, layoutOffset;
+  const _PageLine(this.key, this.top, this.bottom, this.itemIndex, this.layoutOffset);
 }
 
 class _ReaderPageClipper extends CustomClipper<Rect> {

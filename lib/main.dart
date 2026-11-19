@@ -17,11 +17,9 @@ import 'services/book_snapshot_cache.dart';
 import 'services/reader_preparation.dart';
 import 'services/reader_screen_awake.dart';
 import 'services/tts_audio_handler.dart';
-import 'services/diag_log.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await diagLog('app start platform=${Platform.operatingSystem}');
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   final storage = AppStorage();
   final storedSettings = await storage.loadSettings();
@@ -29,11 +27,6 @@ Future<void> main() async {
     ReadingSettings.fromJson(storedSettings),
     WidgetsBinding.instance.platformDispatcher.platformBrightness,
   );
-  // v1.3.0 起默认翻页方式 = 上下滚动：老安装一次性迁移（之后用户仍可自己改）
-  if (storedSettings['scrollDefaultV1'] != true) {
-    startupSettings.pageTurnMode = 'scroll';
-    storedSettings['scrollDefaultV1'] = true;
-  }
   // Persist before the bookshelf can reopen its last book: ReaderScreen reads
   // this same setting and must not restore last session's opposite appearance.
   await storage.saveSettings({...storedSettings, ...startupSettings.toJson()});
@@ -43,13 +36,12 @@ Future<void> main() async {
   AppI18n.current = AppLang.detect(
     WidgetsBinding.instance.platformDispatcher.locales,
   );
-  // iOS 必须显式配置 AVAudioSession，否则 audioplayers 播放会抛 PlatformException
-  try {
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
-    await diagLog('audio session configured');
-  } catch (e) {
-    await diagLog('audio session failed: $e');
+  if (Platform.isIOS) {
+    try {
+      await (await AudioSession.instance).configure(const AudioSessionConfiguration.music());
+    } catch (error) {
+      debugPrint('Audio session configuration failed: $error');
+    }
   }
   try {
     globalAudioHandler = await AudioService.init(
@@ -65,9 +57,8 @@ Future<void> main() async {
         androidStopForegroundOnPause: false,
       ),
     );
-    await diagLog('AudioService init ok');
   } catch (e) {
-    await diagLog('AudioService init failed: $e');
+    print('AudioService init failed: $e');
   }
   runApp(const DuoduoLangduApp());
 }

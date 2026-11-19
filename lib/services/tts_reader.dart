@@ -35,6 +35,7 @@ class TtsReader {
   bool _networkAvailable = true;
   final _networkEvents = StreamController<bool>.broadcast(sync: true);
   bool _usingSystemFallback = false;
+  bool _systemFallbackEnabled = false;
   Object? _onlineNetworkFailure;
   ValueChanged<bool>? onVoiceModeChanged;
   bool get usingSystemFallback => _usingSystemFallback;
@@ -65,6 +66,8 @@ class TtsReader {
   Duration _position = Duration.zero;
   Duration _resumePosition = Duration.zero;
   int _systemResumeOffset = 0;
+  int _utteranceStart = 0;
+  bool _preparationPending = false;
   int _rateResumeWordOffset = -1;
   Future<void>? _pausing;
   Future<void> _playerOperations = Future<void>.value();
@@ -99,6 +102,8 @@ class TtsReader {
   VoidCallback? onCompleted;
   VoidCallback? onStateChanged;
   VoidCallback? onError;
+  /// Positions the reader before starting a sentence, without splitting audio.
+  Future<void> Function(int sentenceIndex, int startOffset, bool Function() isCurrent)? onPreparePlayback;
 
   TtsState get state => _state;
   int get currentIndex => _index;
@@ -106,8 +111,10 @@ class TtsReader {
   String get voice => _voice;
   int get currentWordStart => _lastWordStart;
   int get currentWordEnd => _lastWordEnd;
-  int get currentTtsOffset => usesSystemVoice ? _systemResumeOffset : 0;
+  int get currentTtsOffset => _systemResumeOffset;
   int get prefetchSentences => _prefetchSentences;
+
+  void setSystemFallbackEnabled(bool enabled) => _systemFallbackEnabled = enabled;
 
   void _startLoading(int generation) {
     _loadingDelay?.cancel();
@@ -130,12 +137,17 @@ class TtsReader {
 
   /// Restore the saved effective mode after restoring the selected voice.
   /// Connectivity changes and chapter starts never clear this sticky choice.
-  void restoreSystemFallback(bool active) {}
+  void restoreSystemFallback(bool active) {
+    final fallback = active && _systemFallbackEnabled && _voice != systemVoice;
+    if (_usingSystemFallback == fallback) return;
+    _usingSystemFallback = fallback;
+    if (fallback) _cancelRequests();
+    onVoiceModeChanged?.call(fallback);
+  }
 
   void setNetworkAvailable(bool available) {
     if (_networkAvailable == available) return;
     _networkAvailable = available;
-    if (available) _onlineNetworkFailure = null;
     // This is a passive OS signal, never a connectivity probe. Completed
     // prefetches and the retained current sentence survive disconnection.
     if (!available) {
@@ -147,7 +159,10 @@ class TtsReader {
       // Unlike stop/jump, do not change content generation: a cache read
       // already in progress may still supply perfectly usable offline audio.
       _networkEvents.add(false);
-    } else { _networkEvents.add(true); _startPrefetch(); }
+    } else {
+      if (!_usingSystemFallback) _onlineNetworkFailure = null;
+      _networkEvents.add(true); _startPrefetch();
+    }
   }
 
   void setPrefetchSentences(int value) {
@@ -219,12 +234,18 @@ class TtsReader {
     _prefetchGeneration++; _prefetching = false;
   }
 
-  Future<bool> _playSystemFallback(Object error) async {
-    // v1.3.0 定稿：不做自动系统 TTS 兜底（每章末尾误切会打断朗读）。
-    // 网络失败直接走错误提示；系统音源仍可由用户手动选择。
+  Future<bool> _playSystemFallback(Object error) {
     _rememberNetworkFailure(error);
-    _fail(error);
-    return false;
+    if (!_systemFallbackEnabled) {
+      _fail(error);
+      return Future<bool>.value(false);
+    }
+    _usingSystemFallback = true;
+    _cancelRequests();
+    onVoiceModeChanged?.call(true);
+    // The sentence is unchanged; do not emit a second sentence-start event.
+    // A system-engine failure follows the ordinary error path, without retry.
+    return _playCurrent(continueSentence: true);
   }
 
   void _invalidateAudio() {
@@ -296,8 +317,8 @@ class TtsReader {
     _rateResumeWordOffset = -1;
   }
 
-  int _systemOffset(int sentence, int requested) {
-    if (!usesSystemVoice || _sentences[sentence].isEmpty) return 0;
+  int _speechOffset(int sentence, int requested) {
+    if (_sentences[sentence].isEmpty) return 0;
     final text = _sentences[sentence];
     // A stale viewport/display coordinate is not a request for the last
     // character. Preserve valid explicit cursors, and replay safely from the
@@ -313,6 +334,7 @@ class TtsReader {
 
   void _emitWord(int start, int end) {
     _lastWordStart = start; _lastWordEnd = end;
+    if (start >= 0) _systemResumeOffset = start;
     onWordChanged?.call(start, end);
   }
 
@@ -360,7 +382,6 @@ class TtsReader {
       return;
     }
     _contentGeneration++;
-    // 用户重新开始朗读时，清掉上次的连接失败标记，允许重新联网合成
     _onlineNetworkFailure = null;
     _wordCache.clear();
     final stopping = _stopInternal();
@@ -378,6 +399,7 @@ class TtsReader {
         : const [];
     _chapterIndex = chapterIndex;
     _index = from.clamp(0, sentences.length - 1);
+    _preparationPending = false;
     _prefetchCache.clear();
     _prefetchIndex = _index - 1;
     _prefetchCompletes = 0;
@@ -466,7 +488,8 @@ class TtsReader {
     await stopping;
     if (_disposed || generation != _playGeneration) return;
     _index = sentenceIndex;
-    _systemResumeOffset = _systemOffset(sentenceIndex, ttsOffset);
+    _systemResumeOffset = _speechOffset(sentenceIndex, ttsOffset);
+    _preparationPending = true;
     onSentenceChanged?.call(_index);
     if (_state == TtsState.playing) {
       _prefetchCache.clear();
@@ -509,10 +532,13 @@ class TtsReader {
     return request;
   }
 
-  Future<Uint8List> _fetchAudio(int idx, int generation) async {
+  Future<Uint8List> _fetchAudio(int idx, int generation,
+      {int start = 0, ValueChanged<List<SpeechWord>>? onWords}) async {
     if (idx < 0 || idx >= _sentences.length) return Uint8List(0);
-    final text = _sentences[idx], voice = _voice, rate = _rateStr();
-    final off = _cacheOff(idx), chapter = _chapterIndex;
+    final partial = start > 0;
+    final text = _sentences[idx].substring(start), voice = _voice, rate = _rateStr();
+    // A manual seek suffix must never read or overwrite a whole-sentence cache.
+    final off = partial ? -1 : _cacheOff(idx), chapter = _chapterIndex;
     final cache = _cache;
     if (off >= 0 && cache != null) {
       final disk = await cache.read(chapter, off);
@@ -524,15 +550,13 @@ class TtsReader {
         return disk;
       }
     }
-    if (!_networkAvailable) {
-      _audioFailures[idx] = const EdgeTtsException('connection');
+    if (!_networkAvailable || _onlineNetworkFailure != null) {
+      _audioFailures[idx] = _onlineNetworkFailure ?? const EdgeTtsException('connection');
       return Uint8List(0);
     }
-    // 不因一次失败永久封死：每次取音频都允许重试（网络抖动/微软限流很常见）
-    _onlineNetworkFailure = null;
     Uint8List audio;
     List<SpeechWord> words = [];
-    final key = '$generation/$idx';
+    final key = partial ? '$generation/$start/$idx' : '$generation/$idx';
     final token = EdgeSynthCancelToken(); _requestTokens[key] = token;
     final disconnected = Completer<Uint8List>();
     final networkSubscription = _networkEvents.stream.listen((available) {
@@ -559,7 +583,12 @@ class TtsReader {
       if (_requestTokens[key] == token) _requestTokens.remove(key);
     }
     if (_disposed || generation != _contentGeneration || token.cancelled) return Uint8List(0);
-    if (_inMemoryWindow(idx)) _wordCache[idx] = words;
+    if (partial) {
+      words = [for (final word in words) SpeechWord(startMicros: word.startMicros,
+        durationMicros: word.durationMicros, textStart: start + word.textStart,
+        textEnd: start + word.textEnd, text: word.text)];
+      onWords?.call(words);
+    } else if (_inMemoryWindow(idx)) { _wordCache[idx] = words; }
     if (audio.isNotEmpty && off >= 0 && cache != null) {
       late final Future<void> pending;
       pending = Future<void>.sync(() => cache.write(chapter, off, audio, words: words))
@@ -585,9 +614,25 @@ class TtsReader {
     final sentence = _index;
     lastFailure = null; _startLoading(generation);
     _activeAudioIndex = -1; _activeWords = [];
+    if (_preparationPending) {
+      continueSentence = false;
+      initialTtsOffset = _systemResumeOffset;
+      _preparationPending = false;
+    }
     if (!continueSentence) {
       _clearResume();
-      _systemResumeOffset = _systemOffset(sentence, initialTtsOffset);
+      _systemResumeOffset = _speechOffset(sentence, initialTtsOffset);
+      _utteranceStart = _systemResumeOffset;
+      _preparationPending = true;
+      try {
+        await onPreparePlayback?.call(sentence, _utteranceStart,
+          () => !_disposed && generation == _playGeneration && _state == TtsState.playing);
+        if (_disposed || generation != _playGeneration || _state != TtsState.playing) return false;
+        _preparationPending = false;
+      } catch (error) {
+        if (!_disposed && generation == _playGeneration) _fail(error);
+        return false;
+      }
       _emitWord(-1, -1);
       onSentenceChanged?.call(_index);
     }
@@ -624,7 +669,14 @@ class TtsReader {
     Uint8List audio;
     final retained = continueSentence && _retainedAudioIndex == sentence ? _retainedAudio : null;
     var resumePosition = retained != null ? _resumePosition : Duration.zero;
-    try { audio = retained ?? await _obtainAudio(sentence).timeout(const Duration(seconds: 30)); }
+    final partial = _utteranceStart > 0;
+    List<SpeechWord> segmentWords = [];
+    try {
+      audio = retained ?? await (partial
+        ? _fetchAudio(sentence, _contentGeneration, start: _utteranceStart,
+            onWords: (words) => segmentWords = words)
+        : _obtainAudio(sentence)).timeout(const Duration(seconds: 30));
+    }
     catch (error) {
       if (!_disposed && generation == _playGeneration) {
         if (_isNetworkFailure(error)) return _playSystemFallback(error);
@@ -633,7 +685,7 @@ class TtsReader {
       return false;
     }
     if (_disposed || _state != TtsState.playing || generation != _playGeneration || sentence != _index) return false;
-    _activeWords = retained != null ? _retainedWords : (_wordCache[sentence] ?? []);
+    _activeWords = retained != null ? _retainedWords : partial ? segmentWords : (_wordCache[sentence] ?? []);
     // A newly synthesized rate has different timings. Resume only at the same
     // reported word's new, actual boundary; never estimate a proportional seek.
     if (retained == null && initialWordOffset >= 0) {
@@ -668,9 +720,7 @@ class TtsReader {
         // AudioPlayer.play seeks after preparation and before starting audio.
         await _player.stop();
         if (_disposed || generation != _playGeneration || sentence != _index) return false;
-        await _player.play(
-            BytesSource(audio, mimeType: 'audio/mpeg'),
-            position: resumePosition > Duration.zero ? resumePosition : null)
+        await _player.play(BytesSource(audio, mimeType: 'audio/mpeg'), position: resumePosition > Duration.zero ? resumePosition : null)
           .timeout(const Duration(seconds: 15));
         if (_disposed || generation != _playGeneration || sentence != _index || _state != TtsState.playing) return false;
         _activeAudioIndex = sentence; _position = resumePosition;
@@ -713,34 +763,24 @@ class TtsReader {
   Future<void> _prefetchLoop() async {
     final generation = _contentGeneration;
     final worker = _prefetchGeneration;
-    // 3x 语速下串行合成追不上播放：按语速并发预取（2.5x 以上 4 路）
     final parallelism = _speechRate >= 2.5 ? 4 : 3;
     try {
       while (!_disposed && !usesSystemVoice && _networkAvailable && _onlineNetworkFailure == null && _state == TtsState.playing && generation == _contentGeneration && worker == _prefetchGeneration) {
         final maxPrefetch = _index + _prefetchSentences;
         final batch = <int>[];
         while (batch.length < parallelism) {
-          final nextToPrefetch = _prefetchIndex + 1;
-          if (nextToPrefetch > maxPrefetch || nextToPrefetch >= _sentences.length) break;
-          _prefetchIndex = nextToPrefetch;
-          if (_prefetchCache.containsKey(nextToPrefetch)) continue;
-          batch.add(nextToPrefetch);
+          final next = _prefetchIndex + 1;
+          if (next > maxPrefetch || next >= _sentences.length) break;
+          _prefetchIndex = next;
+          if (!_prefetchCache.containsKey(next)) batch.add(next);
         }
         if (batch.isEmpty) return;
-        // 音色/语速切换或暂停会让 generation/worker 失效，届时丢弃这批
-        final audios = await Future.wait(batch.map((i) async {
-          try {
-            return (i, await _obtainAudio(i));
-          } catch (_) {
-            return (i, Uint8List(0));
-          }
+        await Future.wait(batch.map((index) async {
+          final audio = await _obtainAudio(index);
+          if (_disposed || _state != TtsState.playing || generation != _contentGeneration || worker != _prefetchGeneration) return;
+          if (audio.isNotEmpty && index > _index && _inMemoryWindow(index)) _prefetchCache[index] = audio;
         }));
-        if (_disposed || _state != TtsState.playing || generation != _contentGeneration || worker != _prefetchGeneration) return;
-        for (final (i, audio) in audios) {
-          if (audio.isNotEmpty && i > _index && _inMemoryWindow(i)) {
-            _prefetchCache[i] = audio;
-          }
-        }
+        if (_disposed || generation != _contentGeneration || worker != _prefetchGeneration) return;
         _prunePrefetch();
       }
     } catch (_) {} finally {

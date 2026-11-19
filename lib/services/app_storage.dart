@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:convert';
 import 'dart:io';
 
@@ -44,7 +44,7 @@ class AppStorage {
   /// 另外早期导入存的是系统选择器临时路径。这里按「bookId + 扩展名」或
   /// 文件名回落到当前 Documents/books 下，并写回书架。
   Future<List<BookMeta>> _repairBookPaths(List<BookMeta> books) async {
-    if (books.isEmpty) return books;
+    if (books.isEmpty || !Platform.isIOS) return books;
     Directory? booksDir;
     try {
       final dir = await getApplicationDocumentsDirectory();
@@ -291,6 +291,7 @@ class ReadingSettings {
   double lineHeight = 1.6;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
   int prefetchSentences = defaultPrefetchSentences;
+  bool systemFallbackEnabled = false;
   bool systemFallbackActive = false;
   String voice = '';
   String themeMode = 'system';
@@ -345,6 +346,7 @@ class ReadingSettings {
         'lineHeight': lineHeight,
         'speechRate': speechRate,
         'prefetchSentences': prefetchSentences,
+        'systemFallbackEnabled': systemFallbackEnabled,
         'systemFallbackActive': systemFallbackActive,
         'voice': voice,
         'themeMode': themeMode,
@@ -398,7 +400,8 @@ class ReadingSettings {
     s.prefetchSentences = ((json['prefetchSentences'] as num?)?.toInt() ?? defaultPrefetchSentences)
       .clamp(minPrefetchSentences, maxPrefetchSentences);
     s.voice = json['voice'] as String? ?? '';
-    s.systemFallbackActive = json['systemFallbackActive'] as bool? ?? false;
+    s.systemFallbackEnabled = json['systemFallbackEnabled'] as bool? ?? false;
+    s.systemFallbackActive = s.systemFallbackEnabled && (json['systemFallbackActive'] as bool? ?? false);
     final themeMode = json['themeMode'];
     s.themeMode = ['system', 'dark', 'light'].contains(themeMode) ? themeMode as String : 'system';
     s.themeIndex = (json['themeIndex'] as num?)?.toInt() ?? 0;
