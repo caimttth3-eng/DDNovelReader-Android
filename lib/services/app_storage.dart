@@ -302,8 +302,8 @@ class AppStorage {
 class ReadingSettings {
   static const speechRateStep = 0.02;
   static const speechRateDivisions = 125;
-  static double normalizeSpeechRate(double rate) =>
-      (rate.clamp(0.5, 3.0) * 50).round() / 50;
+  static double normalizeSpeechRate(double rate, [double max = 3.0]) =>
+      (rate.clamp(0.5, max) * 50).round() / 50;
   static const defaultPrefetchSentences = 8;
   static const minPrefetchSentences = 0;
   static const maxPrefetchSentences = 100;

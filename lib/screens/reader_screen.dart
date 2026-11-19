@@ -671,7 +671,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       final v = savedSpeech['voice'];
       final r = savedSpeech['rate'];
       if (v is String && v.isNotEmpty) _settings.voice = v;
-      if (r is num) _settings.speechRate = ReadingSettings.normalizeSpeechRate(r.toDouble());
+      if (r is num) _settings.speechRate = ReadingSettings.normalizeSpeechRate(
+          r.toDouble(), maxSpeechRateFor(_settings.voice));
     }
     final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
       merge: _settings.mergeNonSentenceBreaks, indent: _settings.firstLineIndent,
@@ -694,6 +695,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _applyReaderBrightness();
     if (_settings.automaticBrightness) _syncSystemBrightness();
     _applySystemUi();
+    _settings.speechRate = ReadingSettings.normalizeSpeechRate(
+        _settings.speechRate, maxSpeechRateFor(_settings.voice));
     _tts.setSpeechRate(_settings.speechRate);
     _tts.setPrefetchSentences(_settings.prefetchSentences);
     _applyRotationPreference();
@@ -1688,6 +1691,15 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 当前朗读音色（空=默认），与缓存目录的 voice 段保持一致
   String get _effectiveVoice =>
       _settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice;
+
+  /// 不同音源的最大语速：Edge TTS 协议上限 +100%（2.0x）；
+  /// iOS AVSpeech 的 1.0 约等于 2.0x；安卓系统引擎通常可到 3.0x。
+  static double maxSpeechRateFor(String voice) {
+    if (SystemTtsClient.isSystemVoiceId(voice)) {
+      return Platform.isIOS ? 2.0 : 3.0;
+    }
+    return 2.0;
+  }
 
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
   TtsCacheStore _currentCacheStore() =>
@@ -3137,8 +3149,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   padding: EdgeInsets.zero, icon: const Icon(Icons.remove_circle_outline, color: Color(0xFF9BC5DD)),
                   onPressed: () => _adjustRate(-ReadingSettings.speechRateStep))),
                 Expanded(child: Slider(key: const ValueKey('reading-rate-slider'),
-                  padding: const EdgeInsets.symmetric(horizontal: 12), value: rate.clamp(0.5, 3.0),
-                  min: 0.5, max: 3, divisions: ReadingSettings.speechRateDivisions, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  value: rate.clamp(0.5, maxSpeechRateFor(_effectiveVoice)),
+                  min: 0.5, max: maxSpeechRateFor(_effectiveVoice),
+                  divisions: ((maxSpeechRateFor(_effectiveVoice) - 0.5) /
+                      ReadingSettings.speechRateStep).round(), activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
                   onChanged: _setRate)),
                 SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-plus'),
                   padding: EdgeInsets.zero, icon: const Icon(Icons.add_circle_outline, color: Color(0xFF9BC5DD)),
@@ -3247,11 +3262,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _adjustRate(double delta) {
-    _setRate((_settings.speechRate + delta).clamp(0.5, 3.0));
+    _setRate((_settings.speechRate + delta).clamp(0.5, maxSpeechRateFor(_effectiveVoice)));
   }
 
   void _setRate(double rate) {
-    rate = ReadingSettings.normalizeSpeechRate(rate);
+    rate = ReadingSettings.normalizeSpeechRate(rate, maxSpeechRateFor(_effectiveVoice));
     _settings.speechRate = rate;
     _tts.setSpeechRate(rate);
     _refreshTtsCache();
@@ -3601,7 +3616,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (!mounted) return;
     _systemVoices = systemVoices;
     _systemVoiceNames = {for (final v in systemVoices) v.id: v.name};
-    var enhancedOnly = false;
+    var enhancedOnly = true;
     final selected = await showModalBottomSheet<String>(context: context,
       builder: (ctx) => StatefulBuilder(builder: (sheet, update) {
         final voices = sortedEdgeVoices();
@@ -3639,15 +3654,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           subtitle: Text(T('systemTtsDescription'), maxLines: 2, overflow: TextOverflow.ellipsis),
           trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
           onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)));
-        items.add(Row(children: [
-          Expanded(child: SwitchListTile(dense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-            title: Text(T('voiceOnlyEnhanced'), style: const TextStyle(fontSize: 13)),
-            value: enhancedOnly, onChanged: (v) { enhancedOnly = v; update(() {}); })),
-          TextButton(onPressed: () async {
-            await _tts.openSystemVoiceSettings();
-          }, child: Text(T('voiceManageSettings'), style: const TextStyle(fontSize: 12))),
-        ]));
+        items.add(SwitchListTile(dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+          title: Text(T('voiceOnlyEnhanced'), style: const TextStyle(fontSize: 13)),
+          value: enhancedOnly, onChanged: (v) { enhancedOnly = v; update(() {}); }));
         for (final family in _voiceFamilyOrder) {
           final group = systemVoices.where((v) => _voiceFamily(v.lang) == family &&
               (!enhancedOnly || v.quality != 'default')).toList()
@@ -3677,6 +3687,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       }));
     if (selected == null || !mounted) return;
     final desired = ReadingSettings.fromJson(_settings.toJson())..voice = selected..systemFallbackActive = false;
+    desired.speechRate = ReadingSettings.normalizeSpeechRate(
+        desired.speechRate, maxSpeechRateFor(selected));
     await _applySpeechConfiguration(desired, updateVoice: true, resumeAfter: _inReadingMode);
   }
 
