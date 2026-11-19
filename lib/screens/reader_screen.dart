@@ -1,4 +1,4 @@
-// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math';
@@ -154,6 +154,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   bool _viewportPrepared = false;
   (Size, double)? _preparedViewportKey;
   bool _leavingReader = false;
+  List<SystemVoice> _systemVoices = const [];
+  Map<String, String> _systemVoiceNames = const {};
   final Map<(Size, double), ReaderHeaderLayout> _stableHeaders = {};
   late List<_Item> _items;
   late Book _book;
@@ -2290,7 +2292,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 只做“开场缓冲”，不整章缓存；失败静默，不影响当前播放。
   Future<void> _prefetchNextChapterHead(int chapter) async {
     final next = chapter + 1;
-    if (next >= _book.chapters.length || _effectiveVoice == TtsReader.systemVoice) {
+    if (next >= _book.chapters.length || SystemTtsClient.isSystemVoiceId(_effectiveVoice)) {
       return;
     }
     final ch = _book.chapters[next];
@@ -3564,9 +3566,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (sheet.mounted) update(() {});
     });
 
-  /// Voice settings and cache actions stay attached to stable voice IDs.
+  /// 音源选择：本地系统音色（离线）与在线 Edge 音色分区展示。
   Future<void> _openVoiceSelector() async {
     if (_applyingSpeechPauses) return;
+    final systemVoices = await _tts.systemVoices();
+    if (!mounted) return;
+    _systemVoices = systemVoices;
+    _systemVoiceNames = {for (final v in systemVoices) v.id: v.name};
     final selected = await showModalBottomSheet<String>(context: context,
       builder: (ctx) => StatefulBuilder(builder: (sheet, update) {
         final voices = sortedEdgeVoices();
@@ -3581,11 +3587,36 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             subtitle: Text(T('systemTtsDescription'), maxLines: 2, overflow: TextOverflow.ellipsis),
             trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
             onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)),
+        ];
+        // 系统音色按语言分组，优化/高级音质排在前面。
+        final sortedSystem = [...systemVoices]..sort((a, b) {
+          final qa = a.quality == 'default' ? 1 : 0;
+          final qb = b.quality == 'default' ? 1 : 0;
+          if (qa != qb) return qa - qb;
+          return a.name.compareTo(b.name);
+        });
+        String? lastSystemLang;
+        for (final v in sortedSystem) {
+          if (v.lang != lastSystemLang) {
+            lastSystemLang = v.lang;
+            items.add(Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+              child: Text(_groupLabel(v.lang), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: Theme.of(sheet).colorScheme.onSurfaceVariant))));
+          }
+          final id = '${SystemTtsClient.voicePrefix}${v.id}';
+          items.add(ListTile(dense: true,
+            leading: Icon(id == active ? Icons.radio_button_checked : Icons.radio_button_off,
+              color: const Color(0xFF6498B5)),
+            title: Text(v.name),
+            subtitle: Text('${_qualityLabel(v.quality)} · ${v.lang}'),
+            onTap: () => Navigator.pop(ctx, id)));
+        }
+        items.addAll([
           const Divider(),
           Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
             child: Text(T('voiceSectionOnline'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
               color: Theme.of(sheet).colorScheme.onSurfaceVariant))),
-        ];
+        ]);
         String? lastLang;
         for (final v in voices) {
           if (v.langCode != lastLang) {
@@ -3617,7 +3648,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _openBookCache({String? cacheVoice}) async {
     if (_applyingSpeechPauses) return;
     final voice = cacheVoice ?? _effectiveVoice;
-    if (voice == TtsReader.systemVoice) { _showToast(T('cacheOnlineOnly')); return; }
+    if (SystemTtsClient.isSystemVoiceId(voice)) { _showToast(T('cacheOnlineOnly')); return; }
     // Keep every operation bound to the selected online voice/rate, even if a
     // temporary offline fallback or another settings change occurs later.
     final rate = _settings.speechRate;
@@ -4123,9 +4154,19 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   // 设置面板（由右上角菜单触发）
+  static String _qualityLabel(String quality) => switch (quality) {
+        'premium' => T('voiceQualityPremium'),
+        'enhanced' => T('voiceQualityEnhanced'),
+        _ => T('voiceQualityDefault'),
+      };
+
   /// 音色显示名：中文界面显示中文友好名，其他界面显示英文名
-  static String _voiceLabel(String id) {
+  String _voiceLabel(String id) {
     if (id == TtsReader.systemVoice) return T('systemTtsName');
+    if (SystemTtsClient.isSystemVoiceId(id)) {
+      final vid = SystemTtsClient.identifierFrom(id);
+      return _systemVoiceNames[vid] ?? T('systemTtsName');
+    }
     for (final v in edgeVoices) {
       if (v.id == id) {
         return (AppI18n.current == AppLang.zhHans ||
@@ -4137,8 +4178,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     return id;
   }
 
-  static String _shortVoiceLabel(String id) => id == TtsReader.systemVoice ? T('shortSystemVoice')
-    : _voiceLabel(id).split(RegExp(r'[（(]')).first.trim();
+  String _shortVoiceLabel(String id) {
+    if (id == TtsReader.systemVoice) return T('shortSystemVoice');
+    final label = _voiceLabel(id);
+    if (SystemTtsClient.isSystemVoiceId(id)) return label;
+    return label.split(RegExp(r'[（(]')).first.trim();
+  }
 
   /// 音色组标题（语言自称，各界面语言下通用）
   static String _groupLabel(String langCode) => switch (langCode) {

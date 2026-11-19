@@ -38,7 +38,8 @@ class TtsReader {
   Object? _onlineNetworkFailure;
   ValueChanged<bool>? onVoiceModeChanged;
   bool get usingSystemFallback => _usingSystemFallback;
-  bool get usesSystemVoice => _voice == systemVoice || _usingSystemFallback;
+  bool get usesSystemVoice => SystemTtsClient.isSystemVoiceId(_voice) || _usingSystemFallback;
+  String? get _systemVoiceIdentifier => SystemTtsClient.identifierFrom(_voice);
   static const defaultVoice = 'zh-CN-XiaoxiaoNeural';
   static const _positionReadTimeout = Duration(seconds: 2);
   static const _loadingIndicatorDelay = Duration(milliseconds: 150);
@@ -202,6 +203,8 @@ class TtsReader {
   }
 
   /// 设置音色（zh-CN 等）
+  Future<List<SystemVoice>> systemVoices() => _system.voices();
+
   void setVoice(String v) {
     if (_voice == v && !_usingSystemFallback && _onlineNetworkFailure == null) return;
     _onlineNetworkFailure = null;
@@ -596,6 +599,7 @@ class TtsReader {
       try {
         await _system.speak(_sentences[sentence], _speechRate,
           startOffset: _systemResumeOffset,
+          voiceId: _systemVoiceIdentifier,
           onDone: () {
             if (_disposed || generation != _playGeneration || _state != TtsState.playing) return;
             _sentenceFinished();

@@ -1,11 +1,37 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
 import 'package:flutter/services.dart';
 
+/// iOS / Android 系统语音的一个可选音色。
+class SystemVoice {
+  final String id;
+  final String name;
+  final String lang;
+  final String quality; // default / enhanced / premium
+  final String gender;
+
+  const SystemVoice({
+    required this.id,
+    required this.name,
+    required this.lang,
+    this.quality = 'default',
+    this.gender = '',
+  });
+}
+
 class SystemTtsClient {
   static const voiceId = '__system_tts__';
+  static const voicePrefix = '__system_tts__:';
   static const channel = MethodChannel('com.ddnovelreader/system_tts');
   static SystemTtsClient? _owner;
+
+  /// 系统语音（默认音色或指定音色）都走同一个原生通道。
+  static bool isSystemVoiceId(String id) =>
+      id == voiceId || id.startsWith(voicePrefix);
+
+  static String? identifierFrom(String id) =>
+      id.startsWith(voicePrefix) ? id.substring(voicePrefix.length) : null;
+
   Future<void>? _initialization;
   String? _request;
   int _serial = 0;
@@ -29,12 +55,33 @@ class SystemTtsClient {
         _initialization = null; throw error;
       });
 
+  /// 列出系统可用的离线音色（iOS AVSpeechSynthesisVoice / Android TTS voices）。
+  /// 不支持或未实现时返回空列表，调用方保留默认音色入口。
+  Future<List<SystemVoice>> voices() async {
+    try {
+      final raw = await channel.invokeMethod<List<dynamic>>('voices');
+      if (raw == null) return const [];
+      return raw.whereType<Map>().map((m) => SystemVoice(
+        id: '${m['id'] ?? ''}',
+        name: '${m['name'] ?? ''}',
+        lang: '${m['lang'] ?? ''}',
+        quality: '${m['quality'] ?? 'default'}',
+        gender: '${m['gender'] ?? ''}',
+      )).where((v) => v.id.isNotEmpty).toList();
+    } on MissingPluginException {
+      return const [];
+    } on PlatformException {
+      return const [];
+    }
+  }
+
   /// [startOffset] is a requested visible-text cursor or the latest reported
   /// word start in the original sentence, measured in UTF-16 code units.
   /// Engines without ranges retain the requested cursor when resuming.
   /// Callbacks remain relative to [text], even when speaking only its suffix.
-  Future<void> speak(String text, double rate, {int startOffset = 0, required void Function() onDone,
-    required void Function(int, int) onRange, required void Function(Object) onError}) async {
+  Future<void> speak(String text, double rate, {int startOffset = 0, String? voiceId,
+    required void Function() onDone, required void Function(int, int) onRange,
+    required void Function(Object) onError}) async {
     if (_disposed || _owner != this) throw const SystemSpeechCancelled();
     RangeError.checkValueInInterval(startOffset, 0, text.isEmpty ? 0 : text.length - 1, 'startOffset');
     final spokenText = text.substring(startOffset);
@@ -53,7 +100,12 @@ class SystemTtsClient {
     final started = Completer<void>(); _started = started;
     try {
       await Future.wait<void>([
-        channel.invokeMethod<void>('speak', {'id': id, 'text': spokenText, 'rate': rate}),
+        channel.invokeMethod<void>('speak', {
+          'id': id,
+          'text': spokenText,
+          'rate': rate,
+          if (voiceId != null) 'voice': voiceId,
+        }),
         started.future.timeout(const Duration(seconds: 30)),
       ], eagerError: true);
     } catch (_) {
