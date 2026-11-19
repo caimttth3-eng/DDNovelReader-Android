@@ -1,13 +1,13 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
 import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
 import '../models/speech_word.dart';
-import 'tts_text.dart';
 
 /// 恢复的进度记录（total 与当前任务不符即作废；from* 记录缓存起点）
 typedef CacheProgress = ({
@@ -60,6 +60,7 @@ class TtsCacheStore {
 
   static const _progressFile = 'progress.json';
   static const _layoutMark = '.tts_layout_v2';
+  static final Map<String, Future<void>> _migrations = {};
 
   static Future<Directory> rootDir() async {
     final base = await getApplicationSupportDirectory();
@@ -107,7 +108,15 @@ class TtsCacheStore {
   /// 1) 一级目录 `<book.id>` → `<contentKey>`；
   /// 2) 语速目录 `1.00` / `1.50` → `0` / `50`（纯整数的目录视为已是新格式，跳过）。
   /// 已迁移过（有标记文件）就只做一次 exists 判断，后续零成本。
-  Future<void> _migrateLegacyLayout(Directory root) async {
+  Future<void> _migrateLegacyLayout(Directory root) {
+    final key = '${root.path}/$bookId/$cacheKey';
+    return _migrations.putIfAbsent(key, () async {
+      try { await _performLegacyMigration(root); }
+      finally { _migrations.remove(key); }
+    });
+  }
+
+  Future<void> _performLegacyMigration(Directory root) async {
     try {
       final sep = Platform.pathSeparator;
       final keyDir = Directory('${root.path}$sep${_safe(cacheKey)}');
@@ -128,8 +137,9 @@ class TtsCacheStore {
       if (await keyDir.exists()) await _migrateRateDirs(keyDir);
       if (!await keyDir.exists()) await keyDir.create(recursive: true);
       await mark.writeAsString('2', flush: true);
-    } catch (_) {
-      // 迁移失败不影响读写：新目录照样会被创建，只是旧 mp3 暂不命中
+    } on FileSystemException catch (error) {
+      debugPrint('Speech cache migration failed; existing audio retained: $error');
+      rethrow;
     }
   }
 
@@ -140,13 +150,25 @@ class TtsCacheStore {
       if (voiceDir is! Directory) continue;
       await for (final sub in voiceDir.list(followLinks: false)) {
         if (sub is! Directory) continue;
-        final name = sub.uri.pathSegments.last;
+        final name = sub.uri.pathSegments.where((segment) => segment.isNotEmpty).last;
         final m = rateNameRe.firstMatch(name);
         if (m == null) continue; // 纯整数 pct 目录：已是新格式
         final r = double.tryParse(name);
         if (r == null) continue;
         final target = Directory(
             '${voiceDir.path}$sep${ratePctOfSpeechRate(r).toString()}');
+        final children = await sub.list(followLinks: false).toList();
+        if (children.any((entry) => entry is File && entry.path.endsWith('.mp3'))) {
+          // Legacy raw audio used TTS offsets, not desktop source offsets.
+          // Preserve it without exposing it under the new coordinate scheme.
+          await target.create(recursive: true);
+          for (final child in children.whereType<Directory>()) {
+            final leaf = child.uri.pathSegments.where((part) => part.isNotEmpty).last;
+            if (leaf.startsWith('text-')) await _moveDirInto(child, Directory('${target.path}$sep$leaf'));
+          }
+          debugPrint('Legacy unversioned audio retained at ${sub.path}; new source-coordinate audio will be rebuilt.');
+          continue;
+        }
         if (!await target.exists()) {
           await sub.rename(target.path);
         } else {
@@ -164,17 +186,19 @@ class TtsCacheStore {
       final rel = e.path.substring(src.path.length + 1);
       final target = File('${dst.path}$sep$rel');
       await target.parent.create(recursive: true);
-      try {
-        if (!await target.exists()) {
-          await e.rename(target.path);
-        } else {
-          await e.delete();
-        }
-      } catch (_) {}
+      if (!await target.exists()) {
+        await e.rename(target.path);
+      } else if (listEquals(await e.readAsBytes(), await target.readAsBytes())) {
+        await e.delete();
+      } else {
+        debugPrint('Speech cache migration kept a differing legacy file: ${e.path}');
+      }
     }
-    try {
-      await src.delete(recursive: true);
-    } catch (_) {}
+    final directories = await src.list(recursive: true, followLinks: false).where((entry) => entry is Directory).cast<Directory>().toList();
+    directories.sort((a, b) => b.path.length.compareTo(a.path.length));
+    for (final directory in [...directories, src]) {
+      if (await directory.list(followLinks: false).isEmpty) await directory.delete();
+    }
   }
 
   /// 读缓存音频；未命中或空文件返回 null
@@ -423,7 +447,7 @@ class TtsCacheStore {
       if (!await root.exists()) return result;
       await for (final e in root.list(followLinks: false)) {
         if (e is! Directory) continue;
-        final bookId = e.uri.pathSegments.last;
+        final bookId = e.uri.pathSegments.where((segment) => segment.isNotEmpty).last;
         var total = 0;
         await for (final f in e.list(recursive: true, followLinks: false)) {
           if (f is File) {
@@ -472,14 +496,15 @@ class TtsCacheStore {
 /// 播放与缓存任务共用同一套坐标，保证命中。
 List<int> chapterSentenceOffsets(Chapter ch) {
   final offs = <int>[];
+  final whitespace = RegExp(r'\s');
   var acc = 0;
   for (final p in ch.paragraphs) {
-    final cpMap = utf16ToCodePointMap(p.display);
     for (final s in p.sentences) {
-      final ds = s.displayStart.clamp(0, p.display.length);
-      offs.add(acc + cpMap[ds]);
+      var ds = s.displayStart.clamp(0, p.display.length);
+      while (ds < p.display.length && whitespace.hasMatch(p.display[ds])) { ds++; }
+      offs.add(ch.sourceCoordinates[acc + ds]);
     }
-    acc += codePointLength(p.display) + 1;
+    acc += p.display.length + 1;
   }
   return offs;
 }

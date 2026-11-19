@@ -113,13 +113,14 @@ class WebDavClient {
     List<int>? body,
     Map<String, String>? headers,
     Set<int> allow = const {},
+    String? targetUrl,
   }) async {
     final http = HttpClient()..connectionTimeout = timeout;
     if (!verifyTls) {
       http.badCertificateCallback = (cert, host, port) => true;
     }
     try {
-      final req = await http.openUrl(method, Uri.parse(urlOf(rel)))
+      final req = await http.openUrl(method, Uri.parse(targetUrl ?? urlOf(rel)))
           .timeout(timeout);
       _baseHeaders.forEach((k, v) {
         req.headers.set(k, v, preserveHeaderCase: true);
@@ -278,10 +279,15 @@ class WebDavClient {
 
   /// 逐级创建目录（已存在跳过）。
   Future<void> mkdirs(String rel) async {
+    var root = baseUrl;
+    for (final segment in remoteDir.split('/').where((part) => part.isNotEmpty)) {
+      root += '${Uri.encodeComponent(segment)}/';
+      await _request('MKCOL', '', targetUrl: root, body: const <int>[], allow: {301, 405});
+    }
     var cur = '';
     for (final seg in rel.split('/').where((s) => s.isNotEmpty)) {
       cur = cur.isEmpty ? seg : '$cur/$seg';
-      await mkdir(cur);
+      if (!await mkdir(cur)) throw WebDavException('无法创建远端目录：$cur', 409);
     }
   }
 

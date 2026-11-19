@@ -1,8 +1,9 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
 import '../models/book.dart';
+import '../models/speech_word.dart';
 import 'edge_tts.dart';
 import 'tts_cache_store.dart';
 
@@ -31,7 +32,6 @@ class BookCacheTask {
   final String bookId;
   final TtsCacheStore store;
 
-  // 边听边缓存时留出带宽给朗读，2 路更稳
   static const int workerCount = 2;
   static const int saveInterval = 20;
 
@@ -266,23 +266,19 @@ class BookCacheTask {
         _markDone(idx);
         continue;
       }
-      Uint8List audio = Uint8List(0);
+      var audio = Uint8List(0);
+      List<SpeechWord> words = [];
       for (var attempt = 0; attempt < 2 && audio.isEmpty; attempt++) {
         try {
-          audio = await edgeSynth(
-            text,
-            voice: store.voice,
-            rate: edgeRateStr(store.rate),
-          );
-        } catch (_) {
-          if (attempt == 0) {
-            await Future<void>.delayed(const Duration(milliseconds: 600));
-          }
+          audio = await edgeSynth(text, voice: store.voice, rate: edgeRateStr(store.rate),
+            onWords: (value) => words = value);
+        } catch (error) {
+          debugPrint('Book cache synthesis failed: $error');
+          if (attempt == 0) await Future<void>.delayed(const Duration(milliseconds: 600));
         }
       }
-      if (audio.isEmpty) continue; // 多次失败：不标记完成，留待续传重试
       if (audio.isEmpty) continue;
-      await store.write(ci, off, audio);
+      await store.write(ci, off, audio, words: words);
       _markDone(idx);
     }
     _finalizeWorker();
