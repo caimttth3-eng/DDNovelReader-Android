@@ -1311,13 +1311,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
     _pendingScrollIndex = null;
     final navigation = ++_navigationGeneration;
-    final boundary = _pageBoundary.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    try {
-      if ((direction < 0 || _settings.pageTurnAnimation == 'slide') && boundary != null && !boundary.debugNeedsPaint) {
-        _pageImage = boundary.toImageSync(pixelRatio: MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.0));
-      }
-    } catch (_) { /* A page turn still works if a frame cannot be captured. */ }
-    if (!mounted) { _pageImage?.dispose(); _pageImage = null; return false; }
+    _captureOutgoingPage();
     setState(() {
       // Returning to the page dismisses overlay bars. In a cutout layout the
       // toolbar can extend below the fixed header and otherwise hide its first row.
@@ -1330,6 +1324,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     try {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted || navigation != _navigationGeneration) return false;
+      if (_pageImage == null) {
+        // A repaint pending at the tap is now complete, before any scrolling.
+        _captureOutgoingPage();
+        if (_pageImage != null) setState(() => _outgoingPage = RawImage(image: _pageImage, fit: BoxFit.fill));
+      }
       final rows = _pageLines();
       final page = _pageWindow(rows);
       if (page == null) return false;
@@ -1363,6 +1362,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       var targetItem = target.itemIndex;
       while (targetItem < _items.length - 1 && _items[targetItem].isTitle) { targetItem++; }
       if (seekSpeech) _updatePositionFromItem(targetItem);
+      // Paint the new clip behind the old page before exposing it. Otherwise
+      // the scroll can paint once using the previous page's clip.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || navigation != _navigationGeneration) return false;
       if (_settings.pageTurnAnimation == 'slide') {
         _pageAnimation.value = 0;
         setState(() => _pageReady = true);
@@ -1388,6 +1391,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         if (!automatic && _autoActive && !_autoPaused) _autoClock.forward(from: 0);
       }
     }
+  }
+
+  void _captureOutgoingPage() {
+    final boundary = _pageBoundary.currentContext?.findRenderObject();
+    if (boundary is! RenderRepaintBoundary || boundary.debugNeedsPaint) return;
+    try {
+      _pageImage = boundary.toImageSync(pixelRatio: MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.0));
+    } catch (_) { /* The transition can still finish without a snapshot. */ }
   }
 
   Future<({_PageLine start, String endKey})?> _preparePreviousPage(_PageLine first, int navigation, {bool retain = false}) async {
@@ -1451,6 +1462,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         FractionalTranslation(key: const ValueKey('page-incoming-transform'),
           translation: Offset(_pageReady ? _pageDirection * (1-v) : 0, 0), child: child),
         if (_viewSnapshot != null) RawImage(image: _viewSnapshot, fit: BoxFit.fill),
+        if (_paging && !_pageReady && _outgoingPage == null && _viewSnapshot == null) ColoredBox(color: _theme.bg),
         if (_outgoingPage != null) FractionalTranslation(key: const ValueKey('page-outgoing-transform'),
           translation: Offset(-_pageDirection * v, 0),
           child: ColoredBox(color: _theme.bg, child: _outgoingPage!)),

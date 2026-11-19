@@ -1870,7 +1870,13 @@ void main() {
         reason: 'A partially restored page must not show another incomplete row at the bottom');
       final y = tester.getCenter(body).dy;
       await tester.tapAt(Offset(direction < 0 ? 100 : 790, y));
-      await tester.pumpAndSettle();
+      final outgoing = find.byKey(const ValueKey('page-outgoing-transform'));
+      await tester.pump();
+      expect(outgoing, findsOneWidget, reason: 'Do not expose the old clip over new text, even without animation');
+      for (var frame = 0; frame < 20 && outgoing.evaluate().isNotEmpty; frame++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(outgoing, findsNothing);
       final after = rows();
       expect(after[2 + direction].top, closeTo(0, .25),
         reason: 'One tap must land on the immediately adjacent row, even after an in-between restore');

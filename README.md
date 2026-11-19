@@ -17,7 +17,7 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 公开安装包请从本修改版的 [GitHub Releases](https://github.com/NayGnehz/DDNovelReader-Android/releases) 下载；仓库不再存放 APK。已发布的 **1.2.26（31）** 可从其 [Release 页面](https://github.com/NayGnehz/DDNovelReader-Android/releases/tag/v1.2.26) 获取。支持 Android 7.0（API 24）及以上的 ARM64 设备，安装包约 19.4 MB。
 
-本地最新成功完整包为 **1.3.5（39）**，修复部分可见行导致的双向翻页卡住和缓存段落错位，保存在共享总根的 `_releases/ddnovelreader/v1.3.5/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该包已本地离线构建、固定签名和验签，不代表已安装真机或创建同版本 GitHub Release，详见 [本地布局与接收入口](docs/local-layout.md)。
+本地最新成功完整包为 **1.3.6（40）**，修复翻页时页底半行闪现，保存在共享总根的 `_releases/ddnovelreader/v1.3.6/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该包已本地离线构建、固定签名和验签，不代表已安装真机或创建同版本 GitHub Release，详见 [本地布局与接收入口](docs/local-layout.md)。
 
 本分支使用固定签名，后续使用相同证书的版本可覆盖更新。与原作者版本或早期临时调试签名不同，无法直接覆盖安装；更换前请备份书籍与数据。Release 提供 SHA-256 校验文件，详见 [固定签名说明](docs/signing.md)。
 
@@ -85,7 +85,7 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 共享维护者已正式接收四份 `package.xml`，并核证固定 Repository 对只读缓存写入失败的兼容性。入口在 Prepare lease 内验证这些元数据，以只读共享句柄保护既有 16B `.knownPackages`；缺失或无法保护即停止。句柄持有至进程后代自然结束、日志消费和完整 SDK 树后验完成，不忽略任何元数据差异，也不改 ACL/属性/联接。`DeliverApk` 将构建、固定签名和 LocalApk 接收放在同一护栏生命周期。精确结果见 [本地布局](docs/local-layout.md)。
 
-**1.3.5（39）已离线构建、固定签名、验签及本地接收**，ARM64 安装包 19,618,321 字节。85 项定向 Flutter 测试通过，覆盖只剩部分行时的双向翻页、不同字号和像素比的末行裁切、目录跳转、朗读与手势回归。静态分析无错误，共享 Android SDK 完整审计通过；未安装真机或远端发布。细节见 [固定签名说明](docs/signing.md) / [本地布局](docs/local-layout.md)。
+**1.3.6（40）已离线构建、固定签名、验签及本地接收**，ARM64 安装包 19,618,321 字节。78 项定向 Flutter 测试通过，覆盖关闭动画时双向翻页的首个可见帧、末行裁切、朗读与手势回归。静态分析无错误，共享 Android SDK 完整审计通过；未安装真机或远端发布。细节见 [固定签名说明](docs/signing.md) / [本地布局](docs/local-layout.md)。
 
 Windows 原生 shader 编译器无法写 `../` 输出，而 Flutter 不接受绝对 `build-dir`。因此仅宿主 `Test` 使用带 owner 标记的源根 `build/` 临时例外，全部测试消费完成后用 `Finalize` 清退；源码不复制、不开联接，其余可重定向输出仍在实例。`Finalize` 不清理可复用 SDK/pub/Maven 缓存或已发布包。
 

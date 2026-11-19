@@ -6,12 +6,13 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.3.5';
-  static const String build = '39';
+  static const String version = '1.3.6';
+  static const String build = '40';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.6：翻页时等新页完成裁切再显示，修复页底半行一闪而过的问题。',
     'v1.3.5：修复恢复到两行之间时露出半行、双向翻页卡住，以及缓存段落定位错误。',
     'v1.3.4：统一翻页和裁切的行边界，避免露出半行；向前翻页定位时不显示中间画面。',
     'v1.3.3：自动翻页不再切断同一句朗读；移除网络失败转系统音源开关的说明文字。',

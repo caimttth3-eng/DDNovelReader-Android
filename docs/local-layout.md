@@ -5,7 +5,7 @@
 | 用途 | 路径 |
 |---|---|
 | 唯一源码与 Git 历史 | `DDNovelReader/` |
-| 最新成功完整 ARM64 v1.3.5 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.5/` |
+| 最新成功完整 ARM64 v1.3.6 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.6/` |
 | 本地最新 APK 选择入口 | `DDNovelReader/scripts/LocalApk.ps1 -Action Path` |
 | 当前构建与独立调试符号 | `_cache/projects/ddnovelreader/main/build/`（符号位于 `debug-symbols/`） |
 | 当前签名资料（仅核元数据） | `_data/ddnovelreader/signing/` |
@@ -124,6 +124,10 @@ LocalApk 原子接收后已清退旧 1.2.27 完整包及相同签名输入副本
 ### 普通阅读双向翻页回归：1.3.5（39）
 
 85 项定向测试通过，静态分析无错误。合成回归覆盖普通阅读视口恢复到两行之间、底部裁切和两个方向的一次相邻定位；用户报告的原页面尚未在真机复核。离线 `DeliverApk` 成功（1 分 55 秒），固定证书验签及共享 Android SDK 完整树审计均通过。当前 ARM64 APK 为 19,618,321 字节，SHA-256 `37139569eca45fd26405d7e75a6aa9e7faa85d714779e3a8da217c01e5fde266`。接收无待处理项，源根测试输出已清退；未安装设备或远端发布。
+
+### 新页裁切后显示：1.3.6（40）
+
+78 项定向测试通过，静态分析无错误。新增逐帧断言覆盖关闭动画时向两个方向翻页，以及旧页遮盖撤下后的首个可见帧。离线 `DeliverApk` 成功（2 分 8 秒），固定证书验签及共享 Android SDK 完整树审计均通过。当前 ARM64 APK 为 19,618,321 字节，SHA-256 `e2164ac1ded844ba3a1c365bf0e4b0f4472486bf812fd23a715dca7888e53e82`。接收无待处理项，源根测试输出已清退；未安装设备或远端发布。
 
 ## 本地构建收尾与 APK 选择
 
