@@ -36,7 +36,7 @@ void main() {
   setUp(() {
     ReaderPreparation.runnerForTesting = (request) async => ReaderPreparation.prepareSynchronously(request);
     SharedPreferences.setMockInitialValues({'duoduo.settings.v1': jsonEncode({'brightness': 1.0, 'autoPageSeconds': 2,
-      'wordHighlightEnabled': true, 'pageTurnAnimation': 'slide', 'sentenceDragDelay': 0.0})});
+      'wordHighlightEnabled': true, 'pageTurnMode': 'tap', 'pageTurnAnimation': 'slide', 'sentenceDragDelay': 0.0})});
     AppAppearance.updateSystemBrightness(Brightness.light);
     AppAppearance.setThemeMode('system');
     volumeCalls.clear(); platformCalls.clear();
@@ -588,7 +588,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
     await storage.saveSettings((ReadingSettings()..wordHighlightEnabled = true..fontSize = 20..mergeNonSentenceBreaks = false
-      ..firstLineIndent = false).toJson());
+      ..pageTurnMode = 'tap'..firstLineIndent = false).toJson());
     String sentence(int paragraph, int sentence) => sentence == 0
       ? '第${paragraph.toString().padLeft(2, '0')}段清晨风吹过树林。' : '朋友在第${paragraph.toString().padLeft(2, '0')}段带来问候。';
     final book = Book(id: 'speech-after-paging', title: '翻页后朗读', filePath: '', format: BookFormat.txt,
@@ -967,6 +967,10 @@ void main() {
       matching: find.byType(Text))).maxLines, 1);
     await _captureReaderPreview(tester, preview, 'reader-speech-controls');
     await tester.tap(find.byKey(const ValueKey('playback-settings'))); await tester.pumpAndSettle();
+    final fallback = tester.widget<SwitchListTile>(find.byKey(const ValueKey('system-fallback-enabled')));
+    expect(fallback.value, isFalse);
+    fallback.onChanged!(true); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['systemFallbackEnabled'], isTrue);
     await tester.tap(find.byKey(const ValueKey('reading-prefetch'))); await tester.pumpAndSettle();
     final prefetch = find.byKey(const ValueKey('prefetch-number'));
     await tester.enterText(prefetch, '101'); await tester.tap(find.text('确定')); await tester.pumpAndSettle();
@@ -1016,7 +1020,7 @@ void main() {
     await storage.saveSettings(settings.toJson());
     final book = sample('cache-selected-voice');
     final formatted = ReadingText.format(book, merge: true, indent: true);
-    final fingerprint = 'words1-${ReadingText.fingerprint(formatted)}';
+    final fingerprint = 'words2-${ReadingText.fingerprint(formatted)}';
     String key(String voice) => '${book.id}/$fingerprint/$voice/1.80';
     final first = _TestBookCacheTask(book: formatted,
       store: TtsCacheStore(book.id, TtsReader.defaultVoice, 1.8, textFingerprint: fingerprint));
@@ -1076,7 +1080,7 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    await storage.saveSettings((ReadingSettings()..voice = TtsReader.defaultVoice..systemFallbackActive = true).toJson());
+    await storage.saveSettings((ReadingSettings()..voice = TtsReader.defaultVoice..systemFallbackEnabled = true..systemFallbackActive = true).toJson());
     final speech = _TestSpeech();
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('fallback-restored'), storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle(); expect(speech.usingSystemFallback, isTrue); expect(speech.voice, TtsReader.defaultVoice);
@@ -1325,7 +1329,7 @@ void main() {
   testWidgets('$voice speech starts at the visible line and manual pages keep its character offset', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
-    final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..voice = voice).toJson());
+    final storage = AppStorage(); await storage.saveSettings((ReadingSettings()..pageTurnMode = 'tap'..voice = voice).toJson());
     final book = Book(id: 'system-page-offset', title: '系统翻页', filePath: '', format: BookFormat.txt, addedAt: DateTime(2026),
       chapters: [Chapter(title: '第一章 山间', paragraphs: [Paragraph(display: List.filled(200, '清晨山间风吹树林远方传来朋友问候').join() + '。',
         tts: '', sentences: const [], sentenceStartTts: const [])])]);
@@ -1717,7 +1721,7 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
-  testWidgets('reader defaults to immediate pages and portrait until system rotation is enabled', (tester) async {
+  testWidgets('reader defaults to scroll and can select immediate tap pages and system rotation', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage(); await storage.saveSettings(ReadingSettings().toJson());
@@ -1731,6 +1735,10 @@ void main() {
     await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    final mode = tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-mode')));
+    expect(mode.value, 'scroll');
+    mode.onChanged!('tap'); await tester.pumpAndSettle();
+    expect((await storage.loadSettings())['pageTurnMode'], 'tap');
     expect(tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-animation'))).value, 'off');
     tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-animation'))).onChanged!('slide'); await tester.pumpAndSettle();
     expect((await storage.loadSettings())['pageTurnAnimation'], 'slide');
@@ -1799,7 +1807,7 @@ void main() {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(844, 320);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    await storage.saveSettings((ReadingSettings()..fontSize = 64..retainPageLine = true).toJson());
+    await storage.saveSettings((ReadingSettings()..pageTurnMode = 'tap'..fontSize = 64..retainPageLine = true).toJson());
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('one-line'), storage: storage)));
     await tester.pumpAndSettle();
     final list = find.byKey(const ValueKey('reader-body'));
@@ -1833,7 +1841,7 @@ void main() {
         });
       }
       final storage = AppStorage();
-      await storage.saveSettings((ReadingSettings()..fontSize = fontSize..lineHeight = 1.63..pageTurnAnimation = 'off'
+      await storage.saveSettings((ReadingSettings()..pageTurnMode = 'tap'..fontSize = fontSize..lineHeight = 1.63..pageTurnAnimation = 'off'
         ..fontFamily = File(fontPath).existsSync() ? 'PagingCjk' : '').toJson());
       final book = Book(id: 'toc-previous-$fontSize', title: '章节翻页边界', filePath: '', format: BookFormat.txt,
         addedAt: DateTime(2026), chapters: List.generate(8, (c) => Chapter(title: '第${c + 1}章 山间来信',

@@ -69,7 +69,7 @@ void main() {
       final rate = tick / 50;
       final saved = ReadingSettings()..speechRate = rate;
       expect(ReadingSettings.fromJson(saved.toJson()).speechRate, rate);
-      expect(TtsCacheStore('book', 'voice', rate).rateKey, rate.toStringAsFixed(2));
+      expect(TtsCacheStore('book', 'voice', rate).rateKey, ((rate - 1) * 100).round().toString());
       keys.add(TtsCacheStore('book', 'voice', rate).rateKey);
     }
     expect(keys, hasLength(126));

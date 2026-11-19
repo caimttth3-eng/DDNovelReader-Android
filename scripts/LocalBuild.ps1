@@ -2,6 +2,8 @@
 param(
     [ValidateSet('Resolve', 'Prepare', 'Restore', 'Analyze', 'Test', 'BuildApk', 'SignApk', 'DeliverApk', 'Finalize')][string]$Action = 'Resolve',
     [string[]]$TestPaths = @('test\tts_reader_queue_test.dart', 'test\reader_title_speech_test.dart', 'test\reader_layout_test.dart'),
+    [string]$TestName,
+    [string[]]$DartDefines = @(),
     [switch]$IncludeAndroid,
     [switch]$Online,
     [switch]$ConfigureOnly
@@ -170,8 +172,8 @@ function Invoke-Flutter([string[]]$Arguments) {
 
 function Restore-PubSeed {
     $manifest = Get-Content -LiteralPath (Join-Path $environmentRoot 'manifests\pub-dart3.14.0-windows-b5fb94b4365c.json') -Raw | ConvertFrom-Json
-    # App version/description changes do not change this public package closure.
-    # Restore still enforces the exact lock against the current pubspec offline.
+    # Keep the accepted resolution byte-for-byte, including informational roles.
+    # Offline enforce-lockfile validates direct references to already-locked packages.
     if ($manifest.schemaVersion -ne 1 -or $manifest.source -cne 'https://pub.flutter-io.cn' -or
         $manifest.inputLockSha256 -cne (Get-FileHash -LiteralPath (Join-Path $project 'pubspec.lock') -Algorithm SHA256).Hash.ToLowerInvariant()) {
         throw 'Shared pub seed does not match the project lock identity.'
@@ -464,7 +466,12 @@ Invoke-PortableInstance -ProjectId ddnovelreader -InstanceId main -Mode Prepare 
                     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $instance 'pub-lock.json') -Encoding UTF8
             }
             'Analyze' { Invoke-Flutter -Arguments @('analyze', '--no-pub', '--no-fatal-infos', '--no-fatal-warnings') }
-            'Test' { Invoke-Flutter -Arguments (@('test', '--no-pub', '--reporter', 'expanded') + $TestPaths) }
+            'Test' {
+                $arguments = @('test', '--no-pub', '--reporter', 'expanded') + $TestPaths
+                if ($TestName) { $arguments += @('--plain-name', $TestName) }
+                foreach ($define in $DartDefines) { $arguments += "--dart-define=$define" }
+                Invoke-Flutter -Arguments $arguments
+            }
             'BuildApk' { Invoke-ApkBuild }
             'SignApk' { Invoke-ApkSigning }
             'DeliverApk' {

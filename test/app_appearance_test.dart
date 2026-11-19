@@ -53,7 +53,7 @@ void main() {
       ..mergeNonSentenceBreaks = false..firstLineIndent = false
       ..informationFilter = true..informationFilterLevel = 'ads'
       ..voice = 'zh-CN-XiaoxiaoNeural'..speechRate = 1.5
-      ..prefetchSentences = 42..systemFallbackActive = true;
+      ..prefetchSentences = 42..systemFallbackEnabled = true..systemFallbackActive = true;
     final expected = saved.toJson()..['themeIndex'] = 2..['dayThemeIndex'] = 5;
     expect(AppAppearance.applySystemStartup(saved, Brightness.dark).toJson(), expected);
   });

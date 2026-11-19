@@ -6,12 +6,14 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.2.28';
-  static const String build = '33';
+  static const String version = '1.3.1';
+  static const String build = '35';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.1：修复严格 WebDAV 服务首次同步时远端根目录未创建的问题，完成本地真实 HTTP 推送、拉取及书源导入回归。',
+    'v1.3.0：合并上游数据同步、多编码识别、跨端缓存与网络重试；保留整页朗读，默认上下滚动；网络失败转系统音源改为可选开关，默认关闭。',
     'v1.2.28：朗读页内不滚动，读完整页再翻页；手动翻页后从页首字起读，兼容系统及在线音源。',
     'v1.2.27：语速按 0.02 调整并保存两位小数；修正系统语速百分比编码的浮点截断误差。',
     'v1.2.21：修复唤醒后的首行裁切，语速按0.02微调，增加翻页动画与跟随系统旋转设置；播放设置集中保存预加载、逐词高亮、亮屏时长、个性化停顿和拖动触发延时。',

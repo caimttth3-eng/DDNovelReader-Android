@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -18,19 +21,27 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   final storage = AppStorage();
+  final storedSettings = await storage.loadSettings();
   final startupSettings = AppAppearance.initialize(
-    ReadingSettings.fromJson(await storage.loadSettings()),
+    ReadingSettings.fromJson(storedSettings),
     WidgetsBinding.instance.platformDispatcher.platformBrightness,
   );
   // Persist before the bookshelf can reopen its last book: ReaderScreen reads
   // this same setting and must not restore last session's opposite appearance.
-  await storage.saveSettings(startupSettings.toJson());
+  await storage.saveSettings({...storedSettings, ...startupSettings.toJson()});
   AppAppearance.nightMode.value = startupSettings.themeIndex == AppAppearance.nightThemeIndex;
   // 注册用户自选字体（FontLoader 仅进程内有效，每次启动需重新注册）
   await FontManager.registerAll();
   AppI18n.current = AppLang.detect(
     WidgetsBinding.instance.platformDispatcher.locales,
   );
+  if (Platform.isIOS) {
+    try {
+      await (await AudioSession.instance).configure(const AudioSessionConfiguration.music());
+    } catch (error) {
+      debugPrint('Audio session configuration failed: $error');
+    }
+  }
   try {
     globalAudioHandler = await AudioService.init(
       builder: () => TtsAudioHandler(),

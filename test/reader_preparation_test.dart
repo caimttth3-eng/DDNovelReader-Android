@@ -138,7 +138,7 @@ void main() {
         expect(ReadingText.anchor(prepared.book, actual.chapterIndex, actual.paragraphIndex, actual.displayOffset), anchor);
         expect(ReadingText.locate(prepared.book, actual.chapterIndex, anchor), (actual.paragraphIndex, actual.displayOffset));
       }
-      expect(prepared.fingerprint, matches(RegExp(r'^words1-[a-f0-9]{20}$')));
+      expect(prepared.fingerprint, matches(RegExp(r'^words2-[a-f0-9]{20}$')));
     });
   }
 }

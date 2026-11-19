@@ -22,7 +22,7 @@ void main() {
     original = File('${directory.path}/original.txt');
     await original.writeAsString('前言。\n第一章 开始\n甲——乙。\n下一段。');
     meta = BookMeta(id: 'snapshot', title: '快照', filePath: original.path, format: 'txt', addedAt: DateTime(2026));
-    source = Book(id: meta.id, title: meta.title, filePath: meta.filePath, format: BookFormat.txt,
+    source = Book(id: meta.id, title: meta.title, filePath: meta.filePath, format: BookFormat.txt, contentKey: '0123456789abcdef',
       addedAt: meta.addedAt, chapters: [Chapter(title: '正文', paragraphs: [ReadingText.paragraph(await original.readAsString())])]);
     settings = ReadingSettings()..informationFilter = true..informationFilterLevel = 'links';
     prepared = ReaderPreparation.prepareSynchronously(ReaderPreparationRequest(source,
@@ -82,6 +82,8 @@ void main() {
     await cache.save(lookup, source, prepared);
     final restored = (await BookSnapshotCache(directoryPath: '${directory.path}/cache').lookup(meta, settings)).snapshot!;
     expect(identical(restored.source, source), isFalse);
+    expect(restored.source.contentKey, source.contentKey);
+    expect(restored.prepared.book.contentKey, source.contentKey);
     expect(restored.source.chapters[0].paragraphs[0].display, await original.readAsString());
     expect(restored.prepared.fingerprint, prepared.fingerprint);
     expect(restored.prepared.sourceMaps, prepared.sourceMaps);

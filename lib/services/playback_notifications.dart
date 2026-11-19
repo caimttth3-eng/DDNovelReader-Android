@@ -1,3 +1,4 @@
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'package:flutter/services.dart';
 
 class PlaybackNotificationStatus {

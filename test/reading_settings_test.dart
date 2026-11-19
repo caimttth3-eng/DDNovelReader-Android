@@ -137,7 +137,7 @@ void main() {
   });
   test('reading defaults and selected modes survive restart', () {
     final settings = ReadingSettings();
-    expect(settings.pageTurnMode, 'tap');
+    expect(settings.pageTurnMode, 'scroll');
     expect(settings.retainPageLine, isFalse);
     expect(settings.mergeNonSentenceBreaks, isTrue);
     expect(settings.firstLineIndent, isTrue);
@@ -174,11 +174,22 @@ void main() {
   test('sticky system fallback persists separately from the selected online voice', () async {
     SharedPreferences.setMockInitialValues({});
     expect(ReadingSettings.fromJson({}).systemFallbackActive, isFalse);
-    final settings = ReadingSettings()..voice = 'zh-CN-XiaoxiaoNeural'..systemFallbackActive = true;
+    final settings = ReadingSettings()..voice = 'zh-CN-XiaoxiaoNeural'..systemFallbackEnabled = true..systemFallbackActive = true;
     await AppStorage().saveSettings(settings.toJson());
     final restored = ReadingSettings.fromJson(await AppStorage().loadSettings());
     expect(restored.systemFallbackActive, isTrue);
     expect(restored.voice, 'zh-CN-XiaoxiaoNeural');
+  });
+  test('automatic system fallback is opt-in and disabled legacy sessions do not restore it', () {
+    expect(ReadingSettings().systemFallbackEnabled, isFalse);
+    final legacy = ReadingSettings.fromJson({'systemFallbackActive': true});
+    expect(legacy.systemFallbackEnabled, isFalse);
+    expect(legacy.systemFallbackActive, isFalse);
+    final enabled = ReadingSettings()..systemFallbackEnabled = true..systemFallbackActive = true;
+    final restored = ReadingSettings.fromJson(enabled.toJson());
+    expect(restored.systemFallbackEnabled, isTrue);
+    expect(restored.systemFallbackActive, isTrue);
+    expect(ReadingSettings.fromJson({...enabled.toJson(), 'systemFallbackEnabled': false}).systemFallbackActive, isFalse);
   });
   test('theme mode defaults to system and persists without losing specific page colors', () async {
     SharedPreferences.setMockInitialValues({});
@@ -222,7 +233,7 @@ void main() {
     }
     for (final enabled in [true, false]) {
       final settings = ReadingSettings()..wordHighlightEnabled = enabled
-        ..voice = 'saved-voice'..speechRate = 1.5..systemFallbackActive = true;
+        ..voice = 'saved-voice'..speechRate = 1.5..systemFallbackEnabled = true..systemFallbackActive = true;
       await AppStorage().saveSettings(settings.toJson());
       final restored = ReadingSettings.fromJson(await AppStorage().loadSettings());
       expect(restored.wordHighlightEnabled, enabled);

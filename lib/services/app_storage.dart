@@ -1,5 +1,8 @@
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/progress.dart';
@@ -28,12 +31,67 @@ class AppStorage {
     if (raw == null || raw.isEmpty) return [];
     try {
       final list = jsonDecode(raw) as List<dynamic>;
-      return list
+      final books = list
           .map((e) => BookMeta.fromJson(e as Map<String, dynamic>))
           .toList();
+      return await _repairBookPaths(books);
     } catch (_) {
       return [];
     }
+  }
+
+  /// 修复书籍文件路径：iOS 重装后容器 UUID 会变，历史记录里是旧绝对路径；
+  /// 另外早期导入存的是系统选择器临时路径。这里按「bookId + 扩展名」或
+  /// 文件名回落到当前 Documents/books 下，并写回书架。
+  Future<List<BookMeta>> _repairBookPaths(List<BookMeta> books) async {
+    if (books.isEmpty || !Platform.isIOS) return books;
+    Directory? booksDir;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      booksDir = Directory('${dir.path}/books');
+    } catch (_) {
+      return books;
+    }
+    var changed = false;
+    final out = <BookMeta>[];
+    for (final b in books) {
+      var path = b.filePath;
+      bool exists(String p) {
+        try {
+          return p.isNotEmpty && File(p).existsSync();
+        } catch (_) {
+          return false;
+        }
+      }
+
+      if (!exists(path)) {
+        final ext = switch (b.format) {
+          'epub' => '.epub',
+          'pdf' => '.pdf',
+          'docx' => '.docx',
+          _ => '.txt',
+        };
+        final base = path.split(RegExp(r'[/\\]')).last;
+        final candidates = <String>[
+          '${booksDir.path}/${b.id}$ext',
+          if (base.isNotEmpty) '${booksDir.path}/$base',
+        ];
+        for (final c in candidates) {
+          if (exists(c)) {
+            path = c;
+            break;
+          }
+        }
+      }
+      if (path != b.filePath) {
+        changed = true;
+        out.add(b.copyWith(filePath: path));
+      } else {
+        out.add(b);
+      }
+    }
+    if (changed) await saveBooks(out);
+    return out;
   }
 
   Future<void> saveBooks(List<BookMeta> books) async {
@@ -48,14 +106,82 @@ class AppStorage {
     if (books.any((b) => b.filePath == meta.filePath)) return;
     books.add(meta);
     await saveBooks(books);
+    // 重新导入同一本书 = 撤销它的删除墓碑，否则同步会把它再删一次
+    if (meta.contentKey.trim().isNotEmpty) {
+      await clearDeletion(meta.contentKey.trim());
+    }
   }
 
-  Future<void> removeBook(String bookId) async {
+  /// 从书架删除一本书，并留下删除墓碑（WebDAV 同步用它把删除传到其它设备）。
+  /// [deletedAt] 不传取当前时间；应用远端删除时必须传远端时间，
+  /// 否则本机时间会把对端的删除事件"变新"，导致两端反复拉锯。
+  Future<void> removeBook(String bookId, {double? deletedAt}) async {
     final books = await loadBooks();
+    String key = '';
+    String title = '';
+    for (final b in books) {
+      if (b.id == bookId) {
+        key = b.contentKey.trim();
+        title = b.title;
+        break;
+      }
+    }
     books.removeWhere((b) => b.id == bookId);
     await saveBooks(books);
     final sp = await _sp;
     await sp.remove(_progressPrefix + bookId);
+    if (key.isNotEmpty) {
+      await markDeleted(key, title, deletedAt: deletedAt, idKey: bookId);
+    } else {
+      // 老书还没回填 ck2：上传时用 book id 兜底，删除也必须用同一个 key
+      await markDeleted(bookId, title, deletedAt: deletedAt);
+    }
+  }
+
+  // ---------- 删除墓碑 ----------
+  static const _deletionsKey = 'duoduo.deletions.v1';
+
+  /// {content_key: {"deleted_at": 秒, "title": 书名}}
+  Future<Map<String, dynamic>> loadDeletions() async {
+    final sp = await _sp;
+    final raw = sp.getString(_deletionsKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final m = jsonDecode(raw);
+      if (m is Map) return m.map((k, v) => MapEntry(k.toString(), v));
+    } catch (_) {}
+    return {};
+  }
+
+  Future<void> saveDeletions(Map<String, dynamic> deletions) async {
+    final sp = await _sp;
+    await sp.setString(_deletionsKey, jsonEncode(deletions));
+  }
+
+  Future<void> markDeleted(String contentKey, String title,
+      {double? deletedAt, String? idKey}) async {
+    final key = contentKey.trim();
+    if (key.isEmpty) return;
+    final deletions = await loadDeletions();
+    final t = deletedAt ?? DateTime.now().millisecondsSinceEpoch / 1000.0;
+    final old = deletions[key];
+    final oldT = old is Map ? (old['deleted_at'] as num?)?.toDouble() ?? 0.0 : 0.0;
+    // 只保留最新一次删除事件
+    if (t >= oldT) {
+      deletions[key] = {
+        'deleted_at': t,
+        'title': title,
+        if (idKey != null && idKey.trim().isNotEmpty) 'id_key': idKey.trim(),
+      };
+      await saveDeletions(deletions);
+    }
+  }
+
+  Future<void> clearDeletion(String contentKey) async {
+    final key = contentKey.trim();
+    if (key.isEmpty) return;
+    final deletions = await loadDeletions();
+    if (deletions.remove(key) != null) await saveDeletions(deletions);
   }
 
   // ---------- 进度 ----------
@@ -89,10 +215,36 @@ class AppStorage {
     return _settings;
   }
 
+  /// 合并写入：阅读设置与同步配置共用同一份 map，
+  /// 任何一方保存时都不能把另一方的 key 冲掉（重启丢同步配置的根因）。
   Future<void> saveSettings(Map<String, dynamic> s) async {
-    _settings = s;
     final sp = await _sp;
-    await sp.setString(_settingsKey, jsonEncode(s));
+    var current = _settings;
+    final raw = sp.getString(_settingsKey);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        current = (jsonDecode(raw) as Map).cast<String, dynamic>();
+      } catch (_) {}
+    }
+    _settings = {...current, ...s};
+    await sp.setString(_settingsKey, jsonEncode(_settings));
+  }
+
+  // ---------- 书架打开顺序（最近打开的排最前） ----------
+  static const _openOrderKey = 'duoduo.openOrder.v1';
+
+  Future<List<String>> loadOpenOrder() async {
+    final sp = await _sp;
+    return sp.getStringList(_openOrderKey) ?? const [];
+  }
+
+  Future<void> touchOpened(String bookId) async {
+    final sp = await _sp;
+    final order = <String>[...(sp.getStringList(_openOrderKey) ?? const <String>[])];
+    order.remove(bookId);
+    order.insert(0, bookId);
+    if (order.length > 200) order.removeRange(200, order.length);
+    await sp.setStringList(_openOrderKey, order);
   }
 
   // ---------- 最后阅读的书籍（启动时自动恢复） ----------
@@ -119,7 +271,7 @@ class ReadingSettings {
   double brightness = 0.25;
   bool automaticBrightness = true;
   int autoPageSeconds = 20;
-  String pageTurnMode = 'tap';
+  String pageTurnMode = 'scroll';
   String pageTurnAnimation = 'off';
   bool followSystemRotation = false;
   double sentenceDragDelay = 0.2;
@@ -139,6 +291,7 @@ class ReadingSettings {
   double lineHeight = 1.6;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
   int prefetchSentences = defaultPrefetchSentences;
+  bool systemFallbackEnabled = false;
   bool systemFallbackActive = false;
   String voice = '';
   String themeMode = 'system';
@@ -193,6 +346,7 @@ class ReadingSettings {
         'lineHeight': lineHeight,
         'speechRate': speechRate,
         'prefetchSentences': prefetchSentences,
+        'systemFallbackEnabled': systemFallbackEnabled,
         'systemFallbackActive': systemFallbackActive,
         'voice': voice,
         'themeMode': themeMode,
@@ -227,7 +381,7 @@ class ReadingSettings {
         s.setVoiceSpeechPauses(entry.key as String, SpeechPauseSettings.fromJson(value));
       }
     }
-    s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'tap';
+    s.pageTurnMode = ['tap', 'swipe', 'scroll'].contains(mode) ? mode as String : 'scroll';
     s.retainPageLine = json['retainPageLine'] as bool? ?? false;
     s.mergeNonSentenceBreaks = json['textCorrection'] as bool? ?? json['mergeNonSentenceBreaks'] as bool? ?? true;
     s.firstLineIndent = json['firstLineIndent'] as bool? ?? true;
@@ -246,7 +400,8 @@ class ReadingSettings {
     s.prefetchSentences = ((json['prefetchSentences'] as num?)?.toInt() ?? defaultPrefetchSentences)
       .clamp(minPrefetchSentences, maxPrefetchSentences);
     s.voice = json['voice'] as String? ?? '';
-    s.systemFallbackActive = json['systemFallbackActive'] as bool? ?? false;
+    s.systemFallbackEnabled = json['systemFallbackEnabled'] as bool? ?? false;
+    s.systemFallbackActive = s.systemFallbackEnabled && (json['systemFallbackActive'] as bool? ?? false);
     final themeMode = json['themeMode'];
     s.themeMode = ['system', 'dark', 'light'].contains(themeMode) ? themeMode as String : 'system';
     s.themeIndex = (json['themeIndex'] as num?)?.toInt() ?? 0;

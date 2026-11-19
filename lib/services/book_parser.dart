@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -8,10 +9,13 @@ import 'package:xml/xml.dart';
 
 import '../models/book.dart';
 import 'chapterizer.dart';
+import 'content_key.dart';
+import 'text_decoder.dart';
 import 'text_cleaner.dart';
+import 'tts_text.dart';
 
 typedef _BookParseRequest = ({String id, String filePath, String title,
-  BookFormat format, DateTime addedAt, TextCleaner cleaner});
+  BookFormat format, DateTime addedAt, TextCleaner cleaner, bool desktopText});
 typedef _BookParseKey = ({String id, String filePath, String title,
   BookFormat format, DateTime addedAt, int size, DateTime modified, DateTime changed});
 
@@ -26,7 +30,7 @@ class _PendingBookParse {
 Future<Book> _parseBookInBackground(_BookParseRequest request) => Isolate.run(
   () => BookParser(cleaner: request.cleaner)._parseFile(
     id: request.id, filePath: request.filePath, title: request.title,
-    format: request.format, addedAt: request.addedAt),
+    format: request.format, addedAt: request.addedAt, desktopText: request.desktopText),
   debugName: 'book-parser',
 );
 
@@ -46,6 +50,7 @@ class BookParser {
   static const maxCachedDisplayCharacters = 4000000;
   final TextCleaner _cleaner;
   final bool _cacheEnabled;
+  final bool _desktopText;
   static (_BookParseKey, Book)? _cached;
   // Only active caller requests live here; completed books are bounded to one.
   static final Map<_BookParseKey, _PendingBookParse> _pending = {};
@@ -54,7 +59,7 @@ class BookParser {
   static bool fitsMemoryCache(Book book) => book.totalDisplayLength <= maxCachedDisplayCharacters;
 
   BookParser({TextCleaner? cleaner}) : _cleaner = cleaner ?? const TextCleaner(),
-    _cacheEnabled = cleaner == null;
+    _cacheEnabled = cleaner == null, _desktopText = cleaner == null;
 
   static void clearMemoryCache() {
     ++_latestCall;
@@ -153,7 +158,7 @@ class BookParser {
   }) async {
     final call = _cacheEnabled ? ++_latestCall : -1;
     final request = (id: id, filePath: filePath, title: title,
-      format: format, addedAt: addedAt, cleaner: _cleaner);
+      format: format, addedAt: addedAt, cleaner: _cleaner, desktopText: _desktopText);
     try {
       // File decoding, archive/XML extraction, chapter scans and sentence
       // cleaning all run in the worker, including continuations after I/O.
@@ -206,11 +211,12 @@ class BookParser {
     required String title,
     required BookFormat format,
     required DateTime addedAt,
+    required bool desktopText,
   }) async {
     try {
       final raw = await _readRawText(filePath, format);
-      final chapters = _autoChapter(raw);
-      return Book(
+      final chapters = _autoChapter(raw, desktopText: desktopText);
+      final book = Book(
         id: id,
         title: title,
         filePath: filePath,
@@ -218,6 +224,7 @@ class BookParser {
         chapters: chapters,
         addedAt: addedAt,
       );
+      return book.withContentKey(computeContentKey(title, chapters.length, bookFullText(book)));
     } catch (e) {
       return Book.failed(
         id: id,
@@ -249,33 +256,7 @@ class BookParser {
     return _decodeTxt(bytes);
   }
 
-  String _decodeTxt(List<int> bytes) {
-    // 先尝试严格 UTF-8
-    try {
-      final s = const Utf8Decoder(allowMalformed: false).convert(bytes);
-      if (!s.contains('\uFFFD')) return s;
-    } catch (_) {}
-    // UTF-16 LE/BE 探测（带 BOM）
-    if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
-      return _decodeUtf16(bytes.sublist(2), endian: Endian.little);
-    }
-    if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
-      return _decodeUtf16(bytes.sublist(2), endian: Endian.big);
-    }
-    // 退化为宽松 UTF-8（GBK 文本会得到替换符，但至少不崩溃）
-    return const Utf8Decoder(allowMalformed: true).convert(bytes);
-  }
-
-  String _decodeUtf16(List<int> bytes, {required Endian endian}) {
-    final sb = StringBuffer();
-    for (var i = 0; i + 1 < bytes.length; i += 2) {
-      final code = endian == Endian.little
-          ? bytes[i] | (bytes[i + 1] << 8)
-          : (bytes[i] << 8) | bytes[i + 1];
-      sb.writeCharCode(code);
-    }
-    return sb.toString();
-  }
+  String _decodeTxt(List<int> bytes) => decodeTextBytes(bytes);
 
   Future<String> _readEpub(String path) async {
     final bytes = await File(path).readAsBytes();
@@ -514,17 +495,96 @@ class BookParser {
 
   /// 自动分章：优先用智能分章引擎（支持「第X卷/第X章/Chapter N/序章/楔子」及分隔线、
   /// 书名前缀等三重检测，简介单独成章）；无可靠标题时按自然段落聚合成约 5000 字小节。
-  List<Chapter> _autoChapter(String raw) {
+  List<Chapter> _autoChapter(String raw, {required bool desktopText}) {
     final chapters = <Chapter>[];
-    for (final (title, body) in makeChapters(raw)) {
+    final detected = splitChapters(raw, preserveLayout: true);
+    final parts = detected ?? fallbackSplit(raw, preserveLayout: true);
+    for (final (title, body) in parts) {
+      if (desktopText) {
+        final chapter = _buildChapter(title, body, detectedHeading: detected != null);
+        if (chapter != null) chapters.add(chapter);
+        continue;
+      }
       final paras = _toParagraphs(body);
       if (paras.isEmpty) continue;
       chapters.add(Chapter(title: title, paragraphs: paras));
     }
     if (chapters.isEmpty) {
-      chapters.add(Chapter(title: '正文', paragraphs: _toParagraphs(raw.trim())));
+      if (desktopText) {
+        final chapter = _buildChapter('正文', raw.trim(), detectedHeading: false);
+        if (chapter != null) chapters.add(chapter);
+      } else {
+        chapters.add(Chapter(title: '正文', paragraphs: _toParagraphs(raw.trim())));
+      }
     }
     return chapters;
+  }
+
+  Chapter? _buildChapter(String title, String text, {required bool detectedHeading}) {
+    if (text.trim().isEmpty) return null;
+    final blocks = <(int, int)>[];
+    var position = 0;
+    for (final match in RegExp(r'\n\s*\n').allMatches(text)) {
+      blocks.add((position, match.start));
+      position = match.end;
+    }
+    blocks.add((position, text.length));
+    final kept = <(int, int)>[];
+    final displays = <String>[];
+    for (final block in blocks) {
+      final segment = text.substring(block.$1, block.$2);
+      if (segment.trim().isEmpty) continue;
+      kept.add(block);
+      displays.add(segment.trimRight());
+    }
+    if (kept.isEmpty) return null;
+    final rawDisplay = displays.join('\n');
+    final canonical = canonicalChapterBody(text, detectedHeading: detectedHeading);
+    final coordinates = canonicalSourceOffsets(rawDisplay, normalizedText: canonical);
+    final scalarMap = utf16ToCodePointMap(canonical);
+    int rawOffset(int normalizedOffset) {
+      final target = scalarMap[normalizedOffset.clamp(0, canonical.length)];
+      var low = 0, high = coordinates.length - 1;
+      while (low < high) {
+        final middle = (low + high) ~/ 2;
+        if (coordinates[middle] < target) { low = middle + 1; } else { high = middle; }
+      }
+      return low;
+    }
+    final starts = <int>[];
+    var base = 0;
+    for (final display in displays) { starts.add(base); base += display.length + 1; }
+    final clean = preprocessForTts(canonical);
+    final byParagraph = List.generate(kept.length, (_) => <Sentence>[]);
+    var paragraph = 0;
+    for (final (start, end) in splitSentenceRanges(clean.clean)) {
+      final tts = clean.clean.substring(start, end);
+      if (tts.trim().isEmpty) continue;
+      final sourceStart = rawOffset(clean.cmap[start]);
+      final last = clean.cmap[end - 1];
+      final unit = canonical.codeUnitAt(last);
+      final sourceEnd = rawOffset(last + (unit >= 0xd800 && unit <= 0xdbff ? 2 : 1));
+      while (paragraph + 1 < kept.length && sourceStart >= starts[paragraph + 1]) {
+        paragraph++;
+      }
+      final base = starts[paragraph];
+      final ds = (sourceStart - base).clamp(0, displays[paragraph].length);
+      final de = (min(sourceEnd, base + displays[paragraph].length) - base).clamp(ds, displays[paragraph].length);
+      byParagraph[paragraph].add(Sentence(displays[paragraph].substring(ds, de), tts,
+        displayStart: ds, displayEnd: de));
+    }
+    final paragraphs = <Paragraph>[];
+    for (var i = 0; i < kept.length; i++) {
+      final starts = <int>[];
+      var offset = 0;
+      for (final sentence in byParagraph[i]) {
+        starts.add(offset);
+        offset += sentence.tts.length;
+      }
+      paragraphs.add(Paragraph(display: displays[i], tts: byParagraph[i].map((s) => s.tts).join(),
+        sentences: byParagraph[i], sentenceStartTts: starts));
+    }
+    return Chapter(title: title, paragraphs: paragraphs, sourceCoordinates: coordinates);
   }
 
   List<Paragraph> _toParagraphs(String body) {

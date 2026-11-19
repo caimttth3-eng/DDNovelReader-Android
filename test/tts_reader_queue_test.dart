@@ -202,43 +202,45 @@ void main() {
     expect(calls.map((call) => call.$1), [0], reason: 'Changing the window while loading must not compete with first sound.');
     calls[0].$2.complete(Uint8List.fromList([0]));
     await starting;
-    await waitCount(2); calls[1].$2.complete(Uint8List.fromList([1]));
-    await waitCount(3);
+    await waitCount(4); calls[1].$2.complete(Uint8List.fromList([1]));
+    expect(calls.map((call) => call.$1), [0, 1, 2, 3]);
     expect(calls[2].$1, 2);
     reader.setPrefetchSentences(1);
     expect(calls[2].$3.cancelled, isTrue);
+    expect(calls[3].$3.cancelled, isTrue);
     await Future<void>.delayed(const Duration(milliseconds: 120));
-    expect(calls.length, 3);
+    expect(calls.length, 4);
     expect(player.played, [0]); expect(reader.currentIndex, 0);
     reader.setPrefetchSentences(3);
-    await waitCount(4);
-    expect(calls[3].$1, 2, reason: 'The enlarged window must not wait for a cancelled transport to resolve.');
+    await waitCount(6);
+    expect(calls[4].$1, 2, reason: 'The enlarged window must not wait for a cancelled transport to resolve.');
     calls[2].$2.complete(Uint8List.fromList([99]));
+    calls[3].$2.complete(Uint8List.fromList([99]));
     await Future<void>.delayed(Duration.zero);
-    calls[3].$2.complete(Uint8List.fromList([2]));
-    await waitCount(5); expect(calls[4].$1, 3);
-    calls[4].$2.complete(Uint8List.fromList([3]));
+    calls[4].$2.complete(Uint8List.fromList([2]));
+    expect(calls[5].$1, 3);
+    calls[5].$2.complete(Uint8List.fromList([3]));
     await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(calls.map((call) => call.$1), [0, 1, 2, 2, 3],
+    expect(calls.map((call) => call.$1), [0, 1, 2, 3, 2, 3],
       reason: 'Valid sentence 1 remains cached when shrinking and growing the window.');
     reader.setPrefetchSentences(2);
     reader.setPrefetchSentences(3);
-    await waitCount(6);
-    expect(calls[5].$1, 3, reason: 'Shrinking must evict the audio beyond the new bounded window.');
-    calls[5].$2.complete(Uint8List.fromList([3]));
+    await waitCount(7);
+    expect(calls[6].$1, 3, reason: 'Shrinking must evict the audio beyond the new bounded window.');
+    calls[6].$2.complete(Uint8List.fromList([3]));
     reader.setPrefetchSentences(0);
     await Future<void>.delayed(const Duration(milliseconds: 120));
-    expect(calls.length, 6); expect(player.played, [0]);
+    expect(calls.length, 7); expect(player.played, [0]);
     player.clock = const Duration(milliseconds: 1234);
     await reader.pause(); expect(await reader.resume(), isTrue);
     expect(player.starts.last, const Duration(milliseconds: 1234));
-    expect(calls.length, 6, reason: 'Turning off prefetch must retain the current offline-resumable audio.');
+    expect(calls.length, 7, reason: 'Turning off prefetch must retain the current offline-resumable audio.');
     player.completed.add(null);
-    await waitCount(7);
-    expect(calls[6].$1, 1);
-    calls[6].$2.complete(Uint8List.fromList([1]));
+    await waitCount(8);
+    expect(calls[7].$1, 1);
+    calls[7].$2.complete(Uint8List.fromList([1]));
     await Future<void>.delayed(const Duration(milliseconds: 120));
-    expect(calls.length, 7, reason: 'With prefetch disabled, only the now-current sentence is fetched.');
+    expect(calls.length, 8, reason: 'With prefetch disabled, only the now-current sentence is fetched.');
     expect(player.played, [0, 0, 1]);
   });
 
@@ -298,6 +300,25 @@ void main() {
     expect(onlineCalls, 0);
   });
 
+  test('network failure stops by default without invoking a system voice', () async {
+    const channel = MethodChannel('com.ddnovelreader/system_tts');
+    var systemCalls = 0;
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (_) async { systemCalls++; return null; });
+    addTearDown(() => binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async =>
+        throw const EdgeTtsException('connection');
+    final reader = TtsReader(player: _ResumePlayer(), synthesize: synth);
+    addTearDown(reader.dispose);
+    var errors = 0;
+    reader.onError = () => errors++;
+    await reader.start(['离线正文。']);
+    expect(reader.state, TtsState.stopped);
+    expect(reader.usingSystemFallback, isFalse);
+    expect(systemCalls, 0);
+    expect(errors, 1);
+  });
+
   for (final knownOffline in [true, false]) {
     test('${knownOffline ? 'OS disconnect' : 'actual connection failure'} consumes prefetch and disk audio before sticky system fallback', () async {
       final messenger = binding.defaultBinaryMessenger;
@@ -333,7 +354,7 @@ void main() {
         onWords([]); return Uint8List.fromList([int.parse(text)]);
       }
       final player = _ResumePlayer();
-      final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(1)..setCache(cache);
+      final reader = TtsReader(player: player, synthesize: synth)..setSystemFallbackEnabled(true)..setPrefetchSentences(1)..setCache(cache);
       addTearDown(reader.dispose);
       final modes = <bool>[];
       var errors = 0;
@@ -399,7 +420,7 @@ void main() {
       addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
       Future<Uint8List> synth(String text, {required String voice, required String rate,
         required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async => throw error;
-      final reader = TtsReader(player: _ResumePlayer(), synthesize: synth);
+      final reader = TtsReader(player: _ResumePlayer(), synthesize: synth)..setSystemFallbackEnabled(true);
       addTearDown(reader.dispose);
       var errors = 0; reader.onError = () => errors++;
       await reader.start(['正文。']);
@@ -437,7 +458,7 @@ void main() {
       required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
       onlineCalls++; return Uint8List.fromList([1]);
     }
-    final reader = TtsReader(player: _ResumePlayer(), synthesize: synth)..setNetworkAvailable(false);
+    final reader = TtsReader(player: _ResumePlayer(), synthesize: synth)..setSystemFallbackEnabled(true)..setNetworkAvailable(false);
     addTearDown(reader.dispose);
     var errors = 0; reader.onError = () => errors++;
     await reader.start(['正文。']);
@@ -493,7 +514,7 @@ void main() {
         token = cancelToken; return pending.future;
       }
       final player = _ResumePlayer();
-      final reader = TtsReader(player: player, synthesize: synth)..setPrefetchSentences(0);
+      final reader = TtsReader(player: player, synthesize: synth)..setSystemFallbackEnabled(true)..setPrefetchSentences(0);
       addTearDown(reader.dispose);
       var errors = 0; reader.onError = () => errors++;
       final starting = reader.start(['正在连接。']);
@@ -533,7 +554,7 @@ void main() {
       onlineCalls++; onWords([]); return Uint8List.fromList([1]);
     }
     final reader = TtsReader(player: _ResumePlayer(), synthesize: synth)
-      ..setVoice(TtsReader.defaultVoice)..restoreSystemFallback(true);
+      ..setSystemFallbackEnabled(true)..setVoice(TtsReader.defaultVoice)..restoreSystemFallback(true);
     addTearDown(reader.dispose);
     reader.setNetworkAvailable(false); reader.setNetworkAvailable(true);
     await reader.start(['重启后。']);
@@ -911,7 +932,8 @@ void main() {
       await waitUntil(() => words.contains((1, 3, 4)), 'next sentence must advance its own word');
       expect(sentences, [0, 1], reason: 'Reloading and seeking paused audio must not emit another sentence-start notification.');
       expect(sourceBytes, [1, 1, 1, 2]);
-      expect(synthesized, diskHit ? isEmpty : orderedEquals(texts));
+      expect(synthesized, diskHit ? isEmpty : unorderedEquals(texts));
+      if (!diskHit) expect(synthesized.first, texts.first);
       await reader.stop();
     });
   }

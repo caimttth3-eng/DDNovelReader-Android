@@ -198,7 +198,7 @@ void main() {
     final task = activeBookCaches.values.singleWhere((task) => task.bookId == bookId);
     expect(task.store.voice, targetVoice); expect(task.store.rate, 1.8);
     expect(task.store.textFingerprint, currentFingerprint);
-    expect(task.store.textFingerprint, 'words1-${ReadingText.fingerprint(task.book)}');
+    expect(task.store.textFingerprint, 'words2-${ReadingText.fingerprint(task.book)}');
     expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences), hasLength(2));
     expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences).map((s) => s.pauseAfterMilliseconds), isNot(contains(250)));
     expect(task.book.chapters.single.paragraphs.expand((p) => p.sentences).map((s) => s.pauseAfterMilliseconds), isNot(contains(450)));
@@ -221,7 +221,7 @@ void main() {
   testWidgets('system fallback reparses its own pause policy and keeps the current word anchor', (tester) async {
     await configureView(tester);
     final storage = AppStorage();
-    final settings = ReadingSettings()..voice = TtsReader.defaultVoice
+    final settings = ReadingSettings()..voice = TtsReader.defaultVoice..systemFallbackEnabled = true
       ..firstLineIndent = false..mergeNonSentenceBreaks = false;
     settings.setVoiceSpeechPauses(TtsReader.systemVoice,
       const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 250));

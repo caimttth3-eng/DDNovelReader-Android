@@ -1,3 +1,4 @@
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import '../models/book.dart';
@@ -138,6 +139,6 @@ class ReaderPreparation {
       titles.add(entry.paragraphIndex == 0 && entry.displayOffset == 0 && entry.title == source.chapters[c].title &&
         !originals.first.display.trimLeft().startsWith(entry.title));
     }
-    return PreparedReadingBook(book, 'words1-${ReadingText.fingerprint(book)}', maps, toc, anchors, titles);
+    return PreparedReadingBook(book, 'words2-${ReadingText.fingerprint(book)}', maps, toc, anchors, titles);
   }
 }

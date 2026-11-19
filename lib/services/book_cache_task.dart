@@ -32,7 +32,7 @@ class BookCacheTask {
   final String bookId;
   final TtsCacheStore store;
 
-  static const int workerCount = 3;
+  static const int workerCount = 2;
   static const int saveInterval = 20;
 
   List<(int, int, String)> _tasks = [];
@@ -70,7 +70,7 @@ class BookCacheTask {
     for (var ci = 0; ci < book.chapters.length; ci++) {
       if (fromChapter != null && ci < fromChapter) continue;
       final ch = book.chapters[ci];
-      final offs = chapterTtsSentenceOffsets(ch);
+      final offs = chapterSentenceOffsets(ch);
       var i = 0;
       for (final p in ch.paragraphs) {
         for (final s in p.sentences) {
@@ -266,17 +266,16 @@ class BookCacheTask {
         _markDone(idx);
         continue;
       }
-      final Uint8List audio;
+      var audio = Uint8List(0);
       List<SpeechWord> words = [];
-      try {
-        audio = await edgeSynth(
-          text,
-          voice: store.voice,
-          rate: edgeRateStr(store.rate),
-          onWords: (value) => words = value,
-        );
-      } catch (_) {
-        continue; // 网络/合成失败：不标记完成，留待续传重试
+      for (var attempt = 0; attempt < 2 && audio.isEmpty; attempt++) {
+        try {
+          audio = await edgeSynth(text, voice: store.voice, rate: edgeRateStr(store.rate),
+            onWords: (value) => words = value);
+        } catch (error) {
+          debugPrint('Book cache synthesis failed: $error');
+          if (attempt == 0) await Future<void>.delayed(const Duration(milliseconds: 600));
+        }
       }
       if (audio.isEmpty) continue;
       await store.write(ci, off, audio, words: words);

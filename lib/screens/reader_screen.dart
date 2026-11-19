@@ -11,6 +11,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../i18n.dart';
 import '../services/app_appearance.dart';
+import '../services/sync_engine.dart';
 import '../services/reading_text.dart';
 import '../services/reader_preparation.dart';
 import '../services/reader_screen_awake.dart';
@@ -168,6 +169,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   final Map<String, LongPressGestureRecognizer> _sentenceRecognizers = {};
   int _navigationGeneration = 0;
   bool _restoringProgress = true;
+  double _ownProgressAt = 0;
+  bool _syncing = false;
   bool _restoringViewport = false;
   int? _flowChapter, _flowParagraph, _flowOffset;
   int _viewRevision = 0;
@@ -556,7 +559,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       indent: _settings.firstLineIndent,
       pauseSettings: _settings.effectiveSpeechPauses,
       filter: _settings.informationFilter ? _settings.informationFilterLevel : 'none');
-    _installFormattedBook(book, 'words1-${ReadingText.fingerprint(book)}');
+    _installFormattedBook(book, 'words2-${ReadingText.fingerprint(book)}');
     _rebuildToc();
   }
 
@@ -660,13 +663,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _applySystemUi();
     _tts.setSpeechRate(_settings.speechRate);
     _tts.setPrefetchSentences(_settings.prefetchSentences);
+    _tts.setSystemFallbackEnabled(_settings.systemFallbackEnabled);
     _applyRotationPreference();
     final restoreFallback = _settings.systemFallbackActive;
     _tts.setVoice(_settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice);
     _tts.restoreSystemFallback(restoreFallback);
     final atTitle = p == null || p.atChapterTitle ||
-      (p.layoutSignature.isEmpty && p.paragraphIndex == 0 && p.offsetInParagraph == 0);
+      (p.layoutSignature.isEmpty && p.paragraphIndex == 0 && p.offsetInParagraph == 0 && (p.charOffsetInChapter ?? 0) == 0);
     _lastProgress = p;
+    _ownProgressAt = p?.updatedAt ?? 0;
+    if (p?.charOffsetInChapter != null) {
+      final c = p!.chapterIndex.clamp(0, _book.chapters.length - 1);
+      final location = widget.book.locateByCharOffset(c, p.charOffsetInChapter!);
+      p = p.copyWith(chapterAnchor: ReadingText.anchor(widget.book, c, location.$1, location.$2));
+    }
     if (p != null && p.flowChapter != null && p.flowAnchor != null && p.flowChapter! < _book.chapters.length) {
       final location = ReadingText.locate(_book, p.flowChapter!, p.flowAnchor!);
       _setFlowBreak(p.flowChapter!, location.$1, location.$2);
@@ -700,6 +710,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   Future<void> _saveProgress() async {
     if (!_settingsLoaded || _restoringProgress) return;
+    final stored = await widget.storage.loadProgress(_book.id);
+    if (stored != null && stored.updatedAt > _ownProgressAt + 0.5) return;
     final visible = mounted ? _visibleItems() : <ItemPosition>[];
     final first = visible.isEmpty ? null : visible.first;
     final it = first == null ? null : _items[first.index];
@@ -709,7 +721,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final offset = _inReadingMode && _ttsSentence >= 0 && _ttsSentence < para.sentences.length
       ? para.sentences[_ttsSentence].displayStart : first != null && !(it?.isTitle ?? true)
         ? _visibleOffset(first) : 0;
+    final sourceAnchor = ReadingText.anchor(_book, c, paraIndex, offset);
+    final sourcePosition = ReadingText.locate(widget.book, c, sourceAnchor);
     final p = BookProgress(bookId: _book.id, chapterIndex: c, paragraphIndex: paraIndex,
+      charOffsetInChapter: widget.book.charOffsetOf(c, sourcePosition.$1, sourcePosition.$2),
       offsetInParagraph: offset, chapterAnchor: ReadingText.anchor(_book, c, paraIndex, offset),
       percent: _percent, viewportItem: first?.index ?? _lastProgress?.viewportItem,
       viewportAlignment: first?.itemLeadingEdge ?? _lastProgress?.viewportAlignment ?? 0,
@@ -718,11 +733,29 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       flowChapter: _flowChapter, flowAnchor: _flowChapter != null && _flowParagraph != null && _flowOffset != null
         ? ReadingText.anchor(_book, _flowChapter!, _flowParagraph!, _flowOffset!) : null);
     _lastProgress = p;
+    _ownProgressAt = p.updatedAt;
     await widget.storage.saveProgress(p);
     await widget.onProgressChanged?.call(p);
   }
 
   // ---------- 书签与划线 ----------
+
+  Future<void> _syncNow() async {
+    if (_syncing) return;
+    final engine = SyncEngine(storage: widget.storage, annotations: AnnotationStore());
+    if (!engine.configured(await engine.settings())) {
+      if (mounted) _showToast(T('syncNotConfigured'));
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _syncing = true);
+    final report = await engine.sync();
+    if (!mounted) return;
+    setState(() => _syncing = false);
+    _showToast(report.ok ? report.summary : report.error);
+    if (report.removedIds.contains(_book.id)) Navigator.of(context).pop();
+    else if (report.ok) await _loadAnnotations();
+  }
 
   Future<void> _loadAnnotations() async {
     final store = AnnotationStore();
@@ -1632,7 +1665,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
   TtsCacheStore _currentCacheStore() =>
-      TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate, textFingerprint: _cacheFingerprint);
+      TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate, contentKey: _book.contentKey, textFingerprint: _cacheFingerprint);
 
 
   /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
@@ -2239,7 +2272,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _refreshTtsCache();
     await _tts.start(
       sentences,
-      offsets: chapterTtsSentenceOffsets(_book.chapters[c]),
+      offsets: chapterSentenceOffsets(_book.chapters[c]),
       pauseAfterMilliseconds: [for (final para in _book.chapters[c].paragraphs)
         for (final sentence in para.sentences) sentence.pauseAfterMilliseconds],
       chapterIndex: c,
@@ -3234,6 +3267,20 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           ListTile(key: const ValueKey('reading-prefetch'), title: Text(T('prefetchSentences', {'n': '${_settings.prefetchSentences}'})),
             subtitle: Text(T('prefetchDescription')), trailing: const Icon(Icons.tune),
             onTap: () async { await _openPrefetchSettings(); if (ctx.mounted) update(() {}); }),
+          SwitchListTile(key: const ValueKey('system-fallback-enabled'),
+            title: Text(T('systemFallbackEnabled')), subtitle: Text(T('systemFallbackDescription')),
+            value: _settings.systemFallbackEnabled, onChanged: _applyingSpeechPauses ? null : (value) async {
+              if (!value && _settings.systemFallbackActive) {
+                final desired = ReadingSettings.fromJson(_settings.toJson())
+                  ..systemFallbackEnabled = false..systemFallbackActive = false;
+                await _applySpeechConfiguration(desired, updateVoice: true);
+              } else {
+                setState(() => _settings.systemFallbackEnabled = value);
+                _tts.setSystemFallbackEnabled(value);
+                await widget.storage.saveSettings(_settings.toJson());
+              }
+              if (ctx.mounted) update(() {});
+            }),
           ListTile(title: Text(T('sentenceDragDelay', {'n': _settings.sentenceDragDelay.toStringAsFixed(1)}))),
           Slider(key: const ValueKey('sentence-drag-delay'), value: _settings.sentenceDragDelay,
             min: 0, max: 0.5, divisions: 5, onChanged: (value) {
@@ -3279,6 +3326,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _commitPauseConfiguration(ReadingSettings desired, {required bool updateVoice}) {
+    _settings.systemFallbackEnabled = desired.systemFallbackEnabled;
+    _tts.setSystemFallbackEnabled(desired.systemFallbackEnabled);
     _settings.speechPauses = desired.speechPauses;
     _settings.perVoiceSpeechPauses..clear()..addAll(desired.perVoiceSpeechPauses);
     if (updateVoice) {
@@ -3593,7 +3642,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     prepared?.attachSourceMaps();
     final cacheBook = prepared?.book ?? _book, fingerprint = prepared?.fingerprint ?? _cacheFingerprint;
     final cacheKey = '${cacheBook.id}/$fingerprint/$voice/${rate.toStringAsFixed(2)}';
-    final store = TtsCacheStore(cacheBook.id, voice, rate, textFingerprint: fingerprint);
+    final store = TtsCacheStore(cacheBook.id, voice, rate, contentKey: cacheBook.contentKey, textFingerprint: fingerprint);
     final task = activeBookCaches[cacheKey] ??
         (activeBookCaches[cacheKey] = BookCacheTask(
               book: cacheBook,
@@ -3803,7 +3852,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final sentence = ReadingText.sentenceAt(targetParagraph, target.$2);
     var global = sentence;
     for (var pi = 0; pi < target.$1; pi++) { global += task.book.chapters[c].paragraphs[pi].sentences.length; }
-    final offsets = chapterTtsSentenceOffsets(task.book.chapters[c]);
+    final offsets = chapterSentenceOffsets(task.book.chapters[c]);
     task.start(resume: false, fromChapter: c, fromOffset: global >= 0 && global < offsets.length ? offsets[global] : 0);
   }
 
@@ -3819,8 +3868,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         onSentenceDragEnd: inReading ? _finishSentenceDrag : null,
         onPreviousSentence: _prevSentence,
         onNextSentence: _nextSentence,
-        onPreviousPage: () { if (_settings.pageTurnMode == 'swipe') _pageUp(); },
-        onNextPage: () { if (_settings.pageTurnMode == 'swipe') _pageDown(); },
+        onPreviousPage: () { if (inReading || _settings.pageTurnMode == 'swipe') _pageUp(); },
+        onNextPage: () { if (inReading || _settings.pageTurnMode == 'swipe') _pageDown(); },
         onTapUp: _autoActive
             ? (_) => setState(() { _showAutoPanel = !_showAutoPanel; _showControls = _showAutoPanel; })
             : inReading
@@ -3843,7 +3892,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   bool _tapPage(TapUpDetails details) {
-    if (_settings.pageTurnMode != 'tap') return false;
+    if (!_inReadingMode && _settings.pageTurnMode != 'tap') return false;
     final width = MediaQuery.sizeOf(context).width;
     if (details.globalPosition.dx < width / 3) { _pageUp(); return true; }
     if (details.globalPosition.dx > width * 2 / 3) { _pageDown(); return true; }
@@ -3920,7 +3969,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   _quickAction(ReaderSymbol.play, T('autoPage'), _openAutoPage),
                 ]),
                 Row(children: [
-                  const Expanded(child: SizedBox()),
+                  Expanded(child: IconButton(key: const ValueKey('reader-sync'), tooltip: T('syncNow'),
+                    icon: Icon(Icons.sync, color: _syncing ? const Color(0xFF9BC5DD) : Colors.white70),
+                    onPressed: _syncing ? null : _syncNow)),
                   _quickAction(ReaderSymbol.bookmark, T('addBookmark'), _addCurrentBookmark),
                   _quickAction(ReaderSymbol.rotate, T('rotateScreen'), _toggleOrientation),
                   _quickAction(ReaderSymbol.settings, T('readerSettings'), () => _openSettingsPanel('all')),

@@ -1,3 +1,4 @@
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 /// 书签：定位到 (chapter, paragraph, sentence)
 class Bookmark {
   final String id;
@@ -10,6 +11,12 @@ class Bookmark {
   final String snippet; // 句子预览
   final DateTime createdAt;
 
+  /// 章内 display 字符偏移（PC 端 `offset` 口径），跨端同步时给 PC 定位用。
+  final int charOffset;
+
+  /// 章内 display 字符偏移结束（PC 端 `offset_end`）
+  final int charOffsetEnd;
+
   const Bookmark({
     required this.id,
     required this.bookId,
@@ -20,10 +27,14 @@ class Bookmark {
     required this.chapterTitle,
     required this.snippet,
     required this.createdAt,
+    this.charOffset = 0,
+    this.charOffsetEnd = 0,
   });
 
+  /// 安卓自有字段 + PC 兼容字段一起写，PC 端能直接读这条记录。
   Map<String, dynamic> toJson() => {
         'id': id,
+        'type': 'bookmark',
         'bookId': bookId,
         'chapterIndex': chapterIndex,
         'paragraphIndex': paragraphIndex,
@@ -32,20 +43,48 @@ class Bookmark {
         'chapterTitle': chapterTitle,
         'snippet': snippet,
         'createdAt': createdAt.toIso8601String(),
+        'charOffset': charOffset,
+        'charOffsetEnd': charOffsetEnd,
+        // ---- PC 端字段（novelreader/bookmark_ui.py）----
+        'chapter_idx': chapterIndex,
+        'offset': charOffset,
+        'offset_end': charOffsetEnd,
+        'text': snippet,
+        'note': snippet,
+        'created_at': createdAt.millisecondsSinceEpoch / 1000.0,
       };
 
   factory Bookmark.fromJson(Map<String, dynamic> json) => Bookmark(
-        id: json['id'] as String? ?? '',
+        id: (json['id'] ?? '').toString(),
         bookId: json['bookId'] as String? ?? '',
-        chapterIndex: json['chapterIndex'] as int? ?? 0,
-        paragraphIndex: json['paragraphIndex'] as int? ?? 0,
-        sentenceIndex: json['sentenceIndex'] as int? ?? 0,
-        chapterAnchor: json['chapterAnchor'] as int?,
+        chapterIndex: (json['chapterIndex'] as num?)?.toInt() ??
+            (json['chapter_idx'] as num?)?.toInt() ??
+            0,
+        paragraphIndex: (json['paragraphIndex'] as num?)?.toInt() ?? 0,
+        sentenceIndex: (json['sentenceIndex'] as num?)?.toInt() ?? 0,
+        chapterAnchor: (json['chapterAnchor'] as num?)?.toInt(),
         chapterTitle: json['chapterTitle'] as String? ?? '',
-        snippet: json['snippet'] as String? ?? '',
+        snippet: json['snippet'] as String? ??
+            json['text'] as String? ??
+            json['note'] as String? ??
+            '',
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+            _secondsToDate(json['created_at']) ??
             DateTime.now(),
+        charOffset: (json['charOffset'] as num?)?.toInt() ??
+            (json['offset'] as num?)?.toInt() ??
+            0,
+        charOffsetEnd: (json['charOffsetEnd'] as num?)?.toInt() ??
+            (json['offset_end'] as num?)?.toInt() ??
+            0,
       );
+
+  static DateTime? _secondsToDate(Object? v) {
+    if (v is num) {
+      return DateTime.fromMillisecondsSinceEpoch((v * 1000).round());
+    }
+    return null;
+  }
 }
 
 /// 划线：段内 display 字符区间（与 BookProgress.offsetInParagraph 同坐标系）
@@ -85,6 +124,7 @@ class Highlight {
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        'type': 'highlight',
         'bookId': bookId,
         'chapterIndex': chapterIndex,
         'paragraphIndex': paragraphIndex,

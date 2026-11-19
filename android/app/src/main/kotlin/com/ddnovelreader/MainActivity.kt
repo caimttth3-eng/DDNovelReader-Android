@@ -1,4 +1,4 @@
-package com.ddnovelreader
+﻿package com.ddnovelreader
 
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine

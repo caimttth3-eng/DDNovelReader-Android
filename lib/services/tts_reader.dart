@@ -34,6 +34,7 @@ class TtsReader {
   bool _networkAvailable = true;
   final _networkEvents = StreamController<bool>.broadcast(sync: true);
   bool _usingSystemFallback = false;
+  bool _systemFallbackEnabled = false;
   Object? _onlineNetworkFailure;
   ValueChanged<bool>? onVoiceModeChanged;
   bool get usingSystemFallback => _usingSystemFallback;
@@ -113,6 +114,8 @@ class TtsReader {
   int get currentTtsOffset => _systemResumeOffset;
   int get prefetchSentences => _prefetchSentences;
 
+  void setSystemFallbackEnabled(bool enabled) => _systemFallbackEnabled = enabled;
+
   void _startLoading(int generation) {
     _loadingDelay?.cancel();
     // An in-memory/disk hit still prepares a new native audio source. Do not
@@ -135,7 +138,7 @@ class TtsReader {
   /// Restore the saved effective mode after restoring the selected voice.
   /// Connectivity changes and chapter starts never clear this sticky choice.
   void restoreSystemFallback(bool active) {
-    final fallback = active && _voice != systemVoice;
+    final fallback = active && _systemFallbackEnabled && _voice != systemVoice;
     if (_usingSystemFallback == fallback) return;
     _usingSystemFallback = fallback;
     if (fallback) _cancelRequests();
@@ -156,7 +159,10 @@ class TtsReader {
       // Unlike stop/jump, do not change content generation: a cache read
       // already in progress may still supply perfectly usable offline audio.
       _networkEvents.add(false);
-    } else { _networkEvents.add(true); _startPrefetch(); }
+    } else {
+      if (!_usingSystemFallback) _onlineNetworkFailure = null;
+      _networkEvents.add(true); _startPrefetch();
+    }
   }
 
   void setPrefetchSentences(int value) {
@@ -230,6 +236,10 @@ class TtsReader {
 
   Future<bool> _playSystemFallback(Object error) {
     _rememberNetworkFailure(error);
+    if (!_systemFallbackEnabled) {
+      _fail(error);
+      return Future<bool>.value(false);
+    }
     _usingSystemFallback = true;
     _cancelRequests();
     onVoiceModeChanged?.call(true);
@@ -376,6 +386,7 @@ class TtsReader {
       return;
     }
     _contentGeneration++;
+    _onlineNetworkFailure = null;
     _wordCache.clear();
     final stopping = _stopInternal();
     final generation = _playGeneration;
@@ -720,7 +731,7 @@ class TtsReader {
         // AudioPlayer.play seeks after preparation and before starting audio.
         await _player.stop();
         if (_disposed || generation != _playGeneration || sentence != _index) return false;
-        await _player.play(BytesSource(audio), position: resumePosition > Duration.zero ? resumePosition : null)
+        await _player.play(BytesSource(audio, mimeType: 'audio/mpeg'), position: resumePosition > Duration.zero ? resumePosition : null)
           .timeout(const Duration(seconds: 15));
         if (_disposed || generation != _playGeneration || sentence != _index || _state != TtsState.playing) return false;
         _activeAudioIndex = sentence; _position = resumePosition;
@@ -763,28 +774,25 @@ class TtsReader {
   Future<void> _prefetchLoop() async {
     final generation = _contentGeneration;
     final worker = _prefetchGeneration;
+    final parallelism = _speechRate >= 2.5 ? 4 : 3;
     try {
       while (!_disposed && !usesSystemVoice && _networkAvailable && _onlineNetworkFailure == null && _state == TtsState.playing && generation == _contentGeneration && worker == _prefetchGeneration) {
-        // 计算下一个要预取的位置
-        final nextToPrefetch = _prefetchIndex + 1;
         final maxPrefetch = _index + _prefetchSentences;
-        // A full window has no work. Starting the next sentence, resuming or
-        // resizing the window starts another worker; no periodic wake-up is
-        // needed, and refilling must not wait for an old 200 ms polling sleep.
-        if (nextToPrefetch > maxPrefetch || nextToPrefetch >= _sentences.length) return;
-        _prefetchIndex = nextToPrefetch;
-        // Replanning must not temporarily remove reusable audio from memory:
-        // a second resize could otherwise synthesize that same sentence again.
-        if (_prefetchCache.containsKey(nextToPrefetch)) continue;
-        // 取音频：内存/磁盘/在线（命中磁盘零网络，并异步落盘供下次）
-        final audio = await _obtainAudio(nextToPrefetch);
-        if (_disposed || _state != TtsState.playing || generation != _contentGeneration || worker != _prefetchGeneration) return;
-        if (audio.isNotEmpty && nextToPrefetch > _index && _inMemoryWindow(nextToPrefetch)) {
-          _prefetchCache[nextToPrefetch] = audio;
+        final batch = <int>[];
+        while (batch.length < parallelism) {
+          final next = _prefetchIndex + 1;
+          if (next > maxPrefetch || next >= _sentences.length) break;
+          _prefetchIndex = next;
+          if (!_prefetchCache.containsKey(next)) batch.add(next);
         }
+        if (batch.isEmpty) return;
+        await Future.wait(batch.map((index) async {
+          final audio = await _obtainAudio(index);
+          if (_disposed || _state != TtsState.playing || generation != _contentGeneration || worker != _prefetchGeneration) return;
+          if (audio.isNotEmpty && index > _index && _inMemoryWindow(index)) _prefetchCache[index] = audio;
+        }));
+        if (_disposed || generation != _contentGeneration || worker != _prefetchGeneration) return;
         _prunePrefetch();
-        // Keep a single synthesis request in flight, but immediately prepare
-        // its successor. Short sentences should not pay an extra 80 ms each.
       }
     } catch (_) {} finally {
       if (worker == _prefetchGeneration) _prefetching = false;

@@ -1,3 +1,4 @@
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 /// Display-only break opportunities. Original text and speech coordinates stay
 /// unchanged, including when punctuation starts a line.
 class ReaderTypography {

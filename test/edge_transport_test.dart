@@ -153,15 +153,15 @@ class _RawEdgeServer {
           // Deliberately never acknowledge the WebSocket close frame.
         } else if (opcode == 1) {
           final message = utf8.decode(payload); messages.add(message);
-          if (message.contains('Path:ssml') && !ssmlReceived.isCompleted) {
-            ssmlReceived.complete();
+          if (message.contains('Path:ssml')) {
+            if (!ssmlReceived.isCompleted) ssmlReceived.complete();
             unawaited(Future<void>.sync(() => onSsml?.call(this)));
           }
         }
       }
     }, onDone: () { if (!disconnected.isCompleted) disconnected.complete(); },
       onError: (Object _) { if (!disconnected.isCompleted) disconnected.complete(); }));
-    connected.complete();
+    if (!connected.isCompleted) connected.complete();
   }
 
   void send(int opcode, List<int> payload) {
@@ -184,10 +184,10 @@ class _RawEdgeServer {
 void main() {
   Future<Uint8List> speak(_RawEdgeServer server, {EdgeSynthCancelToken? token,
       void Function(List<SpeechWord>)? onWords}) {
-    final delegate = HttpClient();
+    final caller = Zone.current;
     return HttpOverrides.runZoned(() => edgeSynth('测试。', voice: 'zh-CN-YunxiNeural',
       rate: '+10%', cancelToken: token, onWords: onWords),
-      createHttpClient: (_) => _LoopbackClient(delegate, server.uri));
+      createHttpClient: (_) => _LoopbackClient(caller.run(() => HttpClient()), server.uri));
   }
 
   test('complete audio is delivered at turn.end without waiting for a missing close acknowledgement', () async {
