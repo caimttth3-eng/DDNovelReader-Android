@@ -205,6 +205,17 @@ void main() {
       // 第 1 章第 2 段起点 = 第一段长度 5 + 1 个换行 = 6
       expect(book.charOffsetOf(0, 1, 0), 6);
     });
+    test('PC offsets count Unicode scalars rather than splitting UTF16 pairs', () {
+      final book = Book(id: 'unicode', title: 'unicode', filePath: '', format: BookFormat.txt, addedAt: DateTime(2026),
+        chapters: [Chapter(title: 'one', paragraphs: [
+          const Paragraph(display: '甲🙂乙', tts: '', sentences: [], sentenceStartTts: []),
+          const Paragraph(display: '丙𠀀丁', tts: '', sentences: [], sentenceStartTts: []),
+        ])]);
+      expect(book.locateByCharOffset(0, 2), (0, 3));
+      expect(book.charOffsetOf(0, 0, 3), 2);
+      expect(book.charOffsetOf(0, 1, 3), 6);
+      expect(book.locateByCharOffset(0, 6), (1, 3));
+    });
   });
 
   group('ck2 指纹测试向量', () {

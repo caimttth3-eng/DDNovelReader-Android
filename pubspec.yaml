@@ -1,4 +1,4 @@
-﻿name: duoduo_langdu
+name: duoduo_langdu
 description: "多多朗读 - 安卓本地小说阅读器，支持 Edge TTS 在线朗读、智能分章、句子级高亮跟随。"
 publish_to: 'none'
 
@@ -35,3 +35,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - docs/third-party/MaterialSymbols-LICENSE.txt
