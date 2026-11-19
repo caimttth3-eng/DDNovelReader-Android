@@ -5,7 +5,7 @@
 | 用途 | 路径 |
 |---|---|
 | 唯一源码与 Git 历史 | `DDNovelReader/` |
-| 最新成功完整 ARM64 v1.3.1 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.1/` |
+| 最新成功完整 ARM64 v1.3.2 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.3.2/` |
 | 本地最新 APK 选择入口 | `DDNovelReader/scripts/LocalApk.ps1 -Action Path` |
 | 当前构建与独立调试符号 | `_cache/projects/ddnovelreader/main/build/`（符号位于 `debug-symbols/`） |
 | 当前签名资料（仅核元数据） | `_data/ddnovelreader/signing/` |
@@ -106,6 +106,12 @@ LocalApk 原子接收后已清退旧 1.2.27 完整包及相同签名输入副本
 本轮源码 Git 操作均为本地：未创建/推送 PR。若向原仓库贡献，应从其 1.3 基线整理通用朗读/可选兜底/兼容修复及测试的增量，不把本项目固定证书、AGENTS、共享环境入口、本地版本号或成品记录混入上游 PR；这不是 APK 二进制补丁。
 
 父消费者结束后，自有 mock 已停止；核对合成书籍的固定内容后退役 4 文件、244 字节及相应临时目录，源根 owner 测试输出经 `Finalize` 清退 15 文件、231,069,304 字节。另在原 Prepare lease 下核无重解析点/占用后，清退三条已中止测试的 Flutter 临时编译/监听根（12 文件、335,308,532 字节）及空 JVM 性能目录，精确回执在实例 `temp/upstream13-abandoned-test-cleanup.json`。合并解析器、mock 脚本/端口和换行对照差异文件清退；SDK/pub/Maven/增量缓存、必要符号及日志保留，没有新增纯 UI 截图。最新 APK 选择入口已指向 1.3.1。
+
+### 主页主题与视图切换：1.3.2（36）
+
+本地离线 `DeliverApk` 成功（2 分 43 秒，421 个任务：37 执行、384 已最新），使用既有固定签名验签并归位。当前 APK 为 `_releases/ddnovelreader/v1.3.2/DDNovelReader-v1.3.2-arm64-v8a.apk`，19,618,321 字节，SHA-256 `4c256f82902ab7f6833bf8073fb8d34c20fa0b516d65560827a76b6e50c7120d`。共享 Android SDK 完整树审计通过，旧包已清退，接收无待处理项。未安装设备或远端发布。
+
+106 项定向测试通过，涵盖主页主题与视图记忆、状态栏返回恢复、数据同步表单、关于和缓存管理。静态分析退出码 0，无错误（保留 160 条 warning/info）；锁文件未改。源根临时测试输出经 `Finalize` 清退 12 文件、65,025,928 字节；未生成 UI 截图。
 
 ## 本地构建收尾与 APK 选择
 

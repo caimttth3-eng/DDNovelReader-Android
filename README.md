@@ -17,13 +17,15 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 公开安装包请从本修改版的 [GitHub Releases](https://github.com/NayGnehz/DDNovelReader-Android/releases) 下载；仓库不再存放 APK。已发布的 **1.2.26（31）** 可从其 [Release 页面](https://github.com/NayGnehz/DDNovelReader-Android/releases/tag/v1.2.26) 获取。支持 Android 7.0（API 24）及以上的 ARM64 设备，安装包约 19.4 MB。
 
-本地最新成功完整包为 **1.3.1（35）**，已合并原作者 1.3.0、保留本项目整页朗读增强并修复严格 WebDAV 服务的首次建目录问题，保存在共享总根的 `_releases/ddnovelreader/v1.3.1/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该包已本地离线构建、固定签名和验签，不代表已安装真机或创建同版本 GitHub Release，详见 [本地布局与接收入口](docs/local-layout.md)。
+本地最新成功完整包为 **1.3.2（36）**，新增主页主题及书架／列表切换，保存在共享总根的 `_releases/ddnovelreader/v1.3.2/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该包已本地离线构建、固定签名和验签，不代表已安装真机或创建同版本 GitHub Release，详见 [本地布局与接收入口](docs/local-layout.md)。
 
 本分支使用固定签名，后续使用相同证书的版本可覆盖更新。与原作者版本或早期临时调试签名不同，无法直接覆盖安装；更换前请备份书籍与数据。Release 提供 SHA-256 校验文件，详见 [固定签名说明](docs/signing.md)。
 
 ## 主要功能与修改
 
 ### 阅读、排版与目录
+
+- 主页右上角可切换深色／浅色和书架／列表，两项选择均会保存。列表保留原版的文件图标、格式、一位小数进度及长按删除。数据同步、关于和缓存管理等页面随应用主题切换。
 
 - 保留 TXT / EPUB 导入、书架、查找、书签、划线和自选字体；逐书保存进度，重新进入继续阅读。
 - 普通阅读提供“点击左右侧 / 左右滑动 / 上下滚动”三种方式，默认上下滚动，可在阅读设置调整；已有显式选择保留。点击/滑动分页以完整文字行为边界，可选择保留上一页末行。
@@ -83,7 +85,7 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 共享维护者已正式接收四份 `package.xml`，并核证固定 Repository 对只读缓存写入失败的兼容性。入口在 Prepare lease 内验证这些元数据，以只读共享句柄保护既有 16B `.knownPackages`；缺失或无法保护即停止。句柄持有至进程后代自然结束、日志消费和完整 SDK 树后验完成，不忽略任何元数据差异，也不改 ACL/属性/联接。`DeliverApk` 将构建、固定签名和 LocalApk 接收放在同一护栏生命周期。精确结果见 [本地布局](docs/local-layout.md)。
 
-真实项目的离线 ARM64 release 编译已通过。**1.3.1（35）已按持续授权使用既有固定证书完成本地签名、验签和 LocalApk 接收**，19,548,689 字节；401 项 Flutter 测试通过（含自有 loopback WebDAV 的真实 HTTP 推送/拉取/书源导入），3 项需显式外部输入或在线探测跳过，analyze 无 error（保留 warning/info）。仅既有签名脚本消费凭据，未输出或上传；完整 SDK 树审计通过，未安装应用或远端发布。被替代完整包在新包验证归位后由既有收尾流程清退。细节见 [固定签名说明](docs/signing.md) / [本地布局](docs/local-layout.md)。
+**1.3.2（36）已离线构建、固定签名、验签及本地接收**，ARM64 安装包 19,618,321 字节。106 项定向 Flutter 测试通过，覆盖主题切换、视图记忆、阅读页返回及同步对话框。静态分析无错误，共享 Android SDK 完整审计通过；未安装真机或远端发布。细节见 [固定签名说明](docs/signing.md) / [本地布局](docs/local-layout.md)。
 
 Windows 原生 shader 编译器无法写 `../` 输出，而 Flutter 不接受绝对 `build-dir`。因此仅宿主 `Test` 使用带 owner 标记的源根 `build/` 临时例外，全部测试消费完成后用 `Finalize` 清退；源码不复制、不开联接，其余可重定向输出仍在实例。`Finalize` 不清理可复用 SDK/pub/Maven 缓存或已发布包。
 

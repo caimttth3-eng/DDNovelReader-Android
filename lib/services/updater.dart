@@ -128,7 +128,7 @@ class Updater {
               Text(
                 '${T('latestVersion')}  ${info['tag']}    |    '
                 '${T('currentVersion')}  ${VersionInfo.version}',
-                style: const TextStyle(fontSize: 13, color: Colors.black54),
+                style: TextStyle(fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant),
               ),
               const SizedBox(height: 10),
               Text(

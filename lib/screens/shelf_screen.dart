@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../i18n.dart';
@@ -10,15 +11,16 @@ import '../models/book.dart';
 import '../models/progress.dart';
 import '../services/annotation_store.dart';
 import '../services/app_storage.dart';
+import '../services/app_appearance.dart';
 import '../services/book_cache_task.dart';
 import '../services/book_parser.dart';
 import '../services/sync_engine.dart';
 import '../services/tts_cache_store.dart';
 import '../services/updater.dart';
 import '../widgets/book_card.dart';
+import '../widgets/stable_system_bar_safe_area.dart';
 import 'about_screen.dart';
 import 'book_opening_screen.dart';
-import 'reader_screen.dart';
 import 'sync_screen.dart';
 
 /// 书架首页：顶部「多多朗读」+ ⋮ 设置(添加书籍)，4 列木纹书架，无限下滑。
@@ -39,6 +41,9 @@ class _ShelfScreenState extends State<ShelfScreen> {
   bool _loading = true;
   Timer? _syncTimer;
   bool _syncing = false;
+  bool _listMode = false;
+  bool _readerRouteOpen = false;
+  bool _changingTheme = false;
 
   @override
   void initState() {
@@ -50,6 +55,9 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   Future<void> _bootstrap() async {
+    final settings = await _storage.loadSettings();
+    if (!mounted) return;
+    _listMode = settings['shelfLayout'] == 'list';
     await _loadAll();
     if (!mounted) return;
     await _backfillKeys();
@@ -299,22 +307,45 @@ class _ShelfScreenState extends State<ShelfScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F0E8),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildTopBar(context),
-            const Divider(height: 1, thickness: 1, color: Color(0xFFB5A58A)),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _buildGrid(),
-            ),
-          ],
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      key: const ValueKey('shelf-system-bars'),
+      value: AppAppearance.systemUiStyle(Theme.of(context).brightness),
+      child: Scaffold(
+        body: StableSystemBarSafeArea(
+          holdInsets: _readerRouteOpen,
+          child: Column(
+            children: [
+              _buildTopBar(context),
+              const Divider(height: 1, thickness: 1),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _listMode ? _buildList() : _buildGrid(),
+              ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  Future<void> _toggleTheme() async {
+    if (_changingTheme) return;
+    setState(() => _changingTheme = true);
+    try {
+      final mode = AppAppearance.nightMode.value ? 'light' : 'dark';
+      final latest = ReadingSettings.fromJson(await _storage.loadSettings())..themeMode = mode;
+      final settings = AppAppearance.applySystemStartup(latest, AppAppearance.systemBrightness);
+      await _storage.saveSettings({'themeMode': mode, 'themeIndex': settings.themeIndex, 'dayThemeIndex': settings.dayThemeIndex});
+      AppAppearance.setThemeMode(mode);
+    } finally {
+      if (mounted) setState(() => _changingTheme = false);
+    }
+  }
+
+  Future<void> _toggleLayout() async {
+    setState(() => _listMode = !_listMode);
+    await _storage.saveSettings({'shelfLayout': _listMode ? 'list' : 'grid'});
   }
 
   Widget _buildTopBar(BuildContext context) {
@@ -322,20 +353,27 @@ class _ShelfScreenState extends State<ShelfScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Row(
         children: [
-          const Padding(
+          const Expanded(child: Padding(
             padding: EdgeInsets.symmetric(horizontal: 8),
             child: Text(
               '多多朗读',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.bold,
-                color: Color(0xFF5D3A1A),
               ),
             ),
-          ),
-          const Spacer(),
+          )),
+          IconButton(key: const ValueKey('shelf-theme-toggle'),
+            tooltip: T(Theme.of(context).brightness == Brightness.dark ? 'dayMode' : 'nightMode'),
+            icon: Icon(Theme.of(context).brightness == Brightness.dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined),
+            onPressed: _changingTheme ? null : _toggleTheme),
+          IconButton(key: const ValueKey('shelf-layout-toggle'), tooltip: T(_listMode ? 'shelfMode' : 'listMode'),
+            icon: Icon(_listMode ? Icons.grid_view_outlined : Icons.view_list_outlined), onPressed: _toggleLayout),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: Color(0xFF5D3A1A)),
+            key: const ValueKey('shelf-menu'),
+            icon: const Icon(Icons.more_vert),
             onSelected: (v) {
               if (v == 'add') _addBook();
               if (v == 'about') AboutScreen.show(context);
@@ -392,6 +430,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
 
   Widget _buildGrid() {
     return GridView.builder(
+      key: const PageStorageKey('shelf-grid'),
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 110, // 控制每行 4 格左右
@@ -404,6 +443,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
         if (i == 0) {
           return AddBookCard(onTap: _addBook);
         }
+
         final meta = _books[i - 1];
         final p = _progress[meta.id];
         final progress = p?.percent ?? 0.0;
@@ -422,13 +462,42 @@ class _ShelfScreenState extends State<ShelfScreen> {
     );
   }
 
+  Widget _buildList() {
+    final colors = Theme.of(context).colorScheme;
+    return ListView.separated(
+      key: const PageStorageKey('shelf-list'),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: _books.length + 1,
+      separatorBuilder: (_, __) => const Divider(height: 1, indent: 72),
+      itemBuilder: (context, i) {
+        if (i == 0) return ListTile(
+          leading: Icon(Icons.note_add_outlined, color: colors.primary),
+          title: Text(T('addBook')), onTap: _addBook,
+        );
+        final meta = _books[i - 1];
+        return ListTile(
+          minVerticalPadding: 16,
+          leading: Icon(Icons.description_outlined, size: 36, color: colors.onSurfaceVariant),
+          title: Text(meta.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+          subtitle: Text(meta.format.toUpperCase(), style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12)),
+          trailing: Text('${((_progress[meta.id]?.percent ?? 0) * 100).toStringAsFixed(1)}%',
+            style: TextStyle(color: colors.onSurfaceVariant)),
+          onTap: () => _openBook(meta), onLongPress: () => _confirmDelete(meta),
+        );
+      },
+    );
+  }
+
   Future<void> _openBook(BookMeta meta) async {
+    if (_readerRouteOpen) return;
+    setState(() => _readerRouteOpen = true);
+    try {
     // 记录打开顺序：回到书架时这本书排最前
     await _storage.touchOpened(meta.id);
+    if (!mounted) return;
     // 先打开加载页（首帧立即出画面），解析/排版在页面出现后再跑：
     // 大书点开不再卡在书架上等，解析完成会原地切到阅读页，没有二次转场。
-    Navigator.of(context).push(
-      MaterialPageRoute(
+    final route = MaterialPageRoute<void>(
         builder: (_) => BookOpeningScreen(
           title: meta.title,
           storage: _storage,
@@ -471,8 +540,15 @@ class _ShelfScreenState extends State<ShelfScreen> {
             }
           },
         ),
-      ),
-    ).then((_) { if (mounted) _loadAll(); });
+      );
+    await Navigator.of(context).push(route);
+    await route.completed;
+    } finally {
+      if (mounted) {
+        setState(() => _readerRouteOpen = false);
+        await _loadAll();
+      }
+    }
   }
 
   /// 缓存管理：语音缓存总占用 + 按书籍列出占用（清理单本/清空全部）
@@ -540,8 +616,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                 children: [
                   Row(
                     children: [
-                      const Icon(Icons.storage_outlined,
-                          color: Color(0xFF8A5A2B)),
+                      Icon(Icons.storage_outlined, color: Theme.of(ctx).colorScheme.primary),
                       const SizedBox(width: 10),
                       Text(T('cacheManage'),
                           style: const TextStyle(
@@ -564,7 +639,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                     total < 0
                         ? T('cacheScanning')
                         : T('cacheTotal', {'size': fmtSize(total)}),
-                    style: const TextStyle(fontSize: 13, color: Colors.black54),
+                    style: TextStyle(fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 6),
                   if (total < 0)
@@ -577,8 +652,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 24),
                       child: Center(
                         child: Text(T('cacheEmpty'),
-                            style: const TextStyle(
-                                fontSize: 13, color: Colors.black45)),
+                            style: TextStyle(fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant)),
                       ),
                     )
                   else
@@ -589,7 +663,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                           shrinkWrap: true,
                           itemCount: books.length,
                           separatorBuilder: (_, __) =>
-                              const Divider(height: 1, color: Color(0xFFE0D6C4)),
+                              const Divider(height: 1),
                           itemBuilder: (_, i) {
                             final (safeId, bytes) = books[i];
                             return Row(
@@ -603,8 +677,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                                   ),
                                 ),
                                 Text(fmtSize(bytes),
-                                    style: const TextStyle(
-                                        fontSize: 13, color: Colors.black54)),
+                                    style: TextStyle(fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant)),
                                 TextButton(
                                   onPressed: () async {
                                     final ok = await showDialog<bool>(
@@ -640,8 +713,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                                     }
                                   },
                                   child: Text(T('cacheClear'),
-                                      style: const TextStyle(
-                                          fontSize: 12, color: Color(0xFF8A5A2B))),
+                                      style: const TextStyle(fontSize: 12)),
                                 ),
                               ],
                             );

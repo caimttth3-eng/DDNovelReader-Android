@@ -480,10 +480,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _leavingReader = true; _playbackGeneration++; _permissionGate?.cancel(); _sentenceDrag = null;
     _syncScreenAwake();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge).catchError((Object _) {});
-    final dark = AppAppearance.nightMode.value;
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(statusBarColor: Colors.transparent,
-      statusBarIconBrightness: dark ? Brightness.light : Brightness.dark, systemNavigationBarColor: Colors.transparent,
-      systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark));
+    SystemChrome.setSystemUIOverlayStyle(AppAppearance.systemUiStyle(
+      AppAppearance.nightMode.value ? Brightness.dark : Brightness.light));
   }
 
   ReaderHeaderLayout get _headerLayout {
@@ -4471,8 +4469,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(T('default'),
-                          style: const TextStyle(
-                              fontSize: 13, color: Colors.grey)),
+                          style: TextStyle(fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant)),
                     )
                   else
                     ...fonts.map((f) => ListTile(
@@ -4720,7 +4717,7 @@ class _BookmarkSheetState extends State<_BookmarkSheet> {
                     if (_items.isEmpty)
                       Center(
                         child: Text(T('noBookmark'),
-                            style: const TextStyle(color: Colors.grey)),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                       ),
                   ],
                 ),
@@ -4904,7 +4901,7 @@ class _HighlightSheetState extends State<_HighlightSheet> {
                     if (_items.isEmpty)
                       Center(
                         child: Text(T('noHighlight'),
-                            style: const TextStyle(color: Colors.grey)),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                       ),
                   ],
                 ),
