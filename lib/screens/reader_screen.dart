@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math';
@@ -3571,11 +3571,21 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       builder: (ctx) => StatefulBuilder(builder: (sheet, update) {
         final voices = sortedEdgeVoices();
         final active = _settings.speechPauseVoice;
-        final items = <Widget>[ListTile(
-          leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
-          title: Text(T('systemTts')),
-          trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
-          onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)), const Divider()];
+        final items = <Widget>[
+          Padding(padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+            child: Text(T('voiceSectionLocal'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+              color: Theme.of(sheet).colorScheme.onSurfaceVariant))),
+          ListTile(
+            leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
+            title: Text(T('systemTtsName')),
+            subtitle: Text(T('systemTtsDescription'), maxLines: 2, overflow: TextOverflow.ellipsis),
+            trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
+            onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)),
+          const Divider(),
+          Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+            child: Text(T('voiceSectionOnline'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+              color: Theme.of(sheet).colorScheme.onSurfaceVariant))),
+        ];
         String? lastLang;
         for (final v in voices) {
           if (v.langCode != lastLang) {
@@ -4115,7 +4125,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   // 设置面板（由右上角菜单触发）
   /// 音色显示名：中文界面显示中文友好名，其他界面显示英文名
   static String _voiceLabel(String id) {
-    if (id == TtsReader.systemVoice) return T('systemTts');
+    if (id == TtsReader.systemVoice) return T('systemTtsName');
     for (final v in edgeVoices) {
       if (v.id == id) {
         return (AppI18n.current == AppLang.zhHans ||
