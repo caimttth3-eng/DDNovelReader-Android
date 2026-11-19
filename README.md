@@ -15,9 +15,9 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 ## 下载与安装
 
-公开安装包请从本修改版的 [GitHub Releases](https://github.com/NayGnehz/DDNovelReader-Android/releases) 下载；仓库不再存放 APK。已发布的 **1.2.26（31）** 可从其 [Release 页面](https://github.com/NayGnehz/DDNovelReader-Android/releases/tag/v1.2.26) 获取。支持 Android 7.0（API 24）及以上的 ARM64 设备，安装包约 19.4 MB。
+公开安装包请从本修改版的 [GitHub Releases](https://github.com/NayGnehz/DDNovelReader-Android/releases) 下载；仓库不再存放 APK。最新 **1.3.7（41）** 见 [Release 页面](https://github.com/NayGnehz/DDNovelReader-Android/releases/tag/v1.3.7)，直接使用已完成本地构建和验签的 APK，发布时未重新编译或签名。支持 Android 7.0（API 24）及以上的 ARM64 设备，APK 为 19,618,321 字节（约 19.6 MB）。
 
-本地最新成功完整包为 **1.3.7（41）**，修复朗读高亮越界和手动翻页起读位置，保存在共享总根的 `_releases/ddnovelreader/v1.3.7/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该包已本地离线构建、固定签名和验签，不代表已安装真机或创建同版本 GitHub Release，详见 [本地布局与接收入口](docs/local-layout.md)。
+本地最新成功完整包同为 **1.3.7（41）**，修复朗读高亮越界和手动翻页起读位置，保存在共享总根的 `_releases/ddnovelreader/v1.3.7/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该包已本地离线构建、固定签名和验签，未安装真机；公开资产与该本地 APK 字节一致，详见 [发布说明](docs/releases/v1.3.7.md) 和 [本地布局与接收入口](docs/local-layout.md)。
 
 本分支使用固定签名，后续使用相同证书的版本可覆盖更新。与原作者版本或早期临时调试签名不同，无法直接覆盖安装；更换前请备份书籍与数据。Release 提供 SHA-256 校验文件，详见 [固定签名说明](docs/signing.md)。
 
@@ -58,7 +58,7 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 ## 构建与验证
 
-开发、测试及发布包均改为本地构建，不再使用 GitHub Actions；[旧在线构建配方](.github/workflows/build-apk.yml) 已移除 push、PR、手动触发，并固定跳过构建 job。历史运行、Release 和验证记录不改写，也不因环境缺项回退在线或全局工具。
+开发、测试及发布包均改为本地构建，不再使用 GitHub Actions；[旧在线构建配方](.github/workflows/build-apk.yml) 和 [固定 v1.2.26 发布配方](.github/workflows/publish-release.yml) 均无 push、PR、手动触发并固定跳过 job。Release 直接上传本地已验签成品。历史运行和验证记录不改写，也不因环境缺项回退在线或全局工具。
 
 固定输入为 Flutter 3.50.0（官方 Windows 包随附 Dart 3.14.0，满足项目 `^3.13.2`）、Gradle 9.3.1-all、AGP 9.1.1、Kotlin 2.4.0；依赖以 `pubspec.lock` 为准。共享维护者登记并接收不可变工具/离线闭包，项目在 `ddnovelreader/main` 实例的 Prepare 锁下恢复可写 Flutter 运行树和缓存，不在共享 SDK 的 `bin/cache` 执行写入。Android 使用精确 API 36、NDK 28.2.13676358，不用现有 API 37 冒充。
 
