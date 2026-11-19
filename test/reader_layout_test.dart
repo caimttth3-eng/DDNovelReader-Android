@@ -1824,6 +1824,65 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  testWidgets('partially restored one-row viewport can still turn in either direction', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(844, 320);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..pageTurnMode = 'tap'..fontSize = 64).toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('partial-page'), storage: storage)));
+    await tester.pumpAndSettle();
+    final body = find.byKey(const ValueKey('reader-body'));
+    final controller = tester.widget<ScrollablePositionedList>(body);
+    final item = find.descendant(of: body, matching: find.byType(RichText));
+    List<Rect> rows() {
+      final paragraph = tester.renderObjectList<RenderParagraph>(item).firstWhere(
+        (render) => render.text.toPlainText().replaceAll('\u200B', '').replaceAll('\uFFFC', '').startsWith('第1章第4段。'));
+      final origin = paragraph.localToGlobal(Offset.zero) - tester.getTopLeft(body);
+      final lines = <int, Rect>{};
+      for (final box in paragraph.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: paragraph.text.toPlainText().length),
+        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+        final rect = box.toRect().shift(origin);
+        if (rect.width <= 2) continue;
+        lines.update(rect.top.round(), (line) => line.expandToInclude(rect), ifAbsent: () => rect);
+      }
+      return lines.values.toList()..sort((a, b) => a.top.compareTo(b.top));
+    }
+    controller.itemScrollController!.jumpTo(index: 4);
+    await tester.pumpAndSettle();
+    final rowHeight = rows()[3].top - rows()[2].top;
+    final fixedHeight = 320 - tester.getSize(body).height;
+    tester.view.physicalSize = Size(844, (fixedHeight + rowHeight * 1.15).roundToDouble());
+    await tester.pumpAndSettle();
+    for (final direction in [-1, 1]) {
+      controller.itemScrollController!.jumpTo(index: 4);
+      await tester.pumpAndSettle();
+      final offset = rows()[2].top + rowHeight * .65;
+      final scroll = controller.scrollOffsetController!.animateScroll(offset: offset, duration: const Duration(milliseconds: 1));
+      await tester.pump(); await tester.pump(const Duration(milliseconds: 16)); await scroll;
+      await tester.pumpAndSettle();
+      final before = rows();
+      final viewportSize = tester.getSize(body);
+      final clipBefore = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(viewportSize);
+      expect(before.where((row) => row.top >= -.25 && row.bottom <= viewportSize.height), isEmpty);
+      expect(clipBefore.bottom, closeTo(before[2].bottom, .25),
+        reason: 'A partially restored page must not show another incomplete row at the bottom');
+      final y = tester.getCenter(body).dy;
+      await tester.tapAt(Offset(direction < 0 ? 100 : 790, y));
+      await tester.pumpAndSettle();
+      final after = rows();
+      expect(after[2 + direction].top, closeTo(0, .25),
+        reason: 'One tap must land on the immediately adjacent row, even after an in-between restore');
+      final viewport = tester.getRect(body);
+      final clip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(viewport.size);
+      final visible = after.where((row) => row.top < clip.bottom - .5 && row.bottom > .5);
+      expect(visible.map((row) => row.top.round()).toSet(), hasLength(1));
+      for (final row in visible) { expect(row.bottom, lessThanOrEqualTo(clip.bottom + .5)); }
+    }
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
   for (final fontSize in [24.0, 64.0]) {
     for (final dpr in [1.0, 2.75]) {
     testWidgets('TOC chapter jumps followed by previous-page taps keep complete rows at font $fontSize DPR $dpr', (tester) async {

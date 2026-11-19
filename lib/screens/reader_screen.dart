@@ -166,6 +166,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   double? _pageClipBottom;
   bool _pageGeometryScheduled = false;
   String? _pageEndKey;
+  Object? _pageMetricsKey;
   final Map<String, LongPressGestureRecognizer> _sentenceRecognizers = {};
   int _navigationGeneration = 0;
   bool _restoringProgress = true;
@@ -1244,7 +1245,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || generation != _navigationGeneration) return;
     if (alignment < 0) {
-      final height = _bodyHeight;
+      final height = _pageViewportHeight;
       await _pageScrollController.animateScroll(offset: -alignment * height, duration: const Duration(milliseconds: 1));
       await WidgetsBinding.instance.endOfFrame;
     }
@@ -1325,33 +1326,37 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _outgoingPage = _pageImage == null ? null : RawImage(image: _pageImage, fit: BoxFit.fill);
     });
     _applySystemUi();
-    var moved = false;
+    var moved = false, positioning = false;
     try {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted || navigation != _navigationGeneration) return false;
       final rows = _pageLines();
-      final complete = _completePageRows(rows);
-      if (complete.isEmpty) return false;
-      final retain = seekSpeech && _settings.pageTurnMode != 'scroll' && _settings.retainPageLine && complete.length > 1;
-      final _PageLine? target;
+      final page = _pageWindow(rows);
+      if (page == null) return false;
+      final retain = seekSpeech && _settings.pageTurnMode != 'scroll' && _settings.retainPageLine && page.last > page.first;
+      final _PageLine target;
+      String? endKey;
       if (direction > 0) {
-        final next = rows.indexOf(complete.last) + 1;
+        final next = page.last + 1;
         if (next >= rows.length) return false;
-        target = retain ? complete.last : rows[next];
-        _pageEndKey = null;
+        target = rows[retain ? page.last : next];
       } else {
-        target = _previousPageTarget(rows, complete.first.key, retain: retain) ??
-          await _preparePreviousPage(complete.first, navigation, retain: retain);
-        if (target == null || target.key == complete.first.key) return false;
+        final first = rows[page.first];
+        var previous = _previousPageTarget(rows, first.key, retain: retain);
+        if (previous == null && first.itemIndex > 0) {
+          positioning = true;
+          previous = await _preparePreviousPage(first, navigation, retain: retain);
+        }
+        if (previous == null || previous.start.key == first.key) return false;
+        target = previous.start;
+        endKey = previous.endKey;
       }
-      // Move to an actual text-line boundary behind the frozen outgoing page.
+      positioning = true;
       if (!await _alignPageLine(target, navigation)) return false;
+      _pageEndKey = endKey;
       _updatePageGeometry();
       final visible = _visibleItems();
-      if (visible.isEmpty) {
-        await _positionViewport(old.first.index, old.first.itemLeadingEdge);
-        return false;
-      }
+      if (visible.isEmpty) return false;
       moved = visible.first.index != old.first.index ||
           (visible.first.itemLeadingEdge - old.first.itemLeadingEdge).abs() > 0.002;
       if (!moved) return false;
@@ -1369,7 +1374,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     } on TickerCanceled {
       return false;
     } finally {
-      if (mounted && !moved && navigation == _navigationGeneration) {
+      if (mounted && positioning && !moved && navigation == _navigationGeneration) {
         _pageEndKey = oldEndKey;
         await _positionViewport(old.first.index, old.first.itemLeadingEdge);
         if (mounted) _pageClipBottom = oldClipBottom;
@@ -1385,7 +1390,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
   }
 
-  Future<_PageLine?> _preparePreviousPage(_PageLine first, int navigation, {bool retain = false}) async {
+  Future<({_PageLine start, String endKey})?> _preparePreviousPage(_PageLine first, int navigation, {bool retain = false}) async {
     if (first.itemIndex <= 0) return null;
     final previousItem = first.itemIndex - 1;
     // A distant TOC jump centres a new indexed list. Its preceding sliver can
@@ -1404,7 +1409,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     return _previousPageTarget(rows, first.key, retain: retain, fallbackEndKey: endKey);
   }
 
-  _PageLine? _previousPageTarget(List<_PageLine> rows, String firstKey,
+  ({_PageLine start, String endKey})? _previousPageTarget(List<_PageLine> rows, String firstKey,
       {required bool retain, String? fallbackEndKey}) {
     final first = rows.indexWhere((line) => line.key == firstKey);
     final endIndex = first > 0 ? first - (retain ? 0 : 1) :
@@ -1414,8 +1419,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     var start = endIndex;
     while (start > 0 && _fitsPage(end.bottom - rows[start - 1].top)) { start--; }
     if (first >= 0 && start >= first) return null;
-    _pageEndKey = end.key;
-    return rows[start];
+    return (start: rows[start], endKey: end.key);
   }
 
   Future<bool> _alignPageLine(_PageLine target, int navigation) async {
@@ -1453,16 +1457,33 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       ])));
     });
 
+  ({RenderAbstractViewport viewport, double origin})? _pageCoordinates(RenderBox body) {
+    for (final position in _visibleItems()) {
+      final key = _titleKeys[position.index] ?? _paragraphKeys[position.index];
+      final render = key?.currentContext?.findRenderObject();
+      if (render is! RenderParagraph || !render.attached || !render.hasSize) continue;
+      final viewport = RenderAbstractViewport.maybeOf(render);
+      if (viewport == null) continue;
+      final top = render.localToGlobal(Offset.zero, ancestor: body).dy;
+      final origin = top - viewport.getOffsetToReveal(render, 0).offset;
+      if (origin.isFinite) return (viewport: viewport, origin: origin);
+    }
+    return null;
+  }
+
   List<_PageLine> _pageLines() {
-    final boundary = _pageBoundary.currentContext?.findRenderObject();
-    if (boundary is! RenderBox || !boundary.hasSize) return [];
-    final origin = boundary.localToGlobal(Offset.zero).dy;
+    final body = _pageBodyBox;
+    final coordinates = body == null ? null : _pageCoordinates(body);
+    if (coordinates == null) return [];
     final result = <_PageLine>[];
     for (final entry in {..._titleKeys, ..._paragraphKeys}.entries) {
       final render = entry.value.currentContext?.findRenderObject();
-      if (render is! RenderParagraph || !render.hasSize) continue;
-      final top = render.localToGlobal(Offset.zero).dy - origin;
-      if (top > _bodyExtent * 2 || top + render.size.height < -_bodyExtent) continue;
+      if (render is! RenderParagraph || !render.attached || !render.hasSize ||
+          RenderAbstractViewport.maybeOf(render) != coordinates.viewport) continue;
+      // An indexed viewport may clamp the paint transform of cached slivers
+      // before its center. Reveal offsets remain in one scroll coordinate space.
+      final top = coordinates.viewport.getOffsetToReveal(render, 0).offset + coordinates.origin;
+      if (!top.isFinite) continue;
       final text = render.text.toPlainText();
       final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
         boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
@@ -1508,17 +1529,28 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       return;
     }
     final rows = _pageLines();
-    final full = _completePageRows(rows);
-    final bottom = full.isEmpty ? _pageViewportHeight : min(_pageViewportHeight, full.last.bottom);
+    final page = _pageWindow(rows);
+    final bottom = page == null ? _pageViewportHeight : min(_pageViewportHeight, rows[page.last].bottom);
     if (_pageClipBottom != bottom) setState(() => _pageClipBottom = bottom);
   }
 
   bool _fitsPage(double bottom) => bottom <= _pageViewportHeight + 0.000001;
 
-  List<_PageLine> _completePageRows(List<_PageLine> rows) {
-    final end = rows.indexWhere((row) => row.key == _pageEndKey);
-    final candidates = end < 0 ? rows : rows.take(end + 1);
-    return candidates.where((row) => row.top >= -0.25 && _fitsPage(row.bottom)).toList();
+  ({int first, int last})? _pageWindow(List<_PageLine> rows) {
+    final height = _pageViewportHeight;
+    final first = rows.indexWhere((row) => row.top >= -0.25 && row.top < height);
+    if (first >= 0 && _fitsPage(rows[first].bottom)) {
+      final end = rows.indexWhere((row) => row.key == _pageEndKey);
+      final limit = end >= first ? end : rows.length - 1;
+      var last = first;
+      while (last < limit && _fitsPage(rows[last + 1].bottom)) { last++; }
+      return (first: first, last: last);
+    }
+    // Restored/reflowed offsets can leave two partial rows with no complete
+    // row between them. Keep the first intersecting row as the anchor so
+    // clipping and both directions still have an unambiguous boundary.
+    final intersecting = rows.indexWhere((row) => row.bottom > 0 && row.top < height);
+    return intersecting < 0 ? null : (first: intersecting, last: intersecting);
   }
 
   // Skip chapter headings and empty sentences, including at chapter boundaries.
@@ -2832,6 +2864,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _viewportSize = MediaQuery.sizeOf(context);
     _headerReservedExtent = _chapterTopArea();
     _bodyExtent = _bodyHeight;
+    final pageMetrics = (_layoutSignature, _bodyExtent, Directionality.of(context), MediaQuery.textScalerOf(context));
+    if (_pageMetricsKey != pageMetrics) {
+      _pageMetricsKey = pageMetrics;
+      _pageEndKey = null;
+      _pageClipBottom = null;
+      _schedulePageGeometry();
+    }
     final header = _headerLayout.chapterTitle(_chapterBarTitle(_chapter));
     return PopScope(
       onPopInvokedWithResult: (didPop, result) { if (didPop) _restoreSystemUiForExit(); },
