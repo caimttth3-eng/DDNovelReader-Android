@@ -82,12 +82,13 @@ void main() {
   Book source(String id, List<String> paragraphs) => Book(id: id, title: '短标题系统朗读', filePath: '',
     format: BookFormat.txt, addedAt: DateTime(2026), chapters: [Chapter(title: '开篇',
       paragraphs: paragraphs.map((text) => ReadingText.paragraph(text)).toList())]);
-  Future<TtsReader> open(WidgetTester tester, Book book, {TextDirection direction = TextDirection.ltr}) async {
+  Future<TtsReader> open(WidgetTester tester, Book book, {TextDirection direction = TextDirection.ltr,
+    String pageTurnMode = 'scroll', bool firstLineIndent = false}) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
-    await storage.saveSettings((ReadingSettings()..voice = TtsReader.systemVoice..pageTurnMode = 'scroll'
-      ..firstLineIndent = false..mergeNonSentenceBreaks = false..informationFilter = false
+    await storage.saveSettings((ReadingSettings()..voice = TtsReader.systemVoice..pageTurnMode = pageTurnMode..retainPageLine = true
+      ..firstLineIndent = firstLineIndent..mergeNonSentenceBreaks = false..informationFilter = false
       ..informationFilterLevel = 'links').toJson());
     final speech = TtsReader(player: _NoBytesPlayer());
     await tester.pumpWidget(MaterialApp(builder: (context, child) => Directionality(textDirection: direction, child: child!),
@@ -106,6 +107,97 @@ void main() {
     await _until(tester, () => spoken.isNotEmpty, 'A foreground read action must reach the real native system engine');
     await tester.pumpAndSettle();
   }
+
+  for (final mode in ['tap', 'scroll']) {
+    testWidgets('speech holds complete pages and continues a split sentence without word events in $mode mode', (tester) async {
+      final text = List.generate(160, (i) => i.toString().padLeft(3, '0') + '甲乙丙丁').join() + '。';
+      final speech = await open(tester, source('page-only-$mode', [text]), pageTurnMode: mode);
+      List<(int, double)> viewport() => list(tester).itemPositionsNotifier!.itemPositions.value
+        .where((p) => p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0)
+        .map((p) => (p.index, p.itemLeadingEdge)).toList()..sort((a, b) => a.$1.compareTo(b.$1));
+      final initial = viewport();
+      await start(tester);
+      expect(viewport(), initial, reason: 'Starting speech must not align the sentence to the first line.');
+      final clipFinder = find.byKey(const ValueKey('reader-page-clip'));
+      final clip = tester.widget<ClipRect>(clipFinder), size = tester.getSize(clipFinder);
+      final bottom = tester.getTopLeft(clipFinder).dy + clip.clipper!.getClip(size).bottom;
+      final render = paragraph(tester, '000甲乙丙丁'), plain = render.text.toPlainText();
+      final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: plain.length),
+        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+      final nextRow = boxes.firstWhere((box) => box.toRect().height > 2 &&
+        render.localToGlobal(Offset(0, box.bottom)).dy > bottom + 0.5).toRect();
+      final layoutOffset = render.getPositionForOffset(Offset(nextRow.left - 1, nextRow.center.dy)).offset;
+      final boundary = ReaderTypography.sourceOffset(text, layoutOffset);
+      expect(boundary, greaterThan(0)); expect(boundary, lessThan(text.length));
+      expect(spoken.single['text'], const TextCleaner().clean(text.substring(0, boundary)).tts,
+        reason: 'Even an engine with no range events must not speak text on the next page.');
+      final firstId = spoken.single['id'];
+      await emit(tester, 'range', {'id': firstId, 'start': 3, 'end': 5});
+      await tester.pumpAndSettle(); expect(viewport(), initial);
+      await emit(tester, 'range', {'id': firstId, 'start': boundary - 3, 'end': boundary - 1});
+      await tester.pumpAndSettle(); expect(viewport(), initial);
+      await emit(tester, 'done', {'id': firstId});
+      await _until(tester, () => spoken.length == 2, 'Only the completed page may advance to its continuation.');
+      await tester.pumpAndSettle();
+      expect(viewport(), isNot(initial)); expect(speech.currentTtsOffset, boundary);
+      expect(speech.currentIndex, 0, reason: 'A page edge is not a new logical sentence.');
+      final second = viewport();
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive); await tester.pump();
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
+      expect(viewport(), second, reason: 'Returning to the same active page must not align the cursor to its top.');
+      expect(spoken, hasLength(2));
+      for (var page = 0; page < 20 && speech.state == TtsState.playing; page++) {
+        final count = spoken.length;
+        await emit(tester, 'done', {'id': spoken.last['id']});
+        await _until(tester, () => spoken.length > count || speech.state != TtsState.playing,
+          'Each completed fragment must advance or finish.');
+        await tester.pumpAndSettle();
+      }
+      expect(speech.state, TtsState.stopped);
+      expect(spoken.map((request) => request['text'] as String).join(), const TextCleaner().clean(text).tts,
+        reason: 'Automatic pages must neither skip nor repeat the retained/manual overlap line.');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    }, timeout: const Timeout(Duration(seconds: 45)));
+  }
+
+  testWidgets('indented paragraph starts use complete glyph rows at page boundaries', (tester) async {
+    final paragraphs = List.generate(24, (i) => '第${i}段' + List.filled(8, '甲乙丙丁').join() + '。');
+    final speech = await open(tester, source('indented-pages', paragraphs), pageTurnMode: 'tap', firstLineIndent: true);
+    await start(tester);
+    for (var fragment = 0; fragment < 80 && speech.state == TtsState.playing; fragment++) {
+      final count = spoken.length;
+      await emit(tester, 'done', {'id': spoken.last['id']});
+      await _until(tester, () => spoken.length > count || speech.state != TtsState.playing,
+        'Paragraph indentation must not make a clipped row look like a complete visible line.');
+      await tester.pumpAndSettle();
+    }
+    expect(speech.lastFailure, isNull); expect(speech.state, TtsState.stopped);
+    expect(spoken.map((request) => request['text'] as String).join(), paragraphs.map(const TextCleaner().clean).map((text) => text.tts).join());
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  }, timeout: const Timeout(Duration(seconds: 45)));
+
+  testWidgets('backgrounding during page preparation releases speech without waiting for a frame', (tester) async {
+    final text = List.filled(120, '甲乙丙丁戊己庚辛壬癸').join() + '。';
+    await open(tester, source('background-page', [text]));
+    await start(tester);
+    final first = spoken.single['id'];
+    final delivered = Completer<void>();
+    messenger.handlePlatformMessage(SystemTtsClient.channel.name,
+      const StandardMethodCodec().encodeMethodCall(MethodCall('done', {'id': first})), (_) => delivered.complete());
+    await tester.idle();
+    await delivered.future;
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.idle();
+    expect(spoken, hasLength(2), reason: 'No widget frames are pumped while waiting for background audio.');
+    expect(spoken.map((request) => request['text'] as String).join(), const TextCleaner().clean(text).tts);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(spoken, hasLength(2), reason: 'Foreground alignment must not restart the active background utterance.');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  }, timeout: const Timeout(Duration(seconds: 45)));
 
   for (final scenario in [('short', '第 3 章 一寸金03', TextDirection.ltr),
     ('rtl', 'אבגדהוזח', TextDirection.rtl), ('bottom-padding', '第 3 章 一寸金03', TextDirection.ltr)]) {
@@ -149,14 +241,14 @@ void main() {
     await _action(tester, list(tester).scrollOffsetController!.animateScroll(
       offset: render.localToGlobal(Offset(0, row.top)).dy - body.top, duration: const Duration(milliseconds: 1)));
     await tester.pumpAndSettle(); await start(tester);
-    expect(spoken.single['text'], const TextCleaner().clean(text.substring(offset)).tts);
+    expect(spoken.single['text'], startsWith(const TextCleaner().clean(text.substring(offset, offset + 10)).tts));
     expect(speech.currentTtsOffset, offset, reason: 'Fixing invalid end offsets must preserve a valid mid-paragraph starting row');
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));
 
   for (final oldOffset in [9, 596]) {
   testWidgets('natural chapter completion clears old word offset ' + oldOffset.toString() + ' before a new short title', (tester) async {
-    final before = List.filled(60, '甲乙丙丁戊己庚辛壬癸').join() + '。';
+    final before = List.filled(oldOffset == 9 ? 1 : 60, '甲乙丙丁戊己庚辛壬癸').join() + '。';
     const title = '第 3 章 一寸金03';
     final book = Book(id: 'natural-cross-chapter-title', title: '自然跨章', filePath: '', format: BookFormat.txt,
       addedAt: DateTime(2026), chapters: [
@@ -165,8 +257,14 @@ void main() {
       ]);
     final speech = await open(tester, book);
     await start(tester); expect(spoken, hasLength(1));
-    final oldId = spoken.single['id'];
-    await emit(tester, 'range', {'id': oldId, 'start': oldOffset, 'end': oldOffset + 2});
+    for (var page = 0; page < 20 && speech.currentTtsOffset + (spoken.last['text'] as String).length < oldOffset + 2; page++) {
+      final count = spoken.length;
+      await emit(tester, 'done', {'id': spoken.last['id']});
+      await _until(tester, () => spoken.length > count, 'Advance to the page containing the final old word.');
+      await tester.pumpAndSettle();
+    }
+    final oldId = spoken.last['id'], nativeOffset = oldOffset - speech.currentTtsOffset;
+    await emit(tester, 'range', {'id': oldId, 'start': nativeOffset, 'end': nativeOffset + 2});
     await tester.pumpAndSettle();
     expect(speech.currentTtsOffset, oldOffset); expect(speech.currentWordStart, oldOffset);
     if (oldOffset == 9) {
@@ -174,40 +272,45 @@ void main() {
     } else {
       expect(oldOffset, greaterThan(title.length), reason: 'Also retain the invalid old-offset boundary regression');
     }
+    final count = spoken.length;
     await emit(tester, 'done', {'id': oldId});
-    await _until(tester, () => spoken.length >= 2, 'The previous chapter must naturally complete into the new title');
+    await _until(tester, () => spoken.length > count, 'The previous chapter must naturally complete into the new title');
     await tester.pumpAndSettle();
-    expect(spoken, hasLength(2), reason: 'Automatic chapter follow must synthesize the new title once');
+    expect(spoken, hasLength(count + 1), reason: 'Automatic chapter follow must synthesize the new title once');
+    expect(spoken.take(count).map((request) => request['text'] as String).join(), const TextCleaner().clean(before).tts);
     expect(spoken.last['text'], const TextCleaner().clean(title).tts,
       reason: 'The previous chapter final word must never be reused as the new title starting offset');
     expect(speech.currentIndex, 0); expect(speech.currentTtsOffset, 0);
     await emit(tester, 'range', {'id': oldId, 'start': 0, 'end': 1});
-    await tester.pumpAndSettle(); expect(spoken, hasLength(2)); expect(speech.currentTtsOffset, 0);
+    await tester.pumpAndSettle(); expect(spoken, hasLength(count + 1)); expect(speech.currentTtsOffset, 0);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));
   }
 
-  testWidgets('natural paragraph completion reads an entire short title once while following scroll', (tester) async {
+  testWidgets('natural paged paragraph completion reads an entire short title once', (tester) async {
     final before = List.filled(60, '甲乙丙丁戊己庚辛壬癸').join() + '。';
     const title = '第 3 章 一寸金03';
     final speech = await open(tester, source('natural-title', [before, title, '这是标题之后的正文。']));
     await start(tester); expect(spoken, hasLength(1));
     final oldId = spoken.single['id'];
-    await emit(tester, 'range', {'id': oldId, 'start': before.length - 5, 'end': before.length - 1});
+    for (var page = 0; page < 20 && speech.currentIndex == 0; page++) {
+      final count = spoken.length;
+      await emit(tester, 'done', {'id': spoken.last['id']});
+      await _until(tester, () => spoken.length > count, 'Completing each page must eventually advance to the title');
+      await tester.pumpAndSettle();
+    }
     await tester.pumpAndSettle();
-    await emit(tester, 'done', {'id': oldId});
-    await _until(tester, () => spoken.length >= 2, 'Completing the first paragraph must naturally advance to the title');
-    await tester.pumpAndSettle();
-    expect(spoken, hasLength(2), reason: 'Viewport follow must not issue an extra seek/restart on the title');
+    final count = spoken.length;
+    expect(spoken.take(count - 1).map((request) => request['text'] as String).join(), const TextCleaner().clean(before).tts);
     expect(spoken.last['text'], const TextCleaner().clean(title).tts);
     expect(speech.currentTtsOffset, 0);
     await emit(tester, 'range', {'id': oldId, 'start': 0, 'end': 1});
-    await tester.pumpAndSettle(); expect(spoken, hasLength(2));
+    await tester.pumpAndSettle(); expect(spoken, hasLength(count));
     final titleId = spoken.last['id'];
     await emit(tester, 'done', {'id': titleId});
-    await _until(tester, () => spoken.length >= 3, 'The title must continue to the following paragraph');
+    await _until(tester, () => spoken.length > count, 'The title must continue to the following paragraph');
     await tester.pumpAndSettle();
-    expect(spoken, hasLength(3)); expect(spoken.last['text'], '这是标题之后的正文。');
+    expect(spoken, hasLength(count + 1)); expect(spoken.last['text'], '这是标题之后的正文。');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));

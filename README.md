@@ -17,7 +17,7 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 公开安装包请从本修改版的 [GitHub Releases](https://github.com/NayGnehz/DDNovelReader-Android/releases) 下载；仓库不再存放 APK。已发布的 **1.2.26（31）** 可从其 [Release 页面](https://github.com/NayGnehz/DDNovelReader-Android/releases/tag/v1.2.26) 获取。支持 Android 7.0（API 24）及以上的 ARM64 设备，安装包约 19.4 MB。
 
-本地最新成功完整包为 **1.2.27（32）**，保存在共享总根的 `_releases/ddnovelreader/v1.2.27/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该本地测试包归位不代表已创建同版本 GitHub Release，详见 [本地布局与接收入口](docs/local-layout.md)。
+本地最新成功完整包为 **1.2.28（33）**，包含本轮朗读分页修改，保存在共享总根的 `_releases/ddnovelreader/v1.2.28/`；使用 `scripts/LocalApk.ps1 -Action Path` 获取经校验的实际路径。该包已本地离线构建、固定签名和验签，不代表已安装真机或创建同版本 GitHub Release，详见 [本地布局与接收入口](docs/local-layout.md)。
 
 本分支使用固定签名，后续使用相同证书的版本可覆盖更新。与原作者版本或早期临时调试签名不同，无法直接覆盖安装；更换前请备份书籍与数据。Release 提供 SHA-256 校验文件，详见 [固定签名说明](docs/signing.md)。
 
@@ -38,6 +38,7 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 - 支持原有 Edge 在线音色及 Android 系统文本转语音。系统音源的离线能力、可用语言及词范围回调取决于所装引擎。
 - 整句高亮；可开启逐词高亮，缺少真实词边界时自动回退整句。使用实际范围与时间信息，不估算逐词时间。
+- 前台朗读固定当前页，读完整页再翻页，不逐句滚动或将光标移到首行；跨页长句按实际行边界继续。手动翻页时，系统及在线音源均从目标页首字起读。
 - 朗读时上下滑动切句；按下后上下拖动可连续切句，触发延时默认 0.2 秒，可调整。
 - 音量键正常调整媒体音量，并同步播放栏；语速按钮和滑杆从 v1.2.27 起按 0.02 调整，显示并保存两位小数。
 - 在线预加载默认后续 8 句，可设置 0–100 句；每个在线音色旁提供语音缓存入口。断网先使用缓存和预加载，用完切至系统音源，恢复联网后由用户手动切回。
@@ -49,20 +50,40 @@ Android 本地 TXT / EPUB 阅读器，支持 Edge 在线语音和系统文本转
 
 ## 构建与验证
 
-GitHub Actions 使用 Flutter 3.50.0、JDK 17 和 Android SDK；依赖版本见 `pubspec.lock`，完整在线流程见 [.github/workflows/build-apk.yml](.github/workflows/build-apk.yml)。以下是在线 runner 的构建步骤；本工作区尚缺共享 Flutter 离线闭包，不能将它们当作已就绪的本地构建入口或退回全局 Flutter。
+开发、测试及发布包均改为本地构建，不再使用 GitHub Actions；[旧在线构建配方](.github/workflows/build-apk.yml) 已移除 push、PR、手动触发，并固定跳过构建 job。历史运行、Release 和验证记录不改写，也不因环境缺项回退在线或全局工具。
 
-```sh
-flutter pub get
-flutter analyze --no-fatal-infos --no-fatal-warnings
-flutter test --reporter expanded
-flutter build apk --release --target-platform android-arm64 --split-debug-info=build/debug-symbols
+固定输入为 Flutter 3.50.0（官方 Windows 包随附 Dart 3.14.0，满足项目 `^3.13.2`）、Gradle 9.3.1-all、AGP 9.1.1、Kotlin 2.4.0；依赖以 `pubspec.lock` 为准。共享维护者登记并接收不可变工具/离线闭包，项目在 `ddnovelreader/main` 实例的 Prepare 锁下恢复可写 Flutter 运行树和缓存，不在共享 SDK 的 `bin/cache` 执行写入。Android 使用精确 API 36、NDK 28.2.13676358，不用现有 API 37 冒充。
+
+官方 SDK 的最小锁兼容调整仅为 listen 1.0.1、test_api 0.7.14、vector_math 2.4.4；保留其余应用依赖、镜像来源及应用版本。`PUB_HOSTED_URL` 固定为原锁的 `https://pub.flutter-io.cn`，不换源重解或执行 `pub upgrade`。
+
+项目入口（默认离线，固定闭包由共享维护者接收；命令存在不等于某次产品构建已经通过）：
+
+```powershell
+.\scripts\LocalBuild.ps1 -Action Prepare -IncludeAndroid
+.\scripts\LocalBuild.ps1 -Action Restore
+.\scripts\LocalBuild.ps1 -Action Analyze
+.\scripts\LocalBuild.ps1 -Action Test
+.\scripts\LocalBuild.ps1 -Action BuildApk -ConfigureOnly
+# 需要实际未签名 ARM64 APK 时再执行：
+.\scripts\LocalBuild.ps1 -Action BuildApk
+# 完整本地交付（既有固定签名持续授权，不安装或远端发布）：
+.\scripts\LocalBuild.ps1 -Action DeliverApk
+.\scripts\LocalBuild.ps1 -Action Finalize
 ```
 
-在线构建使用仓库 Secret `DDNOVEL_SIGNING_JSON`；缺少 Secret 和 PR 构建只提供明确标记的未签名产物。私钥不进入源码、日志或 Release。`DDNovelReader-build-analysis` 单独保存 APK 体积报告与调试符号。
+`Test` 默认覆盖本轮朗读分页、手动翻页定位及 TTS 队列回归，可通过 `-TestPaths` 指定现有测试文件。入口默认离线，先执行离线恢复。当前闭包由共享维护者接收种子，项目不并行联网接收同一份依赖；只有明确交接接收职责后，才可在确缺依赖时显式使用 `Restore -Online` 接收锁定 pub 依赖，或 `Prepare -Online` 接收宿主 engine/font。联网准备仍持有本项目 Prepare 锁，不升级依赖或读取凭据。
 
-普通 CI 默认不生成或上传 UI 截图，布局断言仍执行。只有用户明确要求会话结束后保留时，才可在手动 workflow 中开启 `retain_ui_previews`，启用两处测试文件的可选截图和上传；runner 本地临时根在全部步骤后清理。纯截图 artifact 不因上传就自动成为长期交付物。仅为聊天临时查看时，不得用“保留”开关绕过收尾：须先具备已授权的父流程删除能力，按 artifact ID 交接，在真实取图/展示及后续消费结束后、报告会话完成前清远程传输包和本地副本。当前连接没有 artifact 删除工具，不能承诺这条临时远程交接链已完成，也不能仅凭上传数量声称已展示。
+`BuildApk` 通过共享 `Tool gradle-9.3.1` 直接只读使用精确 Gradle 9.3.1 分发执行 `assembleRelease --offline --no-daemon`，不依赖缺失的项目 wrapper，也不回退 Gradle 9.7.0。Android SDK 直接使用共享 `Environment` 的固定路径，包含 API 35/36、NDK 28.2.13676358、CMake 3.22.1、Build Tools 36.0.0、Platform Tools 37.0.1 和许可；不自动调用 sdkmanager，不向实例重复恢复 Gradle/SDK。`GRADLE_USER_HOME`、`ANDROID_USER_HOME`、pub/Maven、TEMP 和构建输出仍留本实例；Flutter 的缓存及 Gradle 插件状态固定写入 SDK，因此保留实例可写树，不改上游或加联接。共享闭包仅验收 ARM64 release，不冒称 debug/profile 全闭包。默认清空签名配置，只接受明确未签名、版本匹配、仅 ARM64 且包含 Flutter/应用库的 staging APK，并保存实际校验信息；`-ConfigureOnly` 仅验证任务图，不生成 APK。
 
-`publish-release.yml` 与 `publish_verified_release.py` 是固定 **v1.2.26** 输入身份的发布流程，仍引用存在的脚本和对应发布说明；它们不是任意新版的一键发布入口，不能用来发布 v1.2.27。新版构建以 `build-apk.yml` 为入口，本地接收以 `LocalApk.ps1` 为入口。
+共享维护者已正式接收四份 `package.xml`，并核证固定 Repository 对只读缓存写入失败的兼容性。入口在 Prepare lease 内验证这些元数据，以只读共享句柄保护既有 16B `.knownPackages`；缺失或无法保护即停止。句柄持有至进程后代自然结束、日志消费和完整 SDK 树后验完成，不忽略任何元数据差异，也不改 ACL/属性/联接。`DeliverApk` 将构建、固定签名和 LocalApk 接收放在同一护栏生命周期。精确结果见 [本地布局](docs/local-layout.md)。
+
+真实项目的离线 release 任务图配置及实际 ARM64 release 编译均已通过。**1.2.28（33）已按持续授权使用既有固定证书完成本地签名、验签和 LocalApk 接收**，19,163,665 字节，包含本轮朗读分页修改；仅既有签名脚本消费凭据，未输出或上传凭据。共享 Gradle/Android 树的完整前后审计通过，所有元数据均纳入；未安装应用或远端发布。旧 1.2.27 完整包在新包验证归位后由既有收尾流程清退。验证与接收细节见 [固定签名说明](docs/signing.md) / [本地布局](docs/local-layout.md)。
+
+Windows 原生 shader 编译器无法写 `../` 输出，而 Flutter 不接受绝对 `build-dir`。因此仅宿主 `Test` 使用带 owner 标记的源根 `build/` 临时例外，全部测试消费完成后用 `Finalize` 清退；源码不复制、不开联接，其余可重定向输出仍在实例。`Finalize` 不清理可复用 SDK/pub/Maven 缓存或已发布包。
+
+本地默认不生成 UI 截图，布局断言仍执行；临时图仅在实际需要且能完成展示和最终清退时生成，不为看图重启在线构建。旧 `retain_ui_previews` 仅为已停用配方的历史输入，不是当前构建入口。
+
+`publish-release.yml` 与 `publish_verified_release.py` 是固定 **v1.2.26** 输入身份的历史发布流程；它们不是任意新版的一键发布入口，不能用来发布 v1.2.27，也不用于本轮本地迁移。新版验证以 `LocalBuild.ps1` 为入口，完整包归位继续使用 `LocalApk.ps1`，不自行启动远端发布。
 
 1.2.26 的 [GitHub 构建](https://github.com/NayGnehz/DDNovelReader-Android/actions/runs/43622578197) 通过 351 项 Flutter 测试、13 项签名脚本测试及独立在线语音探测；主套件有 1 项可选在线探测跳过。下载成品已独立核验版本、ARM64 架构、SHA-256 和固定证书。手机音源、系统通知样式及实际手感仍需真机验证。
 

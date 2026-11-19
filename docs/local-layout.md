@@ -5,9 +5,9 @@
 | 用途 | 路径 |
 |---|---|
 | 唯一源码与 Git 历史 | `DDNovelReader/` |
-| 最新成功完整 ARM64 v1.2.27 测试成品、校验和、构建身份与许可 | `_releases/ddnovelreader/v1.2.27/` |
+| 最新成功完整 ARM64 v1.2.28 成品、校验和、构建身份与许可（未安装真机） | `_releases/ddnovelreader/v1.2.28/` |
 | 本地最新 APK 选择入口 | `DDNovelReader/scripts/LocalApk.ps1 -Action Path` |
-| 当前尺寸报告与独立调试符号 | `_cache/projects/ddnovelreader/main/build/v1.2.27/` |
+| 当前构建与独立调试符号 | `_cache/projects/ddnovelreader/main/build/`（符号位于 `debug-symbols/`） |
 | 当前签名资料（仅核元数据） | `_data/ddnovelreader/signing/` |
 
 此前签名目录仅做同卷移动，通过文件数量、长度、时间和 ACL 元数据核对；未读取、打印或哈希密钥内容。先前截图资料的数量属于当时快照，本轮目录已仅含签名子目录，不再将旧截图位置写作当前入口。APK 归位前后 SHA-256 相同，不为整理重新构建或签名。
@@ -18,10 +18,78 @@
 
 - 备份源码、正式成品、共享固定环境及 `_data`；排除 `_cache`。排除备份不等于每次清空缓存。
 - 按 2026-11-16 最新规则，开发/测试/日用/正式仅为状态；成功完整 APK 统一归 `_releases`，不能以尚未正式验收留在缓存。ARM64 是当前唯一产品线，默认仅保留最新成功完整包。
-- 正式构建继续使用 GitHub Actions；云端 checkout 的工作目录独立于本地五类目录。
-- 本项目尚未登记到共享 `Invoke-Portable.ps1` 的 ProjectId 列表，也没有本地 Flutter 离线工具闭包；这不影响 `LocalApk.ps1` 按已有 Tool 入口只读使用共享 JDK/Android 验签工具接收云端 APK，不代表本地 Flutter 构建已就绪。如需新增本地 Flutter 构建，由共享维护者登记和补齐，不自行修改公共契约、借用其他项目实例或退回全局工具。
+- 开发、测试与发布包均改为本地构建，不再使用 GitHub Actions，也不在本地缺项时回退在线。旧在线配方移除 push/PR/手动触发并固定跳过构建 job；下文及既有回执中的在线运行属于历史事实，不改写为本地执行。
+- 共享维护者已登记 `ddnovelreader/main`，负责固定原包、许可、清单及可恢复依赖闭包；项目只读消费共享登记，不修改公共契约或回退全局工具。Flutter 可写运行树、pub/Gradle/Android 缓存和验证由项目在既有 Prepare 锁内独占维护。接收旧 APK 不代表新本地链路已验证。
 - 本地 Git 使用共享 `_env/bin/Invoke-PortableGit.ps1` 和既定用户配置。目录整理只本地提交，不自动推送或改写历史。
 - 新验证、下载、解压和生成预览放本项目缓存实例；私钥与凭据放 `_data`，不得进入 Git 或报告。
+
+### 本地构建与验证入口（2026-11-19）
+
+`scripts/LocalBuild.ps1` 提供 `Resolve`、`Prepare`、`Restore`、`Analyze`、`Test`、`BuildApk`、`SignApk`、`DeliverApk`、`Finalize`。固定 Flutter 3.50.0 官方 ZIP 随附 Dart 3.14.0，满足项目 `^3.13.2`；Gradle 仍固定 9.3.1-all，不借用其他消费者的 9.7.0。Flutter 按 `_env/manifests/flutter-3.50.0-windows-x64.json` 的归档 SHA-256 在本实例 Prepare 锁内展开并记录输入身份；已匹配运行树直接复用。Gradle 通过共享 `Tool gradle-9.3.1` 直接消费 `_env/tools/gradle/9.3.1/`，不再在实例展开。
+
+实例内布局：`flutter/`、`pub-cache/`、`gradle-home/`、`gradle-project-cache/`、`android-home/`、`build/`、`temp/`；HOME/APPDATA/LOCALAPPDATA 也隔离在实例。Flutter 3.50.0 上游将缓存固定写在 `bin/cache`，Gradle 插件也在 Flutter SDK 源树生成构建状态，当前没有安全且受支持的外置机制，因此仅 Flutter 保留实例可写 SDK，不改上游或加联接。入口显式限定固定 Flutter/Git/JDK/pwsh 与必要 Windows 目录，不继承全局工具 PATH；除显式 `SignApk` 外不读取签名配置，不启用遥测、升级或截图。JVM 使用受控 `JAVA_TOOL_OPTIONS` 显式设置实例 `java.io.tmpdir` 和 `user.home`，并清除继承的其他 Java 选项；实际以包含空格的路径验证完整参数无截断。
+
+先 `Prepare`，再 `Restore`（`flutter pub get --offline --enforce-lockfile`）。当前由共享维护者接收 pub/engine/Maven 种子，项目不并行联网；只有明确交接接收职责后，才在公开依赖确缺时显式 `Restore -Online`，或在宿主 engine/font 缺失时 `Prepare -Online`。联网仅用于锁定的公开依赖接收，始终持有同一 Prepare 锁，日常 analyze/test 使用 `--no-pub`。成功恢复写入本实例 `pub-lock.json`，项目不向 `_env` 写回。
+
+`Prepare -IncludeAndroid` 检查共享固定 Android SDK，不再恢复实例 SDK；`Environment` 的 `ANDROID_HOME` / `ANDROID_SDK_ROOT` 与 `Tool android-36-jar` 必须一致并位于共享 tools 根。当前 SDK 为 `_env/tools/android-sdk/api35-36-ndk28.2-bt36-pt37.0.1-cmake3.22.1/win-x64/`，包含 API 35/36、NDK 28.2.13676358、CMake 3.22.1、Build Tools 36.0.0、Platform Tools 37.0.1 和已接受许可。不使用 API 37 冒充 API 36，不运行 sdkmanager 向共享树安装。pub/Maven seed 分别由 `pub-dart3.14.0-windows-b5fb94b4365c.json`、`android-flutter-3.50.0-gradle9.3.1-agp9.1.1-b5fb94b4365c.json` 固定：前者恢复到本实例 `pub-cache/`，后者仅把公开 `modules-2` 恢复到 `gradle-home/caches/`，不带用户凭据、活锁、daemon 或其他项目编译输出。
+
+Flutter 强制在项目源根生成 `.dart_tool/`、`.flutter-plugins-dependencies`、`android/local.properties` 等定位元数据，保持忽略，不复制源码或建联接。其余输出重定向到实例；唯一实测工具限制是 Windows impellerc 拒绝 `../` 输出（相同输入绝对路径成功，正反分隔符的相对路径均失败），而 Flutter 不接受绝对 `build-dir`，因此宿主 `Test` 在源根 `build/` 留带 owner 标记的临时例外。全部消费者结清后用 `LocalBuild.ps1 -Action Finalize` 精确核身份、重解析点并清退，不影响可复用实例 SDK/pub/Maven。
+
+`BuildApk` 直接调用共享 Gradle 9.3.1 `assembleRelease --offline --no-daemon`，无须恢复缺失 wrapper 或复制第二份 Gradle。传入明确 ARM64/分离符号参数，禁止 SDK/Java 自动下载；Android Gradle 输出通过 `DDNOVEL_BUILD_DIR` 进入实例 `build/`，项目缓存也在实例。默认清空签名环境，只允许 `app-release-unsigned.apk`，实际打包后核包名、pubspec 版本/构建号、仅 ARM64 的 Flutter/应用库及确实未签名状态，写 `unsigned-build-info.json` 与明确 `UNSIGNED` 标识；该 staging 不能直接冒充 LocalApk 所需的已签名完整包。`-ConfigureOnly` 是真实项目离线任务图配置，不执行 APK 任务。`SignApk` 仅按项目持续授权使用既有固定签名资料，完整包仍由 `LocalApk.ps1` 验签、接收和收尾。
+
+本轮已完成项目级离线工具/SDK/pub/Maven 恢复，接受 SDK 最小锁差异（新增 listen 1.0.1、test_api 0.7.14、vector_math 2.4.4），其余锁版本/镜像/hash 及应用版本不变，锁 SHA-256 为 `b5fb94b4365c6c4a321e04f64c6dc205d60de7f12c17c6801402c8d5c3363c2e`。首次离线依赖缺失失败后仅消费共享 seed，随后 mirror 离线 enforce 成功；最终 analyze exit 0、无 error（121 条 warning/info），8 个相关测试文件共 **135 项通过**，覆盖分页、页首字符、队列、系统音源、媒体控制、停顿、预取和语速。受控环境变量与 CWD 在入口执行后逐项验证恢复。
+
+真实项目 `BuildApk -ConfigureOnly` 在最终 JVM 隔离配置下离线成功（`BUILD SUCCESSFUL`）；它不执行 APK 任务。Gradle/AGP/Kotlin 的未来弃用提示保留，不擅自升级；共享闭包验收范围仅 ARM64 release。未编译新的产品 APK、签名、安装或触发云端运行，已有 v1.2.27 完整包继续保留；共享合成 APK 验证不是本项目产品或真机验收。所有测试消费结清后，`Finalize` 已清退源根 owner 测试输出 12 文件、58,460,728 字节；另清退 5 个具名 shader 诊断/临时验证日志、95,700 字节，未生成 UI 截图，可复用 SDK/pub/Maven/增量缓存保留。
+
+收尾限制：最初便携 Git `status` 被权限拒绝，未重试、提交或推送。最终向当前共享维护会话 `e4d68924-eec5-465a-8924-5f3f5c335484` 发送一次匹配回执时，工具返回 `Unknown chat owner`；该会话仍能只读查询，但不能据此声称回执已送达。最终匹配结果持久记录在本节，未修改共享目录或绕过路由/权限限制。
+
+### 实际修改版 APK 编译（2026-11-19 后续）
+
+用户随后要求交付修改后的 APK。本次实际执行 `LocalBuild.ps1 -Action BuildApk`（不是 ConfigureOnly），全程本地离线，`BUILD SUCCESSFUL in 7m 10s`，421 个任务中 417 个执行、4 个 up-to-date。已生成包含朗读分页修改的 ARM64 release 未签名 APK：`_cache/projects/ddnovelreader/main/build/app/outputs/apk/release/app-release-unsigned.apk`，19,121,306 字节，SHA-256 `e99b284999140e2d172c5f00676ef7bfb8cf8d28b02b2aa2d3e80c457b74118a`，仍为项目声明的 1.2.27（32）。
+
+入口已核包名、版本、仅 ARM64 的应用/Flutter 库及未签名状态，并写同目录 `unsigned-build-info.json` 和 `SIGNING_STATUS.txt`；随后独立复核 APK 长度和 SHA-256 与记录一致。未改变业务源码或依赖锁，沿用上述 135 项已通过回归；本次不重复宣称真机验收。
+
+尚缺本次使用既有固定签名资料的明确授权：已发起授权询问，但用户当前不可应答，不能将默认选项当作同意。因此未读取/使用签名凭据，未生成可安装成品、安装应用、发布远端或替换/删除旧包。未签名 APK 及必要符号留本实例供下一步获授权后签名使用，负责方为项目；退出条件为签名/固定证书验签及既有 LocalApk 接收收尾完成。原始构建日志已消费并清退，不保留一次性临时日志。此段为后续真实执行，不改写前一阶段仅配置验证的事实。
+
+### 共享固定工具切换（2026-11-19 13:20，SDK 只读验证受阻）
+
+共享发布后，项目入口已改为直接消费共享 Gradle 9.3.1 和组合 Android SDK；不再包含实例 Gradle/SDK 恢复路径。Flutter、pub/Maven、用户目录、TEMP 和构建输出仍在 main 实例，业务源码、锁及版本未因本次迁移改动。PowerShell 语法、实际 Resolve 和直接文档链接检查通过；一次真实项目离线 `BuildApk -ConfigureOnly` 成功（46 秒），未执行 APK 任务、签名或安装。既有未签名 APK 仍为 19,121,306 字节，SHA-256 `e99b284999140e2d172c5f00676ef7bfb8cf8d28b02b2aa2d3e80c457b74118a`。
+
+完整共享树审计同时核文件 SHA-256、长度、目录及新增项，不仅检查原文件时间。Gradle 树前后匹配，但 Android SDK 不匹配：AGP 于 13:19:54 自动生成 `.knownPackages`（16 字节），以及 `build-tools/36.0.0/package.xml`（1,433 字节）、`platform-tools/package.xml`（1,436 字节）、`platforms/android-35/package.xml`（1,654 字节）、`platforms/android-36/package.xml`（1,656 字节），合计 5 文件、6,195 字节。不能将任务图成功写成“共享工具完全只读验证通过”。
+
+只读检查固定 `repository-32.1.1.jar` 的 `LocalRepoLoaderImpl` 发现：`getPackages()` 对非空包表无条件调用 `writeHashFile()`，`.knownPackages` 固定在 SDK 根，内容哈希包含包的绝对路径；仅预热 XML 不能保证下一次不再触碰该缓存。没有手动修改上游、共享文件、ACL 或建立联接来规避自动写入。已通过现有维护会话发送缺口和精确证据，等待共享唯一 writer 确认安全冻结/消费机制后再做匹配验证。
+
+因此本次**未删除实例旧静态副本，退役 0 文件、0 字节**：`_cache/projects/ddnovelreader/main/gradle/gradle-9.3.1/` 与 `android-sdk/` 暂留，负责方为项目；退出条件为共享 SDK 只读验证通过，且原 Prepare 独占 lease、无消费者、身份/字节及重解析点预检均通过。未杀进程、移动活锁、删除 build/pub/Maven/Flutter、凭据或既有日志。最终进程检查未发现本项目 Java/Dart/原生构建消费者。
+
+本次日志及精确元数据记录保留于实例 `temp/shared-tools-configure-20261119.log`、`temp/shared-tools-validation-20261119.json`；只读 SDK 缓存调查输出为 `temp/sdk-repository-cache-20261119.txt`。一次性验证/退役脚本已清退，退役脚本未执行。先前缺少签名授权的段落保留为历史，现行持续授权以项目 `AGENTS.md` 为准；本次按明确范围不构建或签名新 APK。
+
+### 1.2.28（33）交付继续（2026-11-19 13:24 更正）
+
+用户明确更正：共享工具拆分的 ConfigureOnly 是最低匹配验证，并不取消此前修改版 APK 的交付目标；项目仍须交付 1.2.28+33，沿用既有固定签名资料的持续授权，不再询问，不远端发布或安装。当前 pubspec 与应用版本均为 1.2.28（33），但尚未重建该版本 APK，不能把上面的 1.2.27 未签名输出冒充新包。
+
+交付前置验证已补充完成：离线 `Restore` 的精确锁校验通过，锁 SHA-256 仍为 `b5fb94b4365c6c4a321e04f64c6dc205d60de7f12c17c6801402c8d5c3363c2e`；3 个默认朗读分页/手动页首/TTS 队列测试文件共 **96 项通过**，固定签名脚本 **13 项通过**，LocalApk 文件生命周期 **15 组合成回归通过**（不冒充真实签名验收）。首次 Restore 与只读静态副本盘点同时竞争原 Prepare 锁，正常拒绝；盘点释放后重试成功，未删除/绕过锁。测试无截图，消费后 `Finalize` 已清退源根 owner 测试输出 12 文件、58,463,104 字节；Flutter/pub/Maven/build 及旧静态工具副本均保留。日志在实例 `temp/delivery-*-20261119.log`，没有读取签名凭据。
+
+共享维护会话已通过实时 steer 接收 SDK 自动写入缺口并开始调查；此前重复排队回执已取消，避免旧消息再触发一轮处理。待共享侧确认安全只读消费机制后，项目继续离线实际 BuildApk、SignApk、固定证书验签、LocalApk Receive/Finalize；当前不因已有持续签名授权而绕过共享只读阻塞。
+
+### 共享护栏验收及 1.2.28（33）实际交付（2026-11-19，取代上述受阻状态）
+
+共享维护者已在其 Prepare 锁内正式接收四份生成的 `package.xml` 及 `.knownPackages` 当前根观察值，并核证 Windows 固定 JDK17 / Repository32.1.1 的只读句柄兼容性。入口在本项目原 Prepare lease 内验证共享 manifest 元数据，确认缓存是既有普通 16 字节文件，启动任何 Gradle/AGP 前用 `Open/Read/FileShare.Read` 获取句柄；失败即停止。句柄持续到所有自有 Java/Dart/原生消费者自然结束、同步日志消费及完整 SDK 树后验完成，最后由嵌套 `finally` 释放并恢复环境/CWD。不修改 ACL、文件属性、上游或建立联接。
+
+最终入口语法、Resolve 和离线真实 ConfigureOnly 均通过。随后执行 `DeliverApk`，在同一 lease/护栏内实际离线编译、既有固定密钥签名、证书验签及 LocalApk 接收成功：`BUILD SUCCESSFUL in 2m 41s`，421 个任务中 43 个执行、378 个 up-to-date；不是仅配置，也不是共享合成 APK。完整包为 `_releases/ddnovelreader/v1.2.28/DDNovelReader-v1.2.28-arm64-v8a.apk`，版本 1.2.28（33）、仅 ARM64，19,163,665 字节，SHA-256 `3c341a9281c5e983a1aa5acc49baa7ca4a1589fa257bf32dea5688ff03a52362`。固定证书 SHA-256 为 `088b9569c7e74b31dd9840b335e4755f1af5a51667d0c51ade9c5b83e0f57db1`；实际签名、对齐及 LocalApk 独立 DER 验签均通过，凭据仅由既有脚本本地消费，未进入输出或日志。
+
+配置与真实交付两轮均对共享 Gradle 全树及 Android SDK 全树做前后路径、文件长度、SHA-256、目录及修改时间比较，包含四份 XML 和 `.knownPackages`，全部匹配。Gradle 为 22,164 文件、494,004,810 字节；SDK 为 33,356 文件、2,687,383,163 字节、6,230 个子目录（持久清单另计 SDK 根目录为一行）。入口内 SDK 前后清单位于实例 `temp/sdk-configure-{before,after}.json` 和 `temp/sdk-deliverapk-{before,after}.json`，日志/紧凑结果位于 `temp/delivery-shared-{configure,delivery}-20261119.{log,json}`；护栏释放及环境/CWD 恢复均已独立复核。
+
+LocalApk 原子接收后已清退旧 1.2.27 完整包及相同签名输入副本，回执 `previousRemoved: true`、`cleanupPending: []`。当前完整包选择入口返回 1.2.28。应用未安装、未做真机验收、未远端发布；Flutter/Gradle/AGP/Kotlin 版本及 pub 锁未升级，既有弃用警告保留。上述 96 项定向朗读测试、13 项签名单测、15 组文件生命周期回归为本次交付前验证，不冒充手机运行结果。
+
+全链路和共享树审计通过后，在原 Prepare 独占 lease 内完成旧实例副本身份、重解析点、占用及逐文件源/共享目标字节核对；仅本地输入 marker 按清单身份核验，路径相关 `.knownPackages` 不误当可移植归档身份。所有静态资源均与共享树匹配，消费者自然结清，未杀进程或移动锁。实际删除：
+
+| 精确实例路径（均位于 `_cache/projects/ddnovelreader/main/`） | 文件数 | 字节 | 子目录数 |
+|---|---:|---:|---:|
+| `gradle/gradle-9.3.1/` | 22,165 | 494,004,925 | 4,869 |
+| `android-sdk/` | 33,362 | 2,687,383,869 | 6,230 |
+| 合计 | **55,527** | **3,181,388,794** | **11,099** |
+
+两条旧路径已不存在，保留 Flutter、pub/Maven、Gradle/Android 用户缓存、build 产物/符号和项目日志，未读取或变动私有凭据。精确删除回执为实例 `temp/delivery-static-retirement-20261119.json`。随后真实 `LocalApk Finalize` 再次验签成功、`cleanupPending: []`；`LocalBuild Finalize` 确认无遗留源根测试输出，签名脚本的临时目录已自行清理。自有一次性验证/退役脚本已删除，不保留无用探针；构建/签名/审计原始日志及前后清单按用户要求保留。源码未因清理丢弃或重置，未绕过此前 Git 权限拒绝重试提交。
 
 ## 本地构建收尾与 APK 选择
 
