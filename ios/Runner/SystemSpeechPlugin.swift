@@ -74,6 +74,12 @@ public class SystemSpeechPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDel
       synthesizer.speak(utterance)
       result(nil)
 
+    case "openSettings":
+      if let url = URL(string: UIApplication.openSettingsURLString) {
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+      }
+      result(true)
+
     case "stop":
       stopInternal()
       result(nil)

@@ -1,4 +1,4 @@
-library;
+﻿library;
 
 // 版本信息与更新记录（安卓版）。
 // 版本号与 pubspec.yaml 的 `version` 保持一致（发布一条龙第 2 步）。
@@ -6,12 +6,15 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.3.0';
-  static const String build = '11';
+  static const String version = '1.3.1';
+  static const String build = '12';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.1：离线系统语音升级。音源面板可列出并选择系统音色（标注默认/优化/高级音质），'
+        '支持按图书记忆音色与语速；新增「仅显示优化音质」过滤与系统设置入口；'
+        '来电或其他 App 占用音频后自动续读；安卓端也可枚举系统音色。',
     'v1.3.0：阅读和朗读大更新。翻页更顺：支持上下滚动、整页不裁字、'
         '可开翻页动画；新增自动目录、字号最大 64、两端对齐、深浅主题、'
         '刘海适配；朗读支持逐字高亮、拖动切句、设置记忆；'

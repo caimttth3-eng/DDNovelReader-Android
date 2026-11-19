@@ -1,4 +1,4 @@
-// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 /// TTS 朗读服务：基于 Edge TTS 在线合成 + 后台预取队列。
 /// 逐句朗读 + 逐句高亮回调 + 暂停/继续/停止 + 定时停止。
 /// 预取后续句子（默认提前 8 句），缓存命中时无需再次在线合成。
@@ -204,6 +204,8 @@ class TtsReader {
 
   /// 设置音色（zh-CN 等）
   Future<List<SystemVoice>> systemVoices() => _system.voices();
+
+  Future<bool> openSystemVoiceSettings() => _system.openSettings();
 
   void setVoice(String v) {
     if (_voice == v && !_usingSystemFallback && _onlineNetworkFailure == null) return;

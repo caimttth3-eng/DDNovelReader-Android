@@ -1,4 +1,4 @@
-// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
 import 'package:flutter/services.dart';
 
@@ -54,6 +54,15 @@ class SystemTtsClient {
       .timeout(const Duration(seconds: 15)).then<void>((_) {}, onError: (Object error) {
         _initialization = null; throw error;
       });
+
+  /// 打开系统设置（iOS 是 App 设置页，Android 是 TTS 设置页），引导用户下载更好音质。
+  Future<bool> openSettings() async {
+    try {
+      return await channel.invokeMethod<bool>('openSettings') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// 列出系统可用的离线音色（iOS AVSpeechSynthesisVoice / Android TTS voices）。
   /// 不支持或未实现时返回空列表，调用方保留默认音色入口。

@@ -9,6 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../i18n.dart';
@@ -156,6 +157,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   bool _leavingReader = false;
   List<SystemVoice> _systemVoices = const [];
   Map<String, String> _systemVoiceNames = const {};
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
+  bool _resumeAfterInterruption = false;
   final Map<(Size, double), ReaderHeaderLayout> _stableHeaders = {};
   late List<_Item> _items;
   late Book _book;
@@ -310,6 +313,18 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 来电 / 其他 App 抢占音频：暂停后自动续读
+    unawaited(AudioSession.instance.then((session) {
+      _interruptionSub = session.interruptionEventStream.listen((event) {
+        if (event.begin) {
+          _resumeAfterInterruption = _tts.state == TtsState.playing;
+          if (_resumeAfterInterruption) unawaited(_tts.pause());
+        } else if (_resumeAfterInterruption) {
+          _resumeAfterInterruption = false;
+          unawaited(_tts.resume());
+        }
+      });
+    }));
     SystemChrome.setPreferredOrientations(widget.initialData?.settings.followSystemRotation == true
       ? DeviceOrientation.values : [DeviceOrientation.portraitUp]);
     AppAppearance.nightMode.addListener(_onAppearanceChanged);
@@ -415,6 +430,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   void dispose() {
     _sentenceDrag = null;
     AppAppearance.nightMode.removeListener(_onAppearanceChanged);
+    _interruptionSub?.cancel();
     _networkSubscription?.cancel();
     _permissionGate?.cancel(); _permissionGate = null;
     _volumePollTimer?.cancel(); _volumePollTimer = null; _volumePollEpoch++;
@@ -649,6 +665,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final raw = await widget.storage.loadSettings();
     if (!mounted || _leavingReader) return;
     _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(raw));
+    final savedSpeech = await widget.storage.loadBookSpeech(widget.book.id);
+    if (!mounted || _leavingReader) return;
+    if (savedSpeech != null) {
+      final v = savedSpeech['voice'];
+      final r = savedSpeech['rate'];
+      if (v is String && v.isNotEmpty) _settings.voice = v;
+      if (r is num) _settings.speechRate = ReadingSettings.normalizeSpeechRate(r.toDouble());
+    }
     final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
       merge: _settings.mergeNonSentenceBreaks, indent: _settings.firstLineIndent,
       pauseSettings: _settings.effectiveSpeechPauses,
@@ -3232,6 +3256,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _tts.setSpeechRate(rate);
     _refreshTtsCache();
     widget.storage.saveSettings(_settings.toJson());
+    unawaited(widget.storage.saveBookSpeech(widget.book.id, rate: rate));
     setState(() {});
   }
 
@@ -3393,6 +3418,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (prepared != null) _remapAnnotations(previous);
       _refreshTtsCache(); _updateMediaChapter(_chapter);
       await widget.storage.saveSettings(_settings.toJson());
+      unawaited(widget.storage.saveBookSpeech(widget.book.id,
+        voice: _settings.voice, rate: _settings.speechRate));
       if (prepared != null) await _restoreLineAnchor(line);
       if (mounted && !_leavingReader && generation == _playbackGeneration && wasPlaying && _inReadingMode) {
         await _startTtsFrom(_chapter, _para, _ttsSentence, displayOffset: _wordStart);
@@ -3566,72 +3593,81 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (sheet.mounted) update(() {});
     });
 
-  /// 音源选择：本地系统音色（离线）与在线 Edge 音色分区展示。
+  /// 音源选择：在线 Edge 音色优先，其后是本地离线系统音色。
+  /// 同类语言放一起：简体中文 / 繁体中文 / 英语 / 日语 / 韩语。
   Future<void> _openVoiceSelector() async {
     if (_applyingSpeechPauses) return;
     final systemVoices = await _tts.systemVoices();
     if (!mounted) return;
     _systemVoices = systemVoices;
     _systemVoiceNames = {for (final v in systemVoices) v.id: v.name};
+    var enhancedOnly = false;
     final selected = await showModalBottomSheet<String>(context: context,
       builder: (ctx) => StatefulBuilder(builder: (sheet, update) {
         final voices = sortedEdgeVoices();
         final active = _settings.speechPauseVoice;
-        final items = <Widget>[
-          Padding(padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-            child: Text(T('voiceSectionLocal'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-              color: Theme.of(sheet).colorScheme.onSurfaceVariant))),
-          ListTile(
-            leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
-            title: Text(T('systemTtsName')),
-            subtitle: Text(T('systemTtsDescription'), maxLines: 2, overflow: TextOverflow.ellipsis),
-            trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
-            onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)),
-        ];
-        // 系统音色按语言分组，优化/高级音质排在前面。
-        final sortedSystem = [...systemVoices]..sort((a, b) {
-          final qa = a.quality == 'default' ? 1 : 0;
-          final qb = b.quality == 'default' ? 1 : 0;
-          if (qa != qb) return qa - qb;
-          return a.name.compareTo(b.name);
-        });
-        String? lastSystemLang;
-        for (final v in sortedSystem) {
-          if (v.lang != lastSystemLang) {
-            lastSystemLang = v.lang;
-            items.add(Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
-              child: Text(_groupLabel(v.lang), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                color: Theme.of(sheet).colorScheme.onSurfaceVariant))));
+        final items = <Widget>[];
+        void addHeader(String text) => items.add(Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+          child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+            color: Theme.of(sheet).colorScheme.onSurfaceVariant)),
+        ));
+
+        // 在线语音（Edge TTS）在前：同语言分组。
+        addHeader(T('voiceSectionOnline'));
+        for (final family in _voiceFamilyOrder) {
+          final group = voices.where((v) => _voiceFamily(v.langCode) == family).toList();
+          if (group.isEmpty) continue;
+          addHeader(_familyLabel(family));
+          for (final v in group) {
+            items.add(ListTile(dense: true,
+              leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
+                color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
+              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
+                  icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
+              ]), onTap: () => Navigator.pop(ctx, v.id)));
           }
-          final id = '${SystemTtsClient.voicePrefix}${v.id}';
-          items.add(ListTile(dense: true,
-            leading: Icon(id == active ? Icons.radio_button_checked : Icons.radio_button_off,
-              color: const Color(0xFF6498B5)),
-            title: Text(v.name),
-            subtitle: Text('${_qualityLabel(v.quality)} · ${v.lang}'),
-            onTap: () => Navigator.pop(ctx, id)));
         }
-        items.addAll([
-          const Divider(),
-          Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
-            child: Text(T('voiceSectionOnline'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-              color: Theme.of(sheet).colorScheme.onSurfaceVariant))),
-        ]);
-        String? lastLang;
-        for (final v in voices) {
-          if (v.langCode != lastLang) {
-            lastLang = v.langCode;
-            items.add(Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
-              child: Text(_groupLabel(v.langCode), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                color: Theme.of(sheet).colorScheme.onSurfaceVariant))));
+
+        // 本地语音（离线）在后：只保留简繁中文 / 英语 / 日语 / 韩语。
+        items.add(const Divider());
+        addHeader(T('voiceSectionLocal'));
+        items.add(ListTile(
+          leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
+          title: Text(T('systemTtsName')),
+          subtitle: Text(T('systemTtsDescription'), maxLines: 2, overflow: TextOverflow.ellipsis),
+          trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
+          onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)));
+        items.add(Row(children: [
+          Expanded(child: SwitchListTile(dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+            title: Text(T('voiceOnlyEnhanced'), style: const TextStyle(fontSize: 13)),
+            value: enhancedOnly, onChanged: (v) { enhancedOnly = v; update(() {}); })),
+          TextButton(onPressed: () async {
+            await _tts.openSystemVoiceSettings();
+          }, child: Text(T('voiceManageSettings'), style: const TextStyle(fontSize: 12))),
+        ]));
+        for (final family in _voiceFamilyOrder) {
+          final group = systemVoices.where((v) => _voiceFamily(v.lang) == family &&
+              (!enhancedOnly || v.quality != 'default')).toList()
+            ..sort((a, b) {
+              final qa = a.quality == 'default' ? 1 : 0;
+              final qb = b.quality == 'default' ? 1 : 0;
+              if (qa != qb) return qa - qb;
+              return a.name.compareTo(b.name);
+            });
+          if (group.isEmpty) continue;
+          addHeader(_familyLabel(family));
+          for (final v in group) {
+            final id = '${SystemTtsClient.voicePrefix}${v.id}';
+            items.add(ListTile(dense: true,
+              leading: Icon(id == active ? Icons.radio_button_checked : Icons.radio_button_off,
+                color: const Color(0xFF6498B5)),
+              title: Text(v.name),
+              subtitle: Text(_qualityLabel(v.quality)),
+              onTap: () => Navigator.pop(ctx, id)));
           }
-          items.add(ListTile(dense: true,
-            leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
-              color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
-            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-              IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
-                icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
-            ]), onTap: () => Navigator.pop(ctx, v.id)));
         }
         return SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
           Padding(padding: const EdgeInsets.all(16), child: Text(T('voiceTitle'),
@@ -4154,6 +4190,30 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   // 设置面板（由右上角菜单触发）
+  static const _voiceFamilyOrder = ['zh-Hans', 'zh-Hant', 'en', 'ja', 'ko'];
+
+  /// 把 zh-CN / zh-TW / en-US / ja-JP / ko-KR 归到同一语言类，
+  /// 未支持的语言返回 null（本地列表据此过滤）。
+  static String? _voiceFamily(String lang) {
+    final l = lang.toLowerCase();
+    if (l.startsWith('zh')) {
+      return (l.contains('tw') || l.contains('hk') || l.contains('hant')) ? 'zh-Hant' : 'zh-Hans';
+    }
+    if (l.startsWith('en')) return 'en';
+    if (l.startsWith('ja')) return 'ja';
+    if (l.startsWith('ko')) return 'ko';
+    return null;
+  }
+
+  static String _familyLabel(String family) => switch (family) {
+        'zh-Hans' => '简体中文',
+        'zh-Hant' => '繁體中文',
+        'en' => 'English',
+        'ja' => '日本語',
+        'ko' => '한국어',
+        _ => family,
+      };
+
   static String _qualityLabel(String quality) => switch (quality) {
         'premium' => T('voiceQualityPremium'),
         'enhanced' => T('voiceQualityEnhanced'),

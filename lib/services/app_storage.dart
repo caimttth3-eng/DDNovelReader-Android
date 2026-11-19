@@ -14,6 +14,7 @@ import 'speech_breaks.dart';
 ///  - 阅读页设置（亮度/字号/行距/语速/音源）
 class AppStorage {
   static const _booksKey = 'duoduo.books.v1';
+  static const _bookSpeechKey = 'duoduo.bookSpeech.v1';
   static const _progressPrefix = 'duoduo.progress.';
   static const _settingsKey = 'duoduo.settings.v1';
   static const _lastBookKey = 'duoduo.lastBookId';
@@ -92,6 +93,44 @@ class AppStorage {
     }
     if (changed) await saveBooks(out);
     return out;
+  }
+
+  /// 按书记忆音色/语速（v1.3.1）。
+  Future<Map<String, dynamic>?> loadBookSpeech(String bookId) async {
+    final sp = await _sp;
+    final raw = sp.getString(_bookSpeechKey);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final item = map[bookId];
+      return item is Map ? item.cast<String, dynamic>() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveBookSpeech(String bookId,
+      {String? voice, double? rate}) async {
+    final sp = await _sp;
+    Map<String, dynamic> map = {};
+    try {
+      final raw = sp.getString(_bookSpeechKey);
+      if (raw != null && raw.isNotEmpty) {
+        map = (jsonDecode(raw) as Map).cast<String, dynamic>();
+      }
+    } catch (_) {}
+    final item = (map[bookId] as Map?)?.cast<String, dynamic>() ?? {};
+    if (voice != null) item['voice'] = voice;
+    if (rate != null) item['rate'] = rate;
+    map[bookId] = item;
+    // 只保留最近 200 本，避免无限增长。
+    if (map.length > 200) {
+      final keys = map.keys.take(map.length - 200).toList();
+      for (final k in keys) {
+        map.remove(k);
+      }
+    }
+    await sp.setString(_bookSpeechKey, jsonEncode(map));
   }
 
   Future<void> saveBooks(List<BookMeta> books) async {
