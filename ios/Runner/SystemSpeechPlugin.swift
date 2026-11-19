@@ -46,8 +46,14 @@ public class SystemSpeechPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDel
       stopInternal()
       requestId = id
       let utterance = AVSpeechUtterance(string: text)
-      // 跟随系统语言；无效时交给合成器选默认音色。
-      if let voice = AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode()) {
+      // 中文书优先中文音色（设备语言是英文时也能正确朗读），否则跟随系统。
+      let sample = text.prefix(64).unicodeScalars
+      let hasCJK = sample.contains { scalar in
+        (0x4E00...0x9FFF).contains(scalar.value) || (0x3400...0x4DBF).contains(scalar.value)
+      }
+      let preferred = hasCJK ? "zh-CN" : AVSpeechSynthesisVoice.currentLanguageCode()
+      let lang = AVSpeechSynthesisVoice(language: preferred) != nil ? preferred : AVSpeechSynthesisVoice.currentLanguageCode()
+      if let voice = AVSpeechSynthesisVoice(language: lang) {
         utterance.voice = voice
       }
       // AVSpeech 默认语速 0.5，对应本 App 的 1.0x。
