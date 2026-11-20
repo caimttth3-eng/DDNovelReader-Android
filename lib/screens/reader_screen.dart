@@ -1692,13 +1692,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   String get _effectiveVoice =>
       _settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice;
 
-  /// 不同音源的最大语速：Edge TTS 协议上限 +100%（2.0x）；
+  /// 不同音源的最大语速：Edge TTS 支持 +200%（3.0x，PC 同口径）；
   /// iOS AVSpeech 的 1.0 约等于 2.0x；安卓系统引擎通常可到 3.0x。
   static double maxSpeechRateFor(String voice) {
     if (SystemTtsClient.isSystemVoiceId(voice)) {
       return Platform.isIOS ? 2.0 : 3.0;
     }
-    return 2.0;
+    return 3.0;
   }
 
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）

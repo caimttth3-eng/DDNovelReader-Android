@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
@@ -37,7 +37,7 @@ Future<String?> exportCacheDiagnostics(AppStorage storage) async {
         }
       }
       keys.add({
-        'key': e.uri.pathSegments.last,
+        'key': e.path.split(Platform.pathSeparator).last,
         'files': files,
         'bytes': bytes,
         'progress': progress,
