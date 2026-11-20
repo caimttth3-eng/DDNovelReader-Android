@@ -28,6 +28,10 @@ class TtsReader {
   static const maxPrefetchSentences = 100;
   static const systemVoice = SystemTtsClient.voiceId;
   final SystemTtsClient _system = SystemTtsClient();
+  Timer? _sysHighlightTimer;
+  List<(int, int)> _sysHighlightSegments = const [];
+  int _sysHighlightIndex = 0;
+
   final Map<String, EdgeSynthCancelToken> _requestTokens = {};
   final Map<int, Object> _audioFailures = {};
   Object? lastFailure;
@@ -316,6 +320,60 @@ class TtsReader {
     text.codeUnitAt(offset) >= 0xDC00 && text.codeUnitAt(offset) <= 0xDFFF &&
     text.codeUnitAt(offset - 1) >= 0xD800 && text.codeUnitAt(offset - 1) <= 0xDBFF;
 
+  /// iOS 的系统语音可能不回调逐词范围；用近似节奏兜底，
+  /// 一旦引擎给出真实 range 就立即关闭。
+  void _startSystemHighlight(String text, int from, int generation) {
+    _cancelSystemHighlight();
+    final segs = <(int, int)>[];
+    var i = from.clamp(0, text.length);
+    while (i < text.length) {
+      final cu = text.codeUnitAt(i);
+      final ch = String.fromCharCode(cu);
+      if (ch.trim().isEmpty) { i++; continue; }
+      var end = i + 1;
+      if (cu >= 0x4E00 && cu <= 0x9FFF) {
+        if (end < text.length) {
+          final n = text.codeUnitAt(end);
+          if (n >= 0x4E00 && n <= 0x9FFF) end++;
+        }
+      } else {
+        while (end < text.length) {
+          final n = text.codeUnitAt(end);
+          final nc = String.fromCharCode(n);
+          if (nc.trim().isEmpty || (n >= 0x4E00 && n <= 0x9FFF)) break;
+          end++;
+        }
+      }
+      segs.add((i, end));
+      i = end;
+    }
+    if (segs.isEmpty) return;
+    _sysHighlightSegments = segs;
+    _sysHighlightIndex = 0;
+    final interval = Duration(milliseconds: (180 / _speechRate).clamp(50.0, 400.0).round());
+    _sysHighlightTimer = Timer.periodic(interval, (timer) {
+      if (_disposed || generation != _playGeneration || _state != TtsState.playing) {
+        timer.cancel();
+        _sysHighlightTimer = null;
+        return;
+      }
+      if (_sysHighlightIndex >= _sysHighlightSegments.length) {
+        timer.cancel();
+        _sysHighlightTimer = null;
+        return;
+      }
+      final (start, end) = _sysHighlightSegments[_sysHighlightIndex++];
+      _emitWord(start, end);
+    });
+  }
+
+  void _cancelSystemHighlight() {
+    _sysHighlightTimer?.cancel();
+    _sysHighlightTimer = null;
+    _sysHighlightSegments = const [];
+    _sysHighlightIndex = 0;
+  }
+
   void _emitWord(int start, int end) {
     _lastWordStart = start; _lastWordEnd = end;
     onWordChanged?.call(start, end);
@@ -392,6 +450,7 @@ class TtsReader {
 
   /// 暂停（暂停音频播放，保留进度）
   Future<void> pause() {
+    _cancelSystemHighlight();
     _resumeSerial++;
     if (_state != TtsState.playing) return _pausing ?? Future<void>.value();
     final generation = ++_playGeneration;
@@ -613,6 +672,7 @@ class TtsReader {
               // word from which to start a fresh utterance after pause/rate.
               final text = _sentences[sentence];
               if (_insideSurrogatePair(text, start) || _insideSurrogatePair(text, end)) return;
+              _cancelSystemHighlight();
               final prefix = _leadingRangePunctuation.matchAsPrefix(text.substring(start, end));
               final contentStart = start + (prefix?.end ?? 0);
               if (contentStart >= end) return;
@@ -621,6 +681,7 @@ class TtsReader {
           },
           onError: (error) { if (generation == _playGeneration) _fail(error); });
         if (_disposed || generation != _playGeneration) return false;
+        _startSystemHighlight(_sentences[sentence], _systemResumeOffset, generation);
         _stopLoading(); return true;
       } on SystemSpeechCancelled { return false; }
       catch (error) { if (!_disposed && generation == _playGeneration) _fail(error); return false; }

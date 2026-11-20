@@ -158,6 +158,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   List<SystemVoice> _systemVoices = const [];
   Map<String, String> _systemVoiceNames = const {};
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
+  VoidCallback? _closeCacheScan;
   bool _resumeAfterInterruption = false;
   final Map<(Size, double), ReaderHeaderLayout> _stableHeaders = {};
   late List<_Item> _items;
@@ -431,6 +432,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _sentenceDrag = null;
     AppAppearance.nightMode.removeListener(_onAppearanceChanged);
     _interruptionSub?.cancel();
+    _closeCacheScan?.call();
     _networkSubscription?.cancel();
     _permissionGate?.cancel(); _permissionGate = null;
     _volumePollTimer?.cancel(); _volumePollTimer = null; _volumePollEpoch++;
@@ -3695,6 +3697,26 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 全书语音缓存管理：任务控制（开始/暂停/继续/取消）+ 缓存占用 + 清除
   Future<void> _openBookCache({String? cacheVoice}) async {
     if (_applyingSpeechPauses) return;
+    // 先弹窗再扫描，避免大缓存（几万文件）让人觉得假死。
+    var scanClosed = false;
+    final scanNav = Navigator.of(context, rootNavigator: true);
+    _closeCacheScan = () {
+      if (scanClosed) return;
+      scanClosed = true;
+      scanNav.pop();
+      _closeCacheScan = null;
+    };
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(children: [
+          SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(width: 16),
+          Expanded(child: Text('正在扫描缓存…')),
+        ]),
+      ),
+    ));
     final voice = cacheVoice ?? _effectiveVoice;
     if (SystemTtsClient.isSystemVoiceId(voice)) { _showToast(T('cacheOnlineOnly')); return; }
     // Keep every operation bound to the selected online voice/rate, even if a
@@ -3750,6 +3772,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       }
     }
 
+    _closeCacheScan?.call();
     await showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
