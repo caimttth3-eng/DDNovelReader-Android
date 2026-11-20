@@ -28,6 +28,8 @@ void main() {
     });
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global/events'), (_) async => null);
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ryanheise.audio_session'), (_) async => null);
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ryanheise.android_audio_manager'), (_) async => true);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers'), (call) async {
       if (call.method == 'create') {
         messenger.setMockMethodCallHandler(MethodChannel('xyz.luan/audioplayers/events/${(call.arguments as Map)['playerId']}'), (_) async => null);
@@ -35,6 +37,26 @@ void main() {
       return null;
     });
   });
+  for (final hangingMethod in ['initialize', 'voices']) {
+    testWidgets('voice enumeration contains a hanging native $hangingMethod call', (tester) async {
+      final gate = Completer<void>();
+      messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+        if (call.method == hangingMethod) await gate.future;
+        return call.method == 'voices' ? [] : null;
+      });
+      final client = SystemTtsClient();
+      List<SystemVoice>? result;
+      final enumeration = client.voices().then((value) => result = value);
+      await tester.pump();
+      expect(result, isNull);
+      await tester.pump(const Duration(seconds: 15));
+      await enumeration;
+      expect(result, isEmpty);
+      gate.complete();
+      await tester.pump();
+      await client.dispose();
+    });
+  }
   test('enumeration initializes the engine and selected native voice survives resume offsets', () async {
     messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
       calls.add(call);

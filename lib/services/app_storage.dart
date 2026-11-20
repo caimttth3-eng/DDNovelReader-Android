@@ -8,14 +8,44 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/progress.dart';
+import 'annotation_store.dart';
 import 'speech_breaks.dart';
 import 'system_tts.dart';
+
+enum BookStorageChangeKind { progress, removed, annotations }
+
+@immutable
+class BookStorageChange {
+  final String bookId;
+  final BookStorageChangeKind kind;
+  final BookProgress? progress;
+  final bool remote;
+
+  const BookStorageChange({required this.bookId, required this.kind,
+    this.progress, this.remote = false});
+}
 
 /// 本地持久化：
 ///  - 书架书籍列表（BookMeta）
 ///  - 每本书的阅读进度（BookProgress）
 ///  - 阅读页设置（亮度/字号/行距/语速/音源）
 class AppStorage {
+  static final _changes = StreamController<BookStorageChange>.broadcast(sync: true);
+  static Stream<BookStorageChange> get bookChanges => _changes.stream;
+  static void publishBookChange(BookStorageChange change) => _changes.add(change);
+
+  static Future<void>? _bookWrites;
+  static Future<void>? _settingsWrites;
+
+  // One shelf transaction also fences progress writes through old duplicate IDs.
+  Future<T> _bookWrite<T>(Future<T> Function() action) {
+    final result = (_bookWrites ?? Future<void>.value()).then((_) => action());
+    late final Future<void> settled;
+    void clear() { if (identical(_bookWrites, settled)) _bookWrites = null; }
+    settled = result.then<void>((_) => clear(), onError: (Object _, StackTrace __) => clear());
+    _bookWrites = settled;
+    return result;
+  }
   static const _booksKey = 'duoduo.books.v1';
   static const _bookSpeechKey = 'duoduo.bookSpeech.v1';
   static const _progressPrefix = 'duoduo.progress.';
@@ -94,7 +124,7 @@ class AppStorage {
         out.add(b);
       }
     }
-    if (changed) await saveBooks(out);
+    if (changed) await _saveBooks(out);
     return out;
   }
 
@@ -171,49 +201,205 @@ class AppStorage {
     return settings;
   }
 
-  Future<void> saveBooks(List<BookMeta> books) async {
+  Future<void> _saveBooks(List<BookMeta> books) async {
     final sp = await _sp;
     final data = books.map((b) => b.toJson()).toList();
-    await sp.setString(_booksKey, jsonEncode(data));
+    if (!await sp.setString(_booksKey, jsonEncode(data))) throw StateError('Books could not be saved.');
   }
 
-  Future<void> addBook(BookMeta meta) async {
-    final books = await loadBooks();
-    // 去重：同一文件路径不重复添加
-    if (books.any((b) => b.filePath == meta.filePath)) return;
-    books.add(meta);
-    await saveBooks(books);
-    // 重新导入同一本书 = 撤销它的删除墓碑，否则同步会把它再删一次
-    if (meta.contentKey.trim().isNotEmpty) {
-      await clearDeletion(meta.contentKey.trim());
+  /// Metadata backfill/deserialization does not manufacture user activity.
+  Future<void> saveBooks(List<BookMeta> books) {
+    final snapshot = List<BookMeta>.of(books);
+    return _bookWrite(() => _saveBooks(snapshot));
+  }
+
+  Future<String> resolveBookId(String bookId) async {
+    for (final book in await loadBooks()) {
+      if (book.id == bookId || book.aliases.contains(bookId)) return book.id;
     }
+    return bookId;
+  }
+
+  Future<void> addBook(BookMeta meta, {bool remote = false, double? activityAt,
+      double? remoteVersion}) => _bookWrite(() async {
+    final books = await loadBooks();
+    final key = meta.contentKey.trim().isEmpty ? meta.id : meta.contentKey.trim();
+    var activity = activityAt ?? (remote ? meta.activityAt : DateTime.now().millisecondsSinceEpoch / 1000.0);
+    final deletions = await loadDeletions();
+    final tomb = deletions[key];
+    final deletedAt = tomb is Map ? (tomb['deleted_at'] as num?)?.toDouble() ?? 0.0 : 0.0;
+    if (remote && deletedAt >= (remoteVersion ?? activity) && deletedAt > 0) return;
+    if (!remote && activity <= deletedAt) activity = deletedAt + 0.001;
+    if (!remote) {
+      for (final book in books) {
+        if ((book.id == meta.id || key == book.contentKey.trim()) && book.activityAt >= activity) {
+          activity = book.activityAt + 0.001;
+        }
+      }
+    }
+    final index = books.indexWhere((book) => book.id == meta.id || book.filePath == meta.filePath && meta.filePath.isNotEmpty);
+    if (index < 0) {
+      books.add(meta.copyWith(activityAt: activity));
+    } else {
+      final old = books[index];
+      books[index] = old.copyWith(
+        title: meta.title,
+        contentKey: meta.contentKey.isEmpty ? old.contentKey : meta.contentKey,
+        totalChars: meta.totalChars == 0 ? old.totalChars : meta.totalChars,
+        chapterCount: meta.chapterCount == 0 ? old.chapterCount : meta.chapterCount,
+        activityAt: activity > old.activityAt ? activity : old.activityAt,
+        aliases: {...old.aliases, ...meta.aliases, if (meta.id != old.id) meta.id}.toList(),
+        sourcePaths: {...old.sourcePaths, ...meta.sourcePaths, meta.filePath}.where((p) => p.isNotEmpty).toList());
+    }
+    await _consolidateBooks(books);
+    if ((!remote || (remoteVersion ?? activity) > deletedAt) && deletions.remove(key) != null) {
+      await _saveDeletions(deletions);
+    }
+  });
+
+  Future<void> consolidateBooks() => _bookWrite(() async => _consolidateBooks(await loadBooks()));
+
+  Future<bool> applyBookActivity(String bookId, double activityAt) => _bookWrite(() async {
+    if (!activityAt.isFinite || activityAt <= 0) return false;
+    final id = await resolveBookId(bookId);
+    final books = await loadBooks();
+    final index = books.indexWhere((book) => book.id == id);
+    if (index < 0 || books[index].activityAt >= activityAt) return false;
+    books[index] = books[index].copyWith(activityAt: activityAt);
+    await _saveBooks(books);
+    return true;
+  });
+
+  Future<void> _consolidateBooks(List<BookMeta> books) async {
+    final groups = <String, List<BookMeta>>{};
+    for (final book in books) {
+      final key = book.contentKey.trim().isEmpty ? 'id:${book.id}' : 'ck:${book.contentKey.trim()}';
+      groups.putIfAbsent(key, () => []).add(book);
+    }
+    final out = <BookMeta>[];
+    final redirects = <String, String>{};
+    final consolidatedChanges = <BookStorageChange>[];
+    final sp = await _sp;
+    for (final group in groups.values) {
+      var survivor = group.first;
+      final ids = {for (final book in group) ...[book.id, ...book.aliases]};
+      for (final id in ids) { redirects[id] = survivor.id; }
+      if (group.length > 1) {
+        BookProgress? newest;
+        final previousProgress = <String, BookProgress?>{};
+        var activity = survivor.activityAt;
+        var source = survivor;
+        var totalChars = survivor.totalChars;
+        var chapterCount = survivor.chapterCount;
+        bool exists(String path) { try { return path.isNotEmpty && File(path).existsSync(); } catch (_) { return false; } }
+        for (final book in group) {
+          if (book.activityAt > activity) activity = book.activityAt;
+          if (!exists(source.filePath) && exists(book.filePath)) source = book;
+          if (book.totalChars > totalChars) totalChars = book.totalChars;
+          if (book.chapterCount > chapterCount) chapterCount = book.chapterCount;
+        }
+        for (final id in ids) {
+          final progress = await _loadProgress(id);
+          previousProgress[id] = progress;
+          if (progress != null && (newest == null || progress.updatedAt > newest.updatedAt)) newest = progress;
+        }
+        final annotationsChanged = await AnnotationStore().mergeBooks(survivor.id, ids, notify: false);
+        if (newest != null && !await sp.setString(_progressPrefix + survivor.id,
+            jsonEncode(newest.copyWith(bookId: survivor.id).toJson()))) {
+          throw StateError('Merged progress could not be saved.');
+        }
+        for (final id in ids) {
+          if (annotationsChanged) {
+            consolidatedChanges.add(BookStorageChange(bookId: id,
+                kind: BookStorageChangeKind.annotations, remote: true));
+          }
+          if (newest != null && (previousProgress[id] == null ||
+              previousProgress[id]!.updatedAt < newest.updatedAt)) {
+            consolidatedChanges.add(BookStorageChange(bookId: id,
+                kind: BookStorageChangeKind.progress,
+                progress: newest.copyWith(bookId: id), remote: true));
+          }
+        }
+        survivor = survivor.copyWith(activityAt: activity,
+          filePath: source.filePath, format: source.format, parseOk: source.parseOk,
+          totalChars: totalChars, chapterCount: chapterCount,
+          aliases: ids.where((id) => id != survivor.id).toList(),
+          sourcePaths: {for (final book in group) ...[book.filePath, ...book.sourcePaths]}
+              .where((path) => path.isNotEmpty).toList());
+      }
+      out.add(survivor);
+    }
+    await _saveBooks(out);
+    final last = sp.getString(_lastBookKey);
+    if (last != null && redirects.containsKey(last) &&
+        !await sp.setString(_lastBookKey, redirects[last]!)) throw StateError('Last book could not be migrated.');
+    final order = sp.getStringList(_openOrderKey) ?? const <String>[];
+    if (!await sp.setStringList(_openOrderKey, {for (final id in order) redirects[id] ?? id}.toList())) {
+      throw StateError('Book open order could not be migrated.');
+    }
+    for (final change in consolidatedChanges) { publishBookChange(change); }
   }
 
   /// 从书架删除一本书，并留下删除墓碑（WebDAV 同步用它把删除传到其它设备）。
   /// [deletedAt] 不传取当前时间；应用远端删除时必须传远端时间，
   /// 否则本机时间会把对端的删除事件"变新"，导致两端反复拉锯。
-  Future<void> removeBook(String bookId, {double? deletedAt}) async {
+  Future<void> removeBook(String bookId, {double? deletedAt, bool remote = false}) =>
+      _bookWrite(() => AnnotationStore().duringBookRemoval(() async {
     final books = await loadBooks();
+    bookId = await resolveBookId(bookId);
     String key = '';
     String title = '';
+    final ids = <String>{bookId};
     for (final b in books) {
       if (b.id == bookId) {
         key = b.contentKey.trim();
         title = b.title;
-        break;
+        ids.addAll(b.aliases);
       }
     }
-    books.removeWhere((b) => b.id == bookId);
-    await saveBooks(books);
-    final sp = await _sp;
-    await sp.remove(_progressPrefix + bookId);
+    for (final book in books) {
+      if (key.isNotEmpty && book.contentKey.trim() == key) ids.addAll([book.id, ...book.aliases]);
+    }
+    if (remote && deletedAt != null) {
+      var activity = 0.0;
+      for (final book in books.where((book) => ids.contains(book.id))) {
+        if (book.activityAt > activity) activity = book.activityAt;
+        final progress = await _loadProgress(book.id);
+        if ((progress?.updatedAt ?? 0) > activity) activity = progress!.updatedAt;
+        final annotationClock = await AnnotationStore().loadBookmarksAt(book.id);
+        if (annotationClock > activity) activity = annotationClock;
+        for (final bm in await AnnotationStore().loadRawBookmarks(book.id)) {
+          final version = AnnotationStore.bookmarkVersion(bm);
+          if (version > activity) activity = version;
+        }
+      }
+      if (activity > deletedAt) return;
+    }
     if (key.isNotEmpty) {
-      await markDeleted(key, title, deletedAt: deletedAt, idKey: bookId);
+      await _markDeleted(key, title, deletedAt: deletedAt, idKey: bookId, idKeys: ids);
     } else {
       // 老书还没回填 ck2：上传时用 book id 兜底，删除也必须用同一个 key
-      await markDeleted(bookId, title, deletedAt: deletedAt);
+      await _markDeleted(bookId, title, deletedAt: deletedAt, idKeys: ids);
     }
-  }
+    books.removeWhere((b) => ids.contains(b.id));
+    await _saveBooks(books);
+    final sp = await _sp;
+    for (final id in ids) {
+      if (sp.containsKey(_progressPrefix + id) && !await sp.remove(_progressPrefix + id)) {
+        throw StateError('Removed book progress could not be cleared.');
+      }
+    }
+    if (ids.contains(sp.getString(_lastBookKey)) && !await sp.remove(_lastBookKey)) {
+      throw StateError('Last book could not be cleared.');
+    }
+    if (!await sp.setStringList(_openOrderKey,
+        (sp.getStringList(_openOrderKey) ?? []).where((id) => !ids.contains(id)).toList())) {
+      throw StateError('Removed book open order could not be cleared.');
+    }
+    for (final id in ids) {
+      publishBookChange(BookStorageChange(bookId: id, kind: BookStorageChangeKind.removed, remote: remote));
+    }
+  }));
 
   // ---------- 删除墓碑 ----------
   static const _deletionsKey = 'duoduo.deletions.v1';
@@ -231,12 +417,20 @@ class AppStorage {
   }
 
   Future<void> saveDeletions(Map<String, dynamic> deletions) async {
+    await _bookWrite(() => _saveDeletions(deletions));
+  }
+
+  Future<void> _saveDeletions(Map<String, dynamic> deletions) async {
     final sp = await _sp;
-    await sp.setString(_deletionsKey, jsonEncode(deletions));
+    if (!await sp.setString(_deletionsKey, jsonEncode(deletions))) throw StateError('Deletions could not be saved.');
   }
 
   Future<void> markDeleted(String contentKey, String title,
-      {double? deletedAt, String? idKey}) async {
+      {double? deletedAt, String? idKey, Iterable<String> idKeys = const []}) =>
+      _bookWrite(() => _markDeleted(contentKey, title, deletedAt: deletedAt, idKey: idKey, idKeys: idKeys));
+
+  Future<void> _markDeleted(String contentKey, String title,
+      {double? deletedAt, String? idKey, Iterable<String> idKeys = const []}) async {
     final key = contentKey.trim();
     if (key.isEmpty) return;
     final deletions = await loadDeletions();
@@ -249,20 +443,28 @@ class AppStorage {
         'deleted_at': t,
         'title': title,
         if (idKey != null && idKey.trim().isNotEmpty) 'id_key': idKey.trim(),
+        if (idKey == null && old is Map && old['id_key'] is String) 'id_key': old['id_key'],
+        'id_keys': {if (old is Map) ...((old['id_keys'] as List?)?.whereType<String>() ?? const <String>[]),
+          if (old is Map && old['id_key'] is String) old['id_key'] as String,
+          if (idKey != null) idKey, ...idKeys}.toList(),
       };
-      await saveDeletions(deletions);
+      await _saveDeletions(deletions);
     }
   }
 
-  Future<void> clearDeletion(String contentKey) async {
+  Future<void> clearDeletion(String contentKey) => _bookWrite(() async {
     final key = contentKey.trim();
     if (key.isEmpty) return;
     final deletions = await loadDeletions();
-    if (deletions.remove(key) != null) await saveDeletions(deletions);
-  }
+    if (deletions.remove(key) != null) await _saveDeletions(deletions);
+  });
 
   // ---------- 进度 ----------
   Future<BookProgress?> loadProgress(String bookId) async {
+    return _loadProgress(await resolveBookId(bookId));
+  }
+
+  Future<BookProgress?> _loadProgress(String bookId) async {
     final sp = await _sp;
     final raw = sp.getString(_progressPrefix + bookId);
     if (raw == null || raw.isEmpty) return null;
@@ -273,9 +475,41 @@ class AppStorage {
     }
   }
 
-  Future<void> saveProgress(BookProgress p) async {
-    final sp = await _sp;
-    await sp.setString(_progressPrefix + p.bookId, jsonEncode(p.toJson()));
+  Future<bool> trySaveProgress(BookProgress p, {bool remote = false}) {
+    final snapshot = BookProgress.fromJson(p.toJson());
+    return _bookWrite(() async {
+      final id = await resolveBookId(snapshot.bookId);
+      final books = await loadBooks();
+      final matching = books.where((book) => book.id == id);
+      final meta = matching.isEmpty ? null : matching.first;
+      final deletions = await loadDeletions();
+      final blocked = deletions.entries.any((entry) {
+        final value = entry.value;
+        return value is Map && (entry.key == id || entry.key == meta?.contentKey ||
+          value['id_key'] == id || (value['id_keys'] is List && (value['id_keys'] as List).contains(id))) &&
+          (meta == null || meta.activityAt <= ((value['deleted_at'] as num?)?.toDouble() ?? 0));
+      });
+      final previous = await _loadProgress(id);
+      if (blocked || !snapshot.updatedAt.isFinite || snapshot.updatedAt < 0 ||
+          (previous != null && snapshot.updatedAt <= previous.updatedAt)) {
+        debugPrint('Rejected stale or deleted-book progress write.');
+        return false;
+      }
+      final saved = snapshot.copyWith(bookId: id);
+      final sp = await _sp;
+      if (!await sp.setString(_progressPrefix + id, jsonEncode(saved.toJson()))) {
+        throw StateError('Progress could not be saved.');
+      }
+      for (final eventId in {id, ...?meta?.aliases}) {
+        publishBookChange(BookStorageChange(bookId: eventId, kind: BookStorageChangeKind.progress,
+            progress: saved.copyWith(bookId: eventId), remote: remote));
+      }
+      return true;
+    });
+  }
+
+  Future<void> saveProgress(BookProgress p, {bool remote = false}) async {
+    await trySaveProgress(p, remote: remote);
   }
 
   // ---------- 阅读设置 ----------
@@ -283,28 +517,44 @@ class AppStorage {
 
   Future<Map<String, dynamic>> loadSettings() async {
     final sp = await _sp;
+    _settings = {};
     final raw = sp.getString(_settingsKey);
     if (raw != null && raw.isNotEmpty) {
       try {
         _settings = jsonDecode(raw) as Map<String, dynamic>;
       } catch (_) {}
     }
-    return _settings;
+    return Map<String, dynamic>.from(_settings);
   }
 
   /// 合并写入：阅读设置与同步配置共用同一份 map，
   /// 任何一方保存时都不能把另一方的 key 冲掉（重启丢同步配置的根因）。
   Future<void> saveSettings(Map<String, dynamic> s) async {
-    final sp = await _sp;
-    var current = _settings;
-    final raw = sp.getString(_settingsKey);
-    if (raw != null && raw.isNotEmpty) {
-      try {
-        current = (jsonDecode(raw) as Map).cast<String, dynamic>();
-      } catch (_) {}
-    }
-    _settings = {...current, ...s};
-    await sp.setString(_settingsKey, jsonEncode(_settings));
+    final patch = Map<String, dynamic>.from(s);
+    await updateSettings((_) => patch);
+  }
+
+  /// The callback returns only owned keys and runs against the latest persisted map.
+  Future<Map<String, dynamic>> updateSettings(
+      Map<String, dynamic> Function(Map<String, dynamic>) patch) {
+    final write = (_settingsWrites ?? Future<void>.value()).then((_) async {
+      final sp = await _sp;
+      var current = <String, dynamic>{};
+      final raw = sp.getString(_settingsKey);
+      if (raw != null && raw.isNotEmpty) {
+        try {
+          current = (jsonDecode(raw) as Map).cast<String, dynamic>();
+        } catch (_) {}
+      }
+      _settings = {...current, ...patch(Map<String, dynamic>.from(current))};
+      if (!await sp.setString(_settingsKey, jsonEncode(_settings))) throw StateError('Settings could not be saved.');
+      return Map<String, dynamic>.from(_settings);
+    });
+    late final Future<void> settled;
+    void clear() { if (identical(_settingsWrites, settled)) _settingsWrites = null; }
+    settled = write.then<void>((_) => clear(), onError: (Object _, StackTrace __) => clear());
+    _settingsWrites = settled;
+    return write;
   }
 
   // ---------- 书架打开顺序（最近打开的排最前） ----------
@@ -315,14 +565,15 @@ class AppStorage {
     return sp.getStringList(_openOrderKey) ?? const [];
   }
 
-  Future<void> touchOpened(String bookId) async {
+  Future<void> touchOpened(String bookId) => _bookWrite(() async {
+    bookId = await resolveBookId(bookId);
     final sp = await _sp;
     final order = <String>[...(sp.getStringList(_openOrderKey) ?? const <String>[])];
     order.remove(bookId);
     order.insert(0, bookId);
     if (order.length > 200) order.removeRange(200, order.length);
     await sp.setStringList(_openOrderKey, order);
-  }
+  });
 
   // ---------- 最后阅读的书籍（启动时自动恢复） ----------
   Future<String?> loadLastBookId() async {
@@ -330,10 +581,11 @@ class AppStorage {
     return sp.getString(_lastBookKey);
   }
 
-  Future<void> saveLastBookId(String bookId) async {
+  Future<void> saveLastBookId(String bookId) => _bookWrite(() async {
+    bookId = await resolveBookId(bookId);
     final sp = await _sp;
     await sp.setString(_lastBookKey, bookId);
-  }
+  });
 }
 
 /// 阅读偏好（含默认值）

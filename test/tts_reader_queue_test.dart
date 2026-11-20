@@ -119,6 +119,8 @@ void main() {
     final messenger = binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global/events'), (_) async => null);
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ryanheise.audio_session'), (_) async => null);
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ryanheise.android_audio_manager'), (_) async => true);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers'), (call) async {
       if (call.method == 'create') messenger.setMockMethodCallHandler(
         MethodChannel('xyz.luan/audioplayers/events/${(call.arguments as Map)['playerId']}'), (_) async => null);
@@ -292,6 +294,22 @@ void main() {
     cache.release.complete();
     await disposing.timeout(const Duration(seconds: 1));
     expect(disposed, isTrue);
+  });
+
+  test('optional cache persistence failure does not stop successfully prepared playback', () async {
+    final cache = _DeferredWriteCache();
+    final player = _ResumePlayer();
+    final reader = TtsReader(player: player,
+      synthesize: (text, {required voice, required rate, required onWords, required cancelToken}) async => Uint8List.fromList([7]))
+      ..setCache(cache)..setPrefetchSentences(0);
+    addTearDown(reader.dispose);
+    await reader.start(['正文。'], offsets: [0]);
+    await cache.started.future;
+    expect(player.played, [7]);
+    cache.release.completeError(const FileSystemException('simulated disk full'));
+    await Future<void>.delayed(Duration.zero);
+    expect(reader.state, TtsState.playing);
+    expect(reader.lastFailure, isNull);
   });
 
   test('dynamic prefetch windows preserve useful audio, cancel excess requests and never interrupt the current sentence', () async {

@@ -10,6 +10,7 @@ class Bookmark {
   final String chapterTitle; // 冗余，列表直接显示
   final String snippet; // 句子预览
   final DateTime createdAt;
+  final double? modifiedAt;
 
   /// 章内 display 字符偏移（PC 端 `offset` 口径），跨端同步时给 PC 定位用。
   final int charOffset;
@@ -27,6 +28,7 @@ class Bookmark {
     required this.chapterTitle,
     required this.snippet,
     required this.createdAt,
+    this.modifiedAt,
     this.charOffset = 0,
     this.charOffsetEnd = 0,
   });
@@ -52,6 +54,7 @@ class Bookmark {
         'text': snippet,
         'note': snippet,
         'created_at': createdAt.millisecondsSinceEpoch / 1000.0,
+        if (modifiedAt != null) 'modified_at': modifiedAt,
       };
 
   factory Bookmark.fromJson(Map<String, dynamic> json) => Bookmark(
@@ -70,7 +73,8 @@ class Bookmark {
             '',
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
             _secondsToDate(json['created_at']) ??
-            DateTime.now(),
+            DateTime.fromMillisecondsSinceEpoch(0),
+        modifiedAt: (json['modified_at'] as num?)?.toDouble(),
         charOffset: (json['charOffset'] as num?)?.toInt() ??
             (json['offset'] as num?)?.toInt() ??
             0,
@@ -149,7 +153,7 @@ class Highlight {
         color: json['color'] as int? ?? 0x3385B5FF,
         note: json['note'] as String? ?? '',
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
-            DateTime.now(),
+            DateTime.fromMillisecondsSinceEpoch(0),
       );
 
   Highlight copyWith({String? note, int? color}) => Highlight(

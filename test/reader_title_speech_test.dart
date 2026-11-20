@@ -90,7 +90,7 @@ void main() {
     await storage.saveSettings((ReadingSettings()..voice = TtsReader.systemVoice..pageTurnMode = pageTurnMode..retainPageLine = true
       ..firstLineIndent = firstLineIndent..mergeNonSentenceBreaks = false..informationFilter = false
       ..informationFilterLevel = 'links').toJson());
-    final speech = TtsReader(player: _NoBytesPlayer());
+    final speech = TtsReader(player: _NoBytesPlayer(), activateAudioSession: (_) async => true);
     await tester.pumpWidget(MaterialApp(builder: (context, child) => Directionality(textDirection: direction, child: child!),
       home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
     await _until(tester, () => find.byKey(const ValueKey('reader-body')).evaluate().isNotEmpty, 'The reader must open');

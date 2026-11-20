@@ -561,9 +561,7 @@ class BookParser {
       final tts = clean.clean.substring(start, end);
       if (tts.trim().isEmpty) continue;
       final sourceStart = rawOffset(clean.cmap[start]);
-      final last = clean.cmap[end - 1];
-      final unit = canonical.codeUnitAt(last);
-      final sourceEnd = rawOffset(last + (unit >= 0xd800 && unit <= 0xdbff ? 2 : 1));
+      final sourceEnd = rawOffset(clean.cmap[end - 1] + 1);
       while (paragraph + 1 < kept.length && sourceStart >= starts[paragraph + 1]) {
         paragraph++;
       }

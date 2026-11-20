@@ -1,7 +1,7 @@
-import 'dart:io';
-
 import 'package:audio_service/audio_service.dart';
-import 'package:audio_session/audio_session.dart';
+import 'package:audio_session/audio_session.dart' show AudioSession, AudioSessionConfiguration;
+import 'package:audioplayers/audioplayers.dart' show AudioPlayer, AudioContext,
+    AudioContextAndroid, AndroidContentType, AndroidAudioFocus;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -35,13 +35,6 @@ Future<void> main() async {
   AppI18n.current = AppLang.detect(
     WidgetsBinding.instance.platformDispatcher.locales,
   );
-  if (Platform.isIOS) {
-    try {
-      await (await AudioSession.instance).configure(const AudioSessionConfiguration.music());
-    } catch (error) {
-      debugPrint('Audio session configuration failed: $error');
-    }
-  }
   try {
     globalAudioHandler = await AudioService.init(
       builder: () => TtsAudioHandler(),
@@ -58,6 +51,13 @@ Future<void> main() async {
     );
   } catch (e) {
     print('AudioService init failed: $e');
+  }
+  try {
+    await AudioPlayer.global.setAudioContext(AudioContext(android: const AudioContextAndroid(
+      contentType: AndroidContentType.speech, audioFocus: AndroidAudioFocus.none)));
+    await (await AudioSession.instance).configure(const AudioSessionConfiguration.speech());
+  } catch (error) {
+    debugPrint('Audio session configuration failed: $error');
   }
   runApp(const DuoduoLangduApp());
 }

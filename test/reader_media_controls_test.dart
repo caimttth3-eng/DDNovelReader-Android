@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:duoduo_langdu/models/book.dart';
+import 'package:duoduo_langdu/models/progress.dart';
 import 'package:duoduo_langdu/screens/reader_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
@@ -143,6 +144,94 @@ void main() {
     pauseGate.complete(); await tester.pumpAndSettle();
     expect(speech.resumes, 0); expect(speech.state, TtsState.paused);
     expect(handler.playbackState.value.playing, isFalse);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('accepted remote progress pauses, uses canonical position and permits later local saves', (tester) async {
+    final storage = AppStorage(), speech = _MediaSpeech();
+    final source = book('remote-progress-handoff');
+    await storage.saveSettings((ReadingSettings()..firstLineIndent = true).toJson());
+    await storage.saveProgress(BookProgress(bookId: source.id, updatedAt: 100));
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    final offset = source.chapters.single.paragraphs.single.sentences[1].displayStart;
+    final remote = BookProgress(bookId: source.id, chapterIndex: 0,
+      paragraphIndex: 99, offsetInParagraph: 99, charOffsetInChapter: source.charOffsetOf(0, 0, offset),
+      updatedAt: DateTime.now().millisecondsSinceEpoch / 1000.0);
+    expect(await storage.trySaveProgress(remote, remote: true), isTrue);
+    await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused); expect(handler.playbackState.value.playing, isFalse);
+    expect(find.byKey(const ValueKey('reading-volume-slider')), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 700));
+    expect((await storage.loadProgress(source.id))!.updatedAt, remote.updatedAt,
+      reason: 'Applying a remote position is not a fresh local modification.');
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await completeAction(tester, handler.play()); await tester.pumpAndSettle();
+    expect(speech.starts, 2); expect(speech.currentIndex, 1);
+    await tester.pump(const Duration(milliseconds: 700));
+    expect((await storage.loadProgress(source.id))!.updatedAt, greaterThan(remote.updatedAt));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('persisted book removal closes the active reader without recreating progress', (tester) async {
+    final storage = AppStorage(), speech = _MediaSpeech(), source = book('removed-active-reader');
+    await storage.addBook(BookMeta(id: source.id, title: source.title, filePath: '', format: 'txt', addedAt: source.addedAt));
+    await tester.pumpWidget(MaterialApp(home: Builder(builder: (context) => TextButton(
+      onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) =>
+        ReaderScreen(book: source, storage: storage, ttsReader: speech))), child: const Text('open')))));
+    await tester.tap(find.text('open')); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
+    await storage.removeBook(source.id);
+    await tester.pumpAndSettle();
+    expect(find.byType(ReaderScreen), findsNothing); expect(find.text('open'), findsOneWidget);
+    expect(speech.state, TtsState.stopped); expect(handler.playbackState.value.playing, isFalse);
+    expect(await storage.loadProgress(source.id), isNull);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('a filtered empty final chapter fully exits speech and stops the media session', (tester) async {
+    final source = Book(id: 'empty-final-chapter', title: '过滤末章', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [
+        Chapter(title: '第一章', paragraphs: [ReadingText.paragraph('正文。')]),
+        Chapter(title: '第二章', paragraphs: [ReadingText.paragraph('https://example.com')]),
+      ]);
+    final storage = AppStorage(), speech = _MediaSpeech();
+    await storage.saveSettings((ReadingSettings()..informationFilter = true..informationFilterLevel = 'links').toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    speech.changeState(TtsState.stopped); speech.onCompleted?.call();
+    await tester.pumpAndSettle();
+    expect(speech.state, TtsState.stopped); expect(handler.playbackState.value.playing, isFalse);
+    expect(find.byTooltip('朗读'), findsOneWidget);
+    expect(find.byKey(const ValueKey('reading-panel')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('text settings rebuild speech started by media controls while the modal is open', (tester) async {
+    final source = Book(id: 'settings-media-handoff', title: '设置与朗读', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [
+        ReadingText.paragraph('正文。\n下载APP即可阅读更多内容\n最后一句。'),
+      ])]);
+    final storage = AppStorage(), speech = _MediaSpeech();
+    await storage.saveSettings((ReadingSettings()..informationFilter = false..informationFilterLevel = 'ads'
+      ..mergeNonSentenceBreaks = false).toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+    await completeAction(tester, handler.play()); await tester.pumpAndSettle();
+    expect(speech.lastSentences.join(), contains('下载APP'));
+    tester.widget<SwitchListTile>(find.byKey(const ValueKey('information-filter'))).onChanged!(true);
+    await tester.pumpAndSettle();
+    expect(speech.starts, 2); expect(speech.lastSentences.join(), isNot(contains('下载APP')));
+    expect(speech.state, TtsState.playing); expect(tester.takeException(), isNull);
+    Navigator.of(tester.element(find.byType(BottomSheet).last)).pop(); await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
@@ -376,7 +465,7 @@ void main() {
     const text = '甲乙丙丁戊己，庚辛壬癸。';
     final source = Book(id: 'real-system-center-rate', title: '中央点按与调速', filePath: '', format: BookFormat.txt,
       addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: [ReadingText.paragraph(text)])]);
-    final speech = TtsReader(player: _SystemOnlyPlayer());
+    final speech = TtsReader(player: _SystemOnlyPlayer(), activateAudioSession: (_) async => true);
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle();
     binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pump();
@@ -439,6 +528,7 @@ class _MediaSpeech extends TtsReader {
   TtsState status = TtsState.idle;
   int starts = 0, resumes = 0;
   int sentenceIndex = -1;
+  List<String> lastSentences = const [];
   Completer<void>? pendingStart;
   Completer<void>? pendingPause;
   void changeState(TtsState state) { status = state; onStateChanged?.call(); }
@@ -447,10 +537,10 @@ class _MediaSpeech extends TtsReader {
   @override TtsState get state => status;
   @override Future<void> start(List<String> sentences, {List<int>? offsets, List<int>? pauseAfterMilliseconds,
     int chapterIndex = 0, int from = 0, int initialTtsOffset = 0}) async {
-    starts++; changeState(TtsState.playing); emitSentence(from);
+    starts++; lastSentences = List.of(sentences); changeState(TtsState.playing); emitSentence(from);
     await pendingStart?.future;
   }
-  @override Future<void> pause() async {
+  @override Future<void> pause({bool interrupted = false}) async {
     changeState(TtsState.paused);
     if (pendingStart != null && !pendingStart!.isCompleted) pendingStart!.complete();
     await pendingPause?.future;

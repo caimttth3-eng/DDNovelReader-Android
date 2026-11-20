@@ -86,16 +86,16 @@ class _SyncScreenState extends State<SyncScreen> {
   }
 
   Future<void> _persist() async {
-    final s = await _engine.settings();
-    s[SyncEngine.cfgServer] = _serverCtl.text.trim();
-    s[SyncEngine.cfgUser] = _userCtl.text.trim();
-    s[SyncEngine.cfgPass] = _passCtl.text;
-    s[SyncEngine.cfgDir] = _dirCtl.text.trim().isEmpty
+    await _engine.saveSettings({
+      SyncEngine.cfgServer: _serverCtl.text.trim(),
+      SyncEngine.cfgUser: _userCtl.text.trim(),
+      SyncEngine.cfgPass: _passCtl.text,
+      SyncEngine.cfgDir: _dirCtl.text.trim().isEmpty
         ? SyncEngine.remoteDirDefault
-        : _dirCtl.text.trim();
-    s[SyncEngine.cfgAuto] = _auto;
-    s[SyncEngine.cfgVerifyTls] = _verifyTls;
-    await _engine.saveSettings(s);
+        : _dirCtl.text.trim(),
+      SyncEngine.cfgAuto: _auto,
+      SyncEngine.cfgVerifyTls: _verifyTls,
+    });
   }
 
   String get _lastText {
@@ -109,35 +109,39 @@ class _SyncScreenState extends State<SyncScreen> {
   }
 
   Future<void> _run(bool testOnly) async {
+    if (_busy) return;
     if (_serverCtl.text.trim().isEmpty) {
       setState(() => _status = T('syncNeedServer'));
       return;
     }
-    await _persist();
     setState(() {
       _busy = true;
       _status = T('syncRunning');
     });
-    if (testOnly) {
-      final (ok, msg) = await _engine.testConnection();
+    try {
+      await _persist();
+      if (!mounted) return;
+      if (testOnly) {
+        final (ok, msg) = await _engine.testConnection();
+        if (!mounted) return;
+        setState(() {
+          _busy = false;
+          _status = msg;
+        });
+        return;
+      }
+      final report = await _engine.sync();
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _status = msg;
+        _status = report.summary;
+        _lastTime = report.ok
+            ? DateTime.now().millisecondsSinceEpoch / 1000.0
+            : _lastTime;
       });
-      return;
-    }
-    final report = await _engine.sync();
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _status = report.summary;
-      _lastTime = report.ok
-          ? DateTime.now().millisecondsSinceEpoch / 1000.0
-          : _lastTime;
-    });
-    if (report.ok) {
-      widget.onSynced?.call();
+      if (report.ok) widget.onSynced?.call();
+    } catch (error) {
+      if (mounted) setState(() { _busy = false; _status = '同步失败：$error'; });
     }
   }
 

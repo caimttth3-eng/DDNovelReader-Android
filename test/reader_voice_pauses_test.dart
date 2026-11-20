@@ -200,6 +200,31 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  testWidgets('online voice selection stays usable while native enumeration is pending', (tester) async {
+    await configureView(tester);
+    final initialized = Completer<String>();
+    addTearDown(() { if (!initialized.isCompleted) initialized.complete('engine'); });
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+      if (call.method == 'initialize') return initialized.future;
+      if (call.method == 'voices') return [];
+      return null;
+    });
+    final speech = _VoiceSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('slow-voice-list', '正文。'),
+      storage: AppStorage(), ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip(T('read'))); await tester.pumpAndSettle();
+    await pause(tester);
+    await tester.tap(find.byKey(const ValueKey('reading-voice')));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    expect(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural')), findsOneWidget);
+    await tester.tap(find.text('云希（男·阳光）')); await tester.pumpAndSettle();
+    expect(speech.voice, 'zh-CN-YunxiNeural');
+    initialized.complete('engine'); await tester.pumpAndSettle();
+    expect(speech.voice, 'zh-CN-YunxiNeural'); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
   testWidgets('online cache ignores legacy global and voice-specific pauses without changing the reader', (tester) async {
     await configureView(tester);
     final directory = (await tester.runAsync(() => Directory.systemTemp.createTemp('reader-voice-pause-cache-')))!;
@@ -353,7 +378,7 @@ class _VoiceSpeech extends TtsReader {
     sentenceIndex = from; initialOffset = initialTtsOffset;
     changeState(TtsState.playing); onSentenceChanged?.call(from);
   }
-  @override Future<void> pause() async { changeState(TtsState.paused); }
+  @override Future<void> pause({bool interrupted = false}) async { changeState(TtsState.paused); }
   @override Future<bool> resume() async { changeState(TtsState.playing); return true; }
   @override Future<void> stop() async { changeState(TtsState.stopped); }
 }

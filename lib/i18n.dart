@@ -62,6 +62,9 @@ class AppI18n {
       'readerMenu': '阅读菜单',
       'rotateScreen': '横竖屏切换',
       'readerSettings': '阅读设置',
+      'settingsApplyFailed': '阅读设置未能应用，请重试',
+      'operationFailed': '操作失败：{err}',
+      'cacheOperationFailed': '语音缓存操作失败：{err}',
       'previousChapter': '上一章',
       'nextChapter': '下一章',
 
@@ -302,6 +305,9 @@ class AppI18n {
       'readerMenu': '閱讀選單',
       'rotateScreen': '橫豎屏切換',
       'readerSettings': '閱讀設定',
+      'settingsApplyFailed': '閱讀設定未能套用，請重試',
+      'operationFailed': '操作失敗：{err}',
+      'cacheOperationFailed': '語音快取操作失敗：{err}',
       'previousChapter': '上一章',
       'nextChapter': '下一章',
 
@@ -542,6 +548,9 @@ class AppI18n {
       'readerMenu': 'Reader menu',
       'rotateScreen': 'Rotate screen',
       'readerSettings': 'Reading settings',
+      'settingsApplyFailed': 'Reading settings could not be applied. Please retry.',
+      'operationFailed': 'Operation failed: {err}',
+      'cacheOperationFailed': 'Voice cache operation failed: {err}',
       'previousChapter': 'Previous chapter',
       'nextChapter': 'Next chapter',
 
@@ -782,6 +791,9 @@ class AppI18n {
       'readerMenu': '読書メニュー',
       'rotateScreen': '画面回転',
       'readerSettings': '読書設定',
+      'settingsApplyFailed': '読書設定を適用できませんでした。再試行してください。',
+      'operationFailed': '操作に失敗しました：{err}',
+      'cacheOperationFailed': '音声キャッシュの操作に失敗しました：{err}',
       'previousChapter': '前の章',
       'nextChapter': '次の章',
 
@@ -1023,6 +1035,9 @@ class AppI18n {
       'readerMenu': '읽기 메뉴',
       'rotateScreen': '화면 회전',
       'readerSettings': '읽기 설정',
+      'settingsApplyFailed': '읽기 설정을 적용하지 못했습니다. 다시 시도하세요.',
+      'operationFailed': '작업에 실패했습니다: {err}',
+      'cacheOperationFailed': '음성 캐시 작업에 실패했습니다: {err}',
       'previousChapter': '이전 장',
       'nextChapter': '다음 장',
 

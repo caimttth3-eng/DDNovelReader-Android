@@ -26,6 +26,7 @@ import 'package:duoduo_langdu/services/book_cache_task.dart';
 import 'package:duoduo_langdu/services/tts_cache_store.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
 import 'package:duoduo_langdu/services/annotation_store.dart';
+import 'package:duoduo_langdu/services/sync_engine.dart';
 import 'package:duoduo_langdu/widgets/reader_brightness_control.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
@@ -89,6 +90,7 @@ void main() {
       // Font-change platform messages must settle without depending on PNG IO.
       await Future<void>.delayed(Duration.zero);
     });
+
     final key = GlobalKey();
     Widget app(Widget child) => ValueListenableBuilder<bool>(valueListenable: AppAppearance.nightMode,
       builder: (context, night, _) => RepaintBoundary(key: key, child: MaterialApp(
@@ -383,6 +385,88 @@ void main() {
       paragraphs: List.generate(30, (p) => Paragraph(
         display: '第${c + 1}章第${p + 1}段。' + List.filled(6, '山间的风吹过树林，远方传来朋友的问候。').join(),
         tts: '', sentences: const [], sentenceStartTts: const [])))));
+
+  testWidgets('disabled launch sync prevents the startup sync request', (tester) async {
+    final storage = AppStorage();
+    await storage.saveSettings({SyncEngine.cfgServer: 'https://example.invalid', SyncEngine.cfgAuto: false});
+    final sync = _CountingSyncEngine(storage);
+    await tester.pumpWidget(MaterialApp(home: ShelfScreen(syncEngine: sync)));
+    await tester.pumpAndSettle();
+    expect(sync.calls, 0);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('canonical desktop bookmark selects the matching formatted paragraph', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..firstLineIndent = true..mergeNonSentenceBreaks = false).toJson());
+    final book = Book(id: 'canonical-bookmark', title: '跨端书签', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章', paragraphs: List.generate(30,
+        (p) => ReadingText.paragraph('第$p段。${List.filled(10, '远方传来朋友的问候。').join()}')))]);
+    final offset = book.charOffsetOf(0, 20, 0);
+    await AnnotationStore().saveRawBookmarks(book.id, [
+      {'id': 'desktop-position', 'chapter_idx': 0, 'offset': offset, 'offset_end': offset + 5,
+        'text': '跨端目标', 'created_at': 100.0},
+    ]);
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: _TestSpeech())));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('bookmarks-tab'))); await tester.pumpAndSettle();
+    await tester.tap(find.text('跨端目标')); await tester.pumpAndSettle();
+    final positions = tester.widget<ScrollablePositionedList>(find.byKey(const ValueKey('reader-body')))
+      .itemPositionsNotifier!.itemPositions.value;
+    expect(positions.any((position) => position.index == 21 && position.itemLeadingEdge >= -0.1 &&
+      position.itemLeadingEdge < 0.2), isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('shelf cache clearing waits for every matching composite-key task', (tester) async {
+    final root = (await tester.runAsync(() => Directory.systemTemp.createTemp('shelf-cache-stop-')))!;
+    const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+    messenger.setMockMethodCallHandler(pathChannel, (_) async => root.path);
+    const key = '0123456789abcdef';
+    final cache = TtsCacheStore('cache-book-id', TtsReader.defaultVoice, 1, contentKey: key, textFingerprint: 'test');
+    final task = _TestBookCacheTask(book: sample('cache-book-id'), store: cache)..cancelGate = Completer<void>();
+    const taskKey = 'cache-book-id/test/zh-CN-XiaoxiaoNeural/1.00';
+    activeBookCaches[taskKey] = task;
+    late File audio;
+    await tester.runAsync(() async {
+      audio = File('${root.path}${Platform.pathSeparator}tts_cache${Platform.pathSeparator}$key'
+        '${Platform.pathSeparator}voice${Platform.pathSeparator}0${Platform.pathSeparator}entry.mp3');
+      await audio.parent.create(recursive: true); await audio.writeAsBytes([1, 2, 3]);
+    });
+    addTearDown(() async {
+      if (!task.cancelGate!.isCompleted) task.cancelGate!.complete();
+      activeBookCaches.remove(taskKey); task.statusNotifier.dispose();
+      messenger.setMockMethodCallHandler(pathChannel, null);
+      await root.delete(recursive: true);
+    });
+    final storage = AppStorage();
+    await storage.addBook(BookMeta(id: 'cache-book-id', title: '缓存测试', filePath: '', format: 'txt',
+      addedAt: DateTime(2026), contentKey: key, totalChars: 100, chapterCount: 1));
+    await tester.pumpWidget(const MaterialApp(home: ShelfScreen())); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shelf-menu'))); await tester.pumpAndSettle();
+    await tester.tap(find.text('缓存管理'));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    for (var frame = 0; frame < 100 && find.text('清除缓存').evaluate().isEmpty; frame++) {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero)); await tester.pump(const Duration(milliseconds: 16));
+    }
+    await tester.tap(find.text('清除缓存')); await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('确定')));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    expect(task.cancelCalls, 1); expect(await tester.runAsync(audio.exists), isTrue);
+    task.cancelGate!.complete();
+    var exists = true;
+    for (var frame = 0; frame < 100 && exists; frame++) {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero)); await tester.pump(const Duration(milliseconds: 16));
+      exists = (await tester.runAsync(audio.exists))!;
+    }
+    expect(exists, isFalse); expect(activeBookCaches.containsKey(taskKey), isFalse);
+    expect((await storage.loadBooks()).single.id, 'cache-book-id'); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
 
   testWidgets('each book restores its viewport and long seeks keep text visible', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
@@ -1030,6 +1114,10 @@ void main() {
   testWidgets('cache controls identify and clear only the selected online voice and speed', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final root = (await tester.runAsync(() => Directory.systemTemp.createTemp('reader-selected-cache-')))!;
+    const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+    messenger.setMockMethodCallHandler(pathChannel, (_) async => root.path);
+    addTearDown(() async { messenger.setMockMethodCallHandler(pathChannel, null); await root.delete(recursive: true); });
     final storage = AppStorage(), speech = _TestSpeech();
     final settings = ReadingSettings()..voice = TtsReader.defaultVoice..speechRate = 1.8;
     await storage.saveSettings(settings.toJson());
@@ -1073,6 +1161,10 @@ void main() {
     expect(second.cancelCalls, 1); expect(first.cancelCalls, 0);
     expect(activeBookCaches.containsKey(key('zh-CN-YunxiNeural')), isFalse);
     expect(activeBookCaches[key(TtsReader.defaultVoice)], same(first));
+    await tester.tap(find.text('开始缓存')); await tester.pumpAndSettle();
+    expect(second.startCalls, 1);
+    expect(activeBookCaches[key('zh-CN-YunxiNeural')], same(second),
+      reason: 'Restarting from an already open cleared-cache sheet must register its controller again.');
     ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
     await tester.pumpAndSettle(); await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('系统语音（离线）'), 250, scrollable: find.byType(Scrollable).last);
@@ -2179,6 +2271,10 @@ void main() {
     await tester.tap(find.byTooltip('添加书签')); await tester.pumpAndSettle();
     final bookmarks = await AnnotationStore().loadBookmarks(book.id);
     expect(bookmarks.length, 1); expect(bookmarks.single.chapterAnchor, isNotNull);
+    final sourcePosition = ReadingText.locate(book, bookmarks.single.chapterIndex, bookmarks.single.chapterAnchor!);
+    expect(bookmarks.single.charOffset, book.charOffsetOf(bookmarks.single.chapterIndex, sourcePosition.$1, sourcePosition.$2));
+    expect(bookmarks.single.charOffset, greaterThan(0));
+    expect(bookmarks.single.charOffsetEnd, greaterThan(bookmarks.single.charOffset));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     await open();
@@ -2202,11 +2298,21 @@ Future<void> _captureReaderPreview(WidgetTester tester, GlobalKey key, String na
 
 class _TestBookCacheTask extends BookCacheTask {
   int cancelCalls = 0;
+  int startCalls = 0;
+  Completer<void>? cancelGate;
   _TestBookCacheTask({required Book book, required TtsCacheStore store}) : super(book: book, store: store, bookId: book.id);
   @override
   Future<void> restoreFromDisk() async {}
   @override
-  void cancel() { cancelCalls++; }
+  Future<void> start({bool resume = false, int? fromChapter, int? fromOffset}) async { startCalls++; }
+  @override
+  Future<void> cancel() async { cancelCalls++; await cancelGate?.future; }
+}
+
+class _CountingSyncEngine extends SyncEngine {
+  int calls = 0;
+  _CountingSyncEngine(AppStorage storage) : super(storage: storage, annotations: AnnotationStore());
+  @override Future<SyncReport> sync() async { calls++; return SyncReport()..ok = true; }
 }
 
 class _TestSpeech extends TtsReader {
@@ -2236,7 +2342,7 @@ class _TestSpeech extends TtsReader {
     if (delay > Duration.zero) await Future<void>.delayed(delay);
   }
   @override
-  Future<void> pause() async { _status = TtsState.paused; if (pauseResult != null) await pauseResult!.future; }
+  Future<void> pause({bool interrupted = false}) async { _status = TtsState.paused; if (pauseResult != null) await pauseResult!.future; }
   @override
   Future<void> jumpTo(int sentenceIndex, {int ttsOffset = 0}) async {
     if (!usesSystemVoice && !recordJumps) return super.jumpTo(sentenceIndex, ttsOffset: ttsOffset);

@@ -25,7 +25,9 @@ import 'sync_screen.dart';
 
 /// 书架首页：顶部「多多朗读」+ ⋮ 设置(添加书籍)，4 列木纹书架，无限下滑。
 class ShelfScreen extends StatefulWidget {
-  const ShelfScreen({super.key});
+  @visibleForTesting
+  final SyncEngine? syncEngine;
+  const ShelfScreen({super.key, this.syncEngine});
 
   @override
   State<ShelfScreen> createState() => _ShelfScreenState();
@@ -62,7 +64,9 @@ class _ShelfScreenState extends State<ShelfScreen> {
     if (!mounted) return;
     await _backfillKeys();
     if (!mounted) return;
-    await _autoSync();
+    await _loadAll();
+    if (!mounted) return;
+    await _autoSync(silent: true);
     if (!mounted) return;
     _startPeriodicSync();
     await _restoreLastBook();
@@ -138,7 +142,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
 
   Future<void> _autoSync({bool silent = false}) async {
     if (_syncing) return;
-    final eng = SyncEngine(storage: _storage, annotations: _annotations);
+    final eng = widget.syncEngine ?? SyncEngine(storage: _storage, annotations: _annotations);
     final s = await eng.settings();
     final autoOn = (s[SyncEngine.cfgAuto] as bool?) ?? true;
     // 定时同步只在开启自动同步时跑；删除/手动这类明确操作即使关了自动同步也要推
@@ -194,6 +198,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   Future<void> _loadAll() async {
+    await _storage.consolidateBooks();
     final books = await _storage.loadBooks();
     // 最近打开的书排最前（第一本 = 上次打开的书），其余按最近打开顺序
     final order = await _storage.loadOpenOrder();
@@ -533,7 +538,6 @@ class _ShelfScreenState extends State<ShelfScreen> {
             return (bookForReader, initial);
           },
           onProgressChanged: (p) async {
-            await _storage.saveProgress(p);
             // 同步书架腰封进度
             if (mounted) {
               setState(() => _progress[meta.id] = p);
@@ -579,14 +583,24 @@ class _ShelfScreenState extends State<ShelfScreen> {
           break;
         }
       }
-      if (origId != null) {
-        final t = activeBookCaches[origId];
-        if (t != null) {
-          t.cancel();
-          activeBookCaches.remove(origId);
-        }
+      final tasks = activeBookCaches.entries.where((entry) =>
+        entry.value.bookId == origId || TtsCacheStore.safeId(entry.value.bookId) == safeId ||
+        TtsCacheStore.safeId(entry.value.store.cacheKey) == safeId).toList();
+      await Future.wait(tasks.map((entry) => entry.value.cancel()));
+      for (final entry in tasks) {
+        if (identical(activeBookCaches[entry.key], entry.value)) activeBookCaches.remove(entry.key);
       }
       await TtsCacheStore.clearBook(safeId);
+    }
+
+    Future<bool> clearCache(Future<void> Function() action) async {
+      try { await action(); return true; }
+      catch (error) {
+        debugPrint('Clearing voice cache failed: $error');
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(T('cacheOperationFailed', {'err': '$error'}))));
+        return false;
+      }
     }
 
     var total = -1;
@@ -700,7 +714,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                                       ),
                                     );
                                     if (ok != true) return;
-                                    await clearOne(safeId);
+                                    if (!await clearCache(() => clearOne(safeId))) return;
                                     total = await TtsCacheStore.totalSize();
                                     books =
                                         await TtsCacheStore.listBookSizes();
@@ -747,11 +761,14 @@ class _ShelfScreenState extends State<ShelfScreen> {
                             ),
                           );
                           if (ok != true) return;
-                          for (final t in activeBookCaches.values.toList()) {
-                            t.cancel();
-                          }
-                          activeBookCaches.clear();
-                          await TtsCacheStore.clearAll();
+                          if (!await clearCache(() async {
+                            final tasks = activeBookCaches.entries.toList();
+                            await Future.wait(tasks.map((entry) => entry.value.cancel()));
+                            for (final entry in tasks) {
+                              if (identical(activeBookCaches[entry.key], entry.value)) activeBookCaches.remove(entry.key);
+                            }
+                            await TtsCacheStore.clearAll();
+                          })) return;
                           total = 0;
                           books = [];
                           if (ctx.mounted) {

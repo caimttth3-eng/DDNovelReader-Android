@@ -39,6 +39,8 @@ void main() {
       {'supported': false, 'enabled': false, 'canRequest': false, 'asked': false});
     messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async => null);
     messenger.setMockMethodCallHandler(NetworkConnectivity.channel, (_) async => null);
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ryanheise.audio_session'), (_) async => null);
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ryanheise.android_audio_manager'), (_) async => true);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global/events'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers'), (call) async {

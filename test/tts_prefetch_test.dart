@@ -33,6 +33,10 @@ void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() async {
     binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('com.ryanheise.audio_session'), (_) async => null);
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('com.ryanheise.android_audio_manager'), (_) async => true);
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(
       const MethodChannel('com.ddnovelreader/system_tts'), (_) async => null);
     await Future<void>.delayed(Duration.zero);
   });

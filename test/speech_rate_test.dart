@@ -54,6 +54,8 @@ void main() {
   }
   Future<void> flush() async => Future<void>.delayed(const Duration(milliseconds: 10));
   setUp(() {
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ryanheise.audio_session'), (_) async => null);
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ryanheise.android_audio_manager'), (_) async => true);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers.global/events'), (_) async => null);
     messenger.setMockMethodCallHandler(const MethodChannel('xyz.luan/audioplayers'), (call) async {

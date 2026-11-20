@@ -146,8 +146,8 @@ void main() {
     expect(p, isNotNull);
     expect(p!.chapterIndex, 9);
     expect(p.paragraphIndex, 2);
-    // 记录里带段落坐标 → 不需要换算，但 char_offset 原值必须保留以便回写 PC
-    expect(p.charOffsetInChapter, isNull);
+    // Wire canonical offset wins even when Android paragraph fields are present.
+    expect(p.charOffsetInChapter, 888);
     expect(p.pcCharOffset, 888);
     expect(p.toPcJson()['char_offset'], 888);
     expect(p.percent, closeTo(0.31, 0.001));
@@ -198,7 +198,7 @@ void main() {
         'format': 'txt',
         'total_chars': probe.totalDisplayLength,
         'chapter_count': probe.chapterCount,
-        'progress': {'chapter_idx': 1, 'char_offset': 30, 'percent': 0.5},
+        'progress': {'chapter_idx': 1, 'char_offset': 30, 'percent': 0.5, 'percent_unit': 'ratio'},
         'bookmarks': [
           {
             'id': 'bm1',
