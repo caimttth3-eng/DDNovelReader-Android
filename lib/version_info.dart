@@ -6,12 +6,13 @@ library;
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.3.8';
-  static const String build = '42';
+  static const String version = '1.3.9';
+  static const String build = '43';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.9：整合上游1.3.2缓存修复；面板先显示再扫描，安全重建缓存进度，暂停/取消等待写入结清；新增可取消的脱敏诊断导出，保留真实词位置高亮。在线语速实测2倍与请求3倍相同，继续显示最高2倍。',
     'v1.3.8：合并原作者1.3.1系统音色选择、按书记忆及中断续读；统一跨章预加载窗口和暂停状态，在线播放与缓存最高2倍，保留0.02步长和本项目分页修复。',
     'v1.3.7：朗读高亮不再露出页底；手动翻页从目标页首字起读，不受旧语音回调影响。',
     'v1.3.6：翻页时等新页完成裁切再显示，修复页底半行一闪而过的问题。',

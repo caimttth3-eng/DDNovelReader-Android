@@ -71,6 +71,11 @@ class BookCacheTask {
 
   /// 构建缓存任务表；fromChapter/fromOffset 非空时只缓存该位置之后的句子
   Future<void> _buildTasks({int? fromChapter, int? fromOffset}) async {
+    _tasks = await _createTasks(fromChapter: fromChapter, fromOffset: fromOffset);
+    _total = _tasks.length;
+  }
+
+  Future<List<(int, int, String)>> _createTasks({int? fromChapter, int? fromOffset}) async {
     final tasks = <(int, int, String)>[];
     for (var ci = 0; ci < book.chapters.length; ci++) {
       if (fromChapter != null && ci < fromChapter) continue;
@@ -93,11 +98,11 @@ class BookCacheTask {
           }
           tasks.add((ci, off, s.tts));
           i++;
+          if (tasks.length % 512 == 0) await Future<void>.delayed(Duration.zero);
         }
       }
     }
-    _tasks = tasks;
-    _total = tasks.length;
+    return tasks;
   }
 
   // ---------- 控制 ----------
@@ -134,54 +139,44 @@ class BookCacheTask {
   /// 从磁盘恢复进度（进程重启/重进页面时调用；仅 idle 状态可用）。
   /// 有匹配的 progress.json 则恢复其进度；否则按磁盘实际文件数统计，
   /// 让"重进后整本缓存为 0"不再发生——已有缓存始终可见、可续传。
-  Future<void> restoreFromDisk() => _serialize(_restoreFromDisk);
+  Future<void> restoreFromDisk() =>
+      _state == 'idle' ? rescan() : Future<void>.value();
 
-  Future<void> _restoreFromDisk() async {
-    if (_state != 'idle') return;
-    final generation = _generation;
-    final prog = await store.loadProgress();
-    if (generation != _generation) return;
-    if (prog != null && prog.total > 0) {
-      _fromChapter = prog.fromChapter;
-      _fromOffset = prog.fromOffset;
-      await _buildTasks(fromChapter: _fromChapter, fromOffset: _fromOffset);
-      if (prog.total == _total) {
-        _completed
-          ..clear()
-          ..addAll(prog.completed.where((i) => i >= 0 && i < _total));
-        final names = await store.listMp3Names();
-        if (generation != _generation) return;
-        _completed.removeWhere((i) => !names.contains(TtsCacheStore.fileName(_tasks[i].$1, _tasks[i].$2)));
-        _done = _completed.length;
-        _state = _done == _total ? 'done' : 'paused';
-        _next = 0;
-        while (_next < _total && _completed.contains(_next)) {
-          _next++;
-        }
-        _notify();
-        return;
-      }
-      // total 不匹配（书重解析/起点变化）：progress 作废，落回磁盘扫描
-    } else {
-      await _buildTasks();
-    }
-    var n = 0;
-    final names = await store.listMp3Names();
-    if (generation != _generation) return;
-    _completed.clear();
-    for (var i = 0; i < _tasks.length; i++) {
-      final (ci, off, _) = _tasks[i];
-      final fn = '${ci.toString().padLeft(4, '0')}_'
-          '${off.toString().padLeft(8, '0')}.mp3';
-      if (names.contains(fn)) {
-        n++;
-        _completed.add(i);
-      }
-    }
-    _done = n;
-    _state = n > 0 ? 'paused' : 'idle';
-    _next = 0;
+  /// A scan is a control transaction: stop producers, build a local snapshot,
+  /// then publish only if no newer pause/cancel/start superseded it.
+  Future<void> rescan() {
+    final generation = _invalidate();
+    _state = 'building';
+    lastFailure = null;
     _notify();
+    return _serialize(() async {
+      await _workers;
+      await _progressWrites;
+      if (generation != _generation) return;
+      final prog = await store.loadProgress();
+      final fromChapter = prog == null ? _fromChapter : prog.fromChapter;
+      final fromOffset = prog == null ? _fromOffset : prog.fromOffset;
+      final tasks = await _createTasks(fromChapter: fromChapter, fromOffset: fromOffset);
+      if (generation != _generation) return;
+      final completed = await _scanCompleted(tasks);
+      if (generation != _generation) return;
+      _tasks = tasks;
+      _total = tasks.length;
+      _fromChapter = fromChapter;
+      _fromOffset = fromOffset;
+      _completed..clear()..addAll(completed);
+      _done = completed.length;
+      _next = 0;
+      _state = _done == _total ? 'done' : (_done > 0 ? 'paused' : 'idle');
+      await _save();
+      _notify();
+    });
+  }
+
+  Future<Set<int>> _scanCompleted(List<(int, int, String)> tasks) async {
+    final names = await store.listMp3Names();
+    return {for (var i = 0; i < tasks.length; i++)
+      if (names.contains(TtsCacheStore.fileName(tasks[i].$1, tasks[i].$2))) i};
   }
 
   Future<void> _initAndRun({required bool resume, required int generation}) async {
@@ -196,36 +191,20 @@ class BookCacheTask {
       return;
     }
     if (resume) {
-      final prog = await store.loadProgress();
-      if (prog != null && prog.total == _total) {
-        _completed
-          ..clear()
-          ..addAll(prog.completed.where((i) => i >= 0 && i < _total));
-        // 校验：标记完成但文件实际缺失的任务剔除（断网/失败误标，允许补齐）
-        final bad = <int>[];
-        for (final idx in _completed) {
-          final (ci, off, _) = _tasks[idx];
-          if (!await store.exists(ci, off)) bad.add(idx);
-        }
-        for (final idx in bad) {
-          _completed.remove(idx);
-        }
-        _done = _completed.length;
-        _next = 0;
-        while (_next < _total && _completed.contains(_next)) {
-          _next++;
-        }
-        if (_next >= _total) {
-          if (generation != _generation) return;
-          _state = 'done';
-          await _save();
-          _notify();
-          return;
-        }
-      } else {
-        _done = 0;
-        _next = 0;
-        _completed.clear();
+      final completed = await _scanCompleted(_tasks);
+      if (generation != _generation) return;
+      _completed..clear()..addAll(completed);
+      _done = _completed.length;
+      _next = 0;
+      while (_next < _total && _completed.contains(_next)) {
+        _next++;
+      }
+      if (_next >= _total) {
+        if (generation != _generation) return;
+        _state = 'done';
+        await _save();
+        _notify();
+        return;
       }
     } else {
       _done = 0;

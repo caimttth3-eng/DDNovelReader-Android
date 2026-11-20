@@ -17,13 +17,20 @@ class _Store extends TtsCacheStore {
   Completer<void>? writeGate;
   Completer<void>? saveGate;
   bool failWrites = false;
+  bool failScans = false;
+  Completer<void>? scanGate;
+  Completer<void>? scanStarted;
   _Store() : super('task-book', 'voice', 1);
 
-  @override Future<bool> exists(int ci, int off) async => audio.containsKey((ci, off));
+  @override Future<bool> exists(int ci, int off) async => audio[(ci, off)]?.isNotEmpty ?? false;
   @override Future<CacheProgress?> loadProgress() async => progress.isEmpty ? null : progress.last;
-  @override Future<Set<String>> listMp3Names() async => {
-    for (final key in audio.keys) TtsCacheStore.fileName(key.$1, key.$2),
-  };
+  @override Future<Set<String>> listMp3Names() async {
+    if (scanStarted != null && !scanStarted!.isCompleted) scanStarted!.complete();
+    await scanGate?.future;
+    if (failScans) throw const FileSystemException('Scan denied');
+    return {for (final entry in audio.entries)
+      if (entry.value.isNotEmpty) TtsCacheStore.fileName(entry.key.$1, entry.key.$2)};
+  }
   @override Future<void> write(int ci, int off, Uint8List bytes, {List<SpeechWord>? words}) async {
     if (!writeStarted.isCompleted) writeStarted.complete();
     await writeGate?.future;
@@ -212,6 +219,103 @@ void main() {
     await expectLater(task.start(resume: true), throwsStateError);
     expect(task.lastFailure, isA<StateError>());
     expect(task.status.isPaused, isTrue);
+  });
+
+  test('rescan reconciles saved, unrecorded, missing and empty audio atomically', () async {
+    final source = book(4), store = _Store();
+    final offsets = chapterSentenceOffsets(source.chapters.single);
+    store.audio[(0, offsets[0])] = Uint8List.fromList([1]);
+    store.audio[(0, offsets[1])] = Uint8List.fromList([2]);
+    store.audio[(0, offsets[3])] = Uint8List(0);
+    store.progress.add((total: 4, done: 3, completed: {0, 2, 3}, state: 'done',
+      fromChapter: null, fromOffset: null));
+    final task = BookCacheTask(book: source, bookId: source.id, store: store);
+    await task.restoreFromDisk();
+    expect(task.status.done, 2); expect(task.status.state, 'paused');
+    expect(store.progress.last.completed, {0, 1});
+    await task.rescan();
+    expect(task.status.done, 2); expect(store.progress.last.completed, {0, 1});
+  });
+
+  test('disk-only complete cache is restored as done and persisted', () async {
+    final source = book(2), store = _Store();
+    for (final offset in chapterSentenceOffsets(source.chapters.single)) {
+      store.audio[(0, offset)] = Uint8List.fromList([1]);
+    }
+    final task = BookCacheTask(book: source, bookId: source.id, store: store);
+    await task.restoreFromDisk();
+    expect(task.status.isDone, isTrue); expect(task.status.done, 2);
+    expect(store.progress.single.completed, {0, 1});
+    expect(store.progress.single.state, 'done');
+  });
+
+  test('rescan preserves the persisted starting offset when task counts change', () async {
+    final source = book(4), store = _Store();
+    final offsets = chapterSentenceOffsets(source.chapters.single);
+    store.audio[(0, offsets[0])] = Uint8List.fromList([1]);
+    store.audio[(0, offsets[2])] = Uint8List.fromList([1]);
+    store.progress.add((total: 99, done: 1, completed: {0}, state: 'paused',
+      fromChapter: 0, fromOffset: offsets[2]));
+    final task = BookCacheTask(book: source, bookId: source.id, store: store);
+    await task.rescan();
+    expect(task.status.total, 2); expect(task.status.done, 1);
+    expect(store.progress.last.completed, {0});
+    expect(store.progress.last.fromOffset, offsets[2]);
+  });
+
+  test('scan IO failure preserves previous completions and progress bytes', () async {
+    final source = book(2), store = _Store();
+    store.audio[(0, 0)] = Uint8List.fromList([1]);
+    final task = BookCacheTask(book: source, bookId: source.id, store: store);
+    await task.rescan();
+    final previous = store.progress.toList();
+    store.failScans = true;
+    await expectLater(task.rescan(), throwsA(isA<FileSystemException>()));
+    expect(task.status.done, 1); expect(task.status.total, 2);
+    expect(task.status.isPaused, isTrue);
+    expect(store.progress, previous); expect(task.lastFailure, isA<FileSystemException>());
+  });
+
+  test('cancel during rescan discards late scan results without losing old state', () async {
+    final source = book(2), store = _Store();
+    store.audio[(0, 0)] = Uint8List.fromList([1]);
+    final task = BookCacheTask(book: source, bookId: source.id, store: store);
+    await task.rescan();
+    store.scanGate = Completer<void>(); store.scanStarted = Completer<void>();
+    final scan = task.rescan();
+    await store.scanStarted!.future;
+    final cancel = task.cancel();
+    store.audio[(0, chapterSentenceOffsets(source.chapters.single)[1])] = Uint8List.fromList([1]);
+    store.scanGate!.complete();
+    await Future.wait([scan, cancel]);
+    expect(task.status.state, 'cancelled'); expect(task.status.done, 1);
+    expect(store.progress.last.completed, {0});
+  });
+
+  test('rescan cancels and drains live producers before inspecting disk', () async {
+    final source = book(2), store = _Store(), synthesis = _Synthesis();
+    final task = BookCacheTask(book: source, bookId: source.id, store: store, synthesize: synthesis.call);
+    await task.start(); await waitFor(() => synthesis.live == 2);
+    final scan = task.rescan();
+    expect(synthesis.requests.every((request) => request.token.cancelled), isTrue);
+    expect(task.status.state, 'building');
+    synthesis.settle(); await scan;
+    expect(store.audio, isEmpty); expect(task.status.done, 0);
+    expect(task.status.state, 'idle'); expect(synthesis.live, 0);
+    await task.start(resume: true); await waitFor(() => synthesis.live == 2);
+    synthesis.settle(); await waitFor(() => task.status.isDone);
+    expect(synthesis.peak, 2); await task.pause();
+  });
+
+  test('rescan future waits for its corrected progress to persist', () async {
+    final source = book(1), store = _Store()..saveGate = Completer<void>();
+    store.audio[(0, 0)] = Uint8List.fromList([1]);
+    final task = BookCacheTask(book: source, bookId: source.id, store: store);
+    var returned = false;
+    final scan = task.rescan().then((_) => returned = true);
+    await flush(); expect(returned, isFalse); expect(store.progress, isEmpty);
+    store.saveGate!.complete(); await scan;
+    expect(store.progress.single.completed, {0});
   });
 
   test('successful synthesis retry does not retain a transient failure', () async {

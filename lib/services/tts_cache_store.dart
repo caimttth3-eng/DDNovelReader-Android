@@ -109,20 +109,21 @@ class TtsCacheStore {
   /// 1) 一级目录 `<book.id>` → `<contentKey>`；
   /// 2) 语速目录 `1.00` / `1.50` → `0` / `50`（纯整数的目录视为已是新格式，跳过）。
   /// 已迁移过（有标记文件）就只做一次 exists 判断，后续零成本。
-  Future<void> _migrateLegacyLayout(Directory root) {
+  Future<void> _migrateLegacyLayout(Directory root, {bool refresh = false}) async {
     final key = '${root.path}/$bookId/$cacheKey';
+    if (refresh) await _migrations[key];
     return _migrations.putIfAbsent(key, () async {
-      try { await _performLegacyMigration(root); }
+      try { await _performLegacyMigration(root, refresh: refresh); }
       finally { _migrations.remove(key); }
     });
   }
 
-  Future<void> _performLegacyMigration(Directory root) async {
+  Future<void> _performLegacyMigration(Directory root, {bool refresh = false}) async {
     try {
       final sep = Platform.pathSeparator;
       final keyDir = Directory('${root.path}$sep${_safe(cacheKey)}');
       final mark = File('${keyDir.path}$sep$_layoutMark');
-      if (await mark.exists()) return;
+      if (!refresh && await mark.exists()) return;
 
       if (cacheKey != bookId) {
         final oldDir = Directory('${root.path}$sep${_safe(bookId)}');
@@ -307,6 +308,7 @@ class TtsCacheStore {
       if (!await p.exists()) return null;
       final data = jsonDecode(await p.readAsString()) as Map<String, dynamic>;
       if (data['voice'] != voice) return null;
+      if (data['textFingerprint'] != null && data['textFingerprint'] != textFingerprint) return null;
       final bid = data['book_id'] ?? data['bookId'];
       if (bid != null && bid != cacheKey && bid != bookId) return null;
       final done = (data['done'] as num?)?.toInt() ?? 0;
@@ -323,7 +325,12 @@ class TtsCacheStore {
         fromChapter: (data['fromChapter'] as num?)?.toInt(),
         fromOffset: (data['fromOffset'] as num?)?.toInt(),
       );
-    } catch (_) {
+    } on FileSystemException catch (error) {
+      if (!_isMissing(error)) rethrow;
+      return null;
+    } on FormatException {
+      return null;
+    } on TypeError {
       return null;
     }
   }
@@ -343,6 +350,7 @@ class TtsCacheStore {
       'book_id': cacheKey,
       'voice': voice,
       'rate': rateKey,
+      'textFingerprint': ?textFingerprint,
       'total': total,
       'done': done,
       'completed': completed.toList()..sort(),
@@ -419,18 +427,19 @@ class TtsCacheStore {
   /// 一次性列出供恢复进度时内存判断，避免逐文件 exists 的 IO 扫描。
   Future<Set<String>> listMp3Names() async {
     final result = <String>{};
-    try {
-      final d = await dir();
-      if (await d.exists()) {
-        await for (final e in d.list(followLinks: false)) {
-          if (e is File) {
-            final name = e.uri.pathSegments.last;
-            if (!name.endsWith('.mp3') || await e.length() == 0) continue;
-            result.add(name);
-          }
+    // A manual/recovery scan also discovers late-arriving old layouts. Normal
+    // audio reads retain the cheap marker fast path and never scan all books.
+    await _migrateLegacyLayout(await rootDir(), refresh: true);
+    final d = await dir();
+    for (final e in await _cacheEntries(d)) {
+      if (e is File && e.path.endsWith('.mp3')) {
+        try {
+          if (await e.length() > 0) result.add(e.uri.pathSegments.last);
+        } on FileSystemException catch (error) {
+          if (!_isMissing(error)) rethrow;
         }
       }
-    } catch (_) {}
+    }
     return result;
   }
 

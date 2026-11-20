@@ -267,6 +267,10 @@ void main() {
     expect(find.byKey(const ValueKey('cache-binding')), findsOneWidget);
     expect(preparations, hasLength(1), reason: 'Both online voices use the same default split, so no reformat is necessary');
     final task = activeBookCaches.values.singleWhere((task) => task.bookId == bookId);
+    for (var frame = 0; frame < 120 && (task.status.total == 0 || task.status.isActive); frame++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
     expect(task.store.voice, targetVoice); expect(task.store.rate, 1.8);
     expect(task.store.textFingerprint, currentFingerprint);
     expect(task.store.textFingerprint, 'words2-${ReadingText.fingerprint(task.book)}');
@@ -317,6 +321,10 @@ void main() {
     }
     expect(find.byKey(const ValueKey('cache-binding')), findsOneWidget);
     final task = activeBookCaches.values.singleWhere((task) => task.bookId == id);
+    for (var frame = 0; frame < 120 && (task.status.total == 0 || task.status.isActive); frame++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
     expect(task.store.voice, voice); expect(task.store.rate, 2); expect(task.store.rateKey, '100');
     expect(task.status.isActive, isFalse, reason: 'Inspecting a cache does not start synthesis.');
     expect(speech.voice, TtsReader.systemVoice); expect(speech.speechRate, 2.8);

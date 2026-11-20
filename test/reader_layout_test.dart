@@ -1111,6 +1111,41 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
+  testWidgets('cache panel appears before disk scan and cancellation keeps the reader open', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    final storage = AppStorage(), speech = _TestSpeech();
+    await storage.saveSettings((ReadingSettings()..voice = TtsReader.defaultVoice..speechRate = 1.8).toJson());
+    final book = sample('cache-slow-scan');
+    final formatted = ReadingText.format(book, merge: true, indent: true);
+    final fingerprint = 'words2-${ReadingText.fingerprint(formatted)}';
+    final store = _GatedScanStore(book.id, fingerprint);
+    final task = BookCacheTask(book: formatted, bookId: book.id, store: store);
+    final key = '${book.id}/$fingerprint/${TtsReader.defaultVoice}/1.80';
+    activeBookCaches[key] = task;
+    addTearDown(() {
+      if (!store.gate.isCompleted) store.gate.complete(<String>{});
+      activeBookCaches.remove(key);
+    });
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural')));
+    await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    expect(find.byKey(const ValueKey('cache-binding')), findsOneWidget);
+    expect(task.status.state, 'building'); expect(store.gate.isCompleted, isFalse);
+    expect(tester.widget<TextButton>(find.byKey(const ValueKey('cache-rescan'))).onPressed, isNull);
+    await tester.tap(find.byKey(const ValueKey('cache-cancel'))); await tester.pump();
+    expect(task.status.state, 'cancelled');
+    store.gate.complete(<String>{}); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('cache-binding')), findsOneWidget);
+    expect(find.byKey(const ValueKey('reader-body')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
   testWidgets('cache controls identify and clear only the selected online voice and speed', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
@@ -2307,6 +2342,16 @@ class _TestBookCacheTask extends BookCacheTask {
   Future<void> start({bool resume = false, int? fromChapter, int? fromOffset}) async { startCalls++; }
   @override
   Future<void> cancel() async { cancelCalls++; await cancelGate?.future; }
+}
+
+class _GatedScanStore extends TtsCacheStore {
+  final gate = Completer<Set<String>>();
+  _GatedScanStore(String id, String fingerprint) : super(id, TtsReader.defaultVoice, 1.8, textFingerprint: fingerprint);
+  @override Future<CacheProgress?> loadProgress() async => null;
+  @override Future<Set<String>> listMp3Names() => gate.future;
+  @override Future<int> sizeBytes() async => 0;
+  @override Future<void> saveProgress({required int total, required int done,
+    required Set<int> completed, required String state, int? fromChapter, int? fromOffset}) async {}
 }
 
 class _CountingSyncEngine extends SyncEngine {

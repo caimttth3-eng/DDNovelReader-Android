@@ -88,6 +88,49 @@ void main() {
     expect(await store.exists(0, 0), isFalse);
   });
 
+  test('scan lists only nonempty complete audio in the exact content and text partition', () async {
+    final store = TtsCacheStore('id', 'voice', 1, contentKey: 'content-a', textFingerprint: 'text-a');
+    final other = TtsCacheStore('id', 'voice', 1, contentKey: 'content-b', textFingerprint: 'text-a');
+    final changedText = TtsCacheStore('id', 'voice', 1, contentKey: 'content-a', textFingerprint: 'text-b');
+    await store.write(0, 0, Uint8List.fromList([1]));
+    final dir = await store.dir();
+    await File('${dir.path}/${TtsCacheStore.fileName(0, 1)}').writeAsBytes([]);
+    await File('${dir.path}/pending.mp3.tmp').writeAsBytes([1]);
+    expect(await store.listMp3Names(), {TtsCacheStore.fileName(0, 0)});
+    expect(await other.listMp3Names(), isEmpty);
+    expect(await changedText.listMp3Names(), isEmpty);
+  });
+
+  test('cache scan errors are visible instead of becoming an empty completed set', () async {
+    const failure = FileSystemException('Scan access denied', 'synthetic-cache', OSError('Access denied', 5));
+    await IOOverrides.runZoned(() async {
+      await expectLater(_ClearStore().listMp3Names(), throwsA(same(failure)));
+    }, createDirectory: (path) => _ClearDirectory(path, listingFailure: failure));
+  });
+
+  test('progress preserves text identity and rejects mismatched metadata', () async {
+    final store = TtsCacheStore('id', 'voice', 1, contentKey: 'content', textFingerprint: 'current');
+    await store.saveProgress(total: 1, done: 1, completed: {0}, state: 'done');
+    expect((await store.loadProgress())!.done, 1);
+    final path = '${(await store.dir()).path}/progress.json';
+    final text = await File(path).readAsString();
+    await File(path).writeAsString(text.replaceFirst('current', 'different'));
+    expect(await store.loadProgress(), isNull);
+  });
+
+  test('rescan rediscovers a late known-ID legacy partition after its migration marker', () async {
+    final store = TtsCacheStore('known-id', 'voice', 1, contentKey: 'known-content', textFingerprint: 'words2-same');
+    await store.dir();
+    final legacy = File('${root.path}/tts_cache/known-id/voice/1.00/text-words2-same/${TtsCacheStore.fileName(0, 0)}');
+    await legacy.parent.create(recursive: true);
+    await legacy.writeAsBytes([1, 2]);
+    await File('${legacy.path}.words.json').writeAsString('[]');
+    expect(await store.listMp3Names(), {TtsCacheStore.fileName(0, 0)});
+    expect(await store.read(0, 0), [1, 2]);
+    final unrelated = TtsCacheStore('unrelated-id', 'voice', 1, contentKey: 'unrelated-content', textFingerprint: 'words2-same');
+    expect(await unrelated.listMp3Names(), isEmpty);
+  });
+
   test('replacing an audio entry without timings removes the previous sidecar', () async {
     final store = TtsCacheStore('replace', 'voice', 1);
     await store.write(0, 0, Uint8List.fromList([1]), words: [

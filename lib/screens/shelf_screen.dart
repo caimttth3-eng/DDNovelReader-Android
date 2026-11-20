@@ -16,6 +16,7 @@ import '../services/book_cache_task.dart';
 import '../services/book_parser.dart';
 import '../services/sync_engine.dart';
 import '../services/tts_cache_store.dart';
+import '../services/cache_diagnostics.dart';
 import '../services/updater.dart';
 import '../widgets/book_card.dart';
 import '../widgets/stable_system_bar_safe_area.dart';
@@ -556,6 +557,53 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   /// 缓存管理：语音缓存总占用 + 按书籍列出占用（清理单本/清空全部）
+  Future<void> _exportCacheDiagnostics(BuildContext parent) async {
+    var started = false, cancelled = false, finished = false;
+    var scanned = 0;
+    String? path, failure;
+    await showDialog<void>(
+      context: parent,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(builder: (dialogContext, update) {
+        if (!started) {
+          started = true;
+          unawaited(Future<void>(() async {
+            try {
+              path = await exportCacheDiagnostics(
+                isCancelled: () => cancelled || !dialogContext.mounted,
+                onProgress: (count) {
+                  if (dialogContext.mounted) update(() => scanned = count);
+                },
+              );
+            } on CacheDiagnosticsCancelled {
+              return;
+            } catch (error) { failure = '$error'; }
+            finally {
+              finished = true;
+              if (dialogContext.mounted) update(() {});
+            }
+          }));
+        }
+        return AlertDialog(
+          title: Text(T('cacheDiagnosticTitle')),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(T('cacheDiagnosticPrivacy')),
+            const SizedBox(height: 12),
+            if (!finished) const CircularProgressIndicator(),
+            Text(failure != null ? T('cacheOperationFailed', {'err': failure!})
+              : path != null ? T('cacheDiagnosticSaved', {'path': path!})
+              : T('cacheDiagnosticScanning', {'count': '$scanned'})),
+          ]),
+          actions: [TextButton(onPressed: () {
+            cancelled = true;
+            Navigator.of(dialogContext).pop();
+          }, child: Text(T(finished ? 'ok' : 'cancel')))],
+        );
+      }),
+    );
+    cancelled = true;
+  }
+
   Future<void> _openCacheManager() async {
     String fmtSize(int bytes) {
       if (bytes <= 0) return '0 B';
@@ -636,6 +684,11 @@ class _ShelfScreenState extends State<ShelfScreen> {
                           style: const TextStyle(
                               fontSize: 16, fontWeight: FontWeight.bold)),
                       const Spacer(),
+                      TextButton(
+                        key: const ValueKey('cache-export-diag'),
+                        onPressed: () => _exportCacheDiagnostics(ctx),
+                        child: Text(T('cacheDiagnosticExport'), style: const TextStyle(fontSize: 12)),
+                      ),
                       IconButton(
                         icon: const Icon(Icons.refresh, size: 20),
                         onPressed: () async {

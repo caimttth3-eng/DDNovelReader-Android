@@ -1943,7 +1943,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   String get _effectiveVoice =>
       _settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice;
 
-  /// 不同音源的最大语速：Edge TTS 协议上限 +100%（2.0x）；
+  /// 在线音源当前实测在 +100% 饱和；请求 +200% 未产生更快音频。
   /// iOS AVSpeech 的 1.0 约等于 2.0x；安卓系统引擎通常可到 3.0x。
   static double maxSpeechRateFor(String voice) => ReadingSettings.maxSpeechRateFor(voice);
 
@@ -4018,13 +4018,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               bookId: cacheBook.id,
               store: store,
             ));
-    // 重进页面/进程重启后任务实例为空：先从磁盘恢复已有缓存，避免"整本缓存为 0"
-    if (task.status.state == 'idle') {
-      await task.restoreFromDisk();
-    }
     if (!mounted) return;
     var sizeBytes = 0;
     var sizeLoaded = false;
+    var scanStarted = false;
+    var automaticScan = false;
 
     Future<void> runCacheAction(Future<void> Function() action, {bool register = false}) async {
       try {
@@ -4068,6 +4066,21 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
+          if (!scanStarted) {
+            scanStarted = true;
+            // Show this sheet before scanning; cancellation/error state belongs
+            // to the task, never to an unconditionally popped root dialog.
+            if (task.status.state == 'idle') {
+              automaticScan = true;
+              unawaited(Future<void>(() async {
+                try {
+                  if (!ctx.mounted) return;
+                  await runCacheAction(task.restoreFromDisk);
+                  if (ctx.mounted) setSheetState(() => sizeLoaded = false);
+                } finally { automaticScan = false; }
+              }));
+            }
+          }
           // 弹层内嵌状态：缓存大小只异步刷新一次（防 rebuild 循环）
           if (!sizeLoaded) {
             sizeLoaded = true;
@@ -4140,6 +4153,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                       Wrap(
                         alignment: WrapAlignment.end, spacing: 8, runSpacing: 4,
                         children: [
+                          TextButton(
+                            key: const ValueKey('cache-rescan'),
+                            onPressed: active ? null : () async {
+                              await runCacheAction(task.rescan);
+                              if (ctx.mounted) setSheetState(() => sizeLoaded = false);
+                            },
+                            child: Text(T('cacheRescan')),
+                          ),
                           if (active) ...[
                             TextButton(
                               onPressed: st.state == 'caching'
@@ -4148,6 +4169,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                               child: Text(T('cachePause')),
                             ),
                             TextButton(
+                              key: const ValueKey('cache-cancel'),
                               onPressed: () => runCacheAction(task.cancel),
                               child: Text(T('cacheCancel')),
                             ),
@@ -4157,6 +4179,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                               child: Text(T('cacheResume')),
                             ),
                             TextButton(
+                              key: const ValueKey('cache-cancel'),
                               onPressed: () => runCacheAction(task.cancel),
                               child: Text(T('cacheCancel')),
                             ),
@@ -4218,6 +4241,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         },
       ),
     );
+    if (automaticScan) await task.pause();
   }
 
   /// 从"目前进度"开始缓存：以当前朗读位置（或当前阅读章节）为起点，
