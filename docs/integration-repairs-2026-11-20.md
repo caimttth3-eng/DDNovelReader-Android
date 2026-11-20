@@ -91,3 +91,86 @@
 6 份中间日志为 `integration-repair-analyze-initial.log`、`integration-repair-focus-diagnostic.log`、`integration-repair-focus-layout-tests.log`、`integration-repair-focus-tests.log`、`integration-repair-handoff-tests.log`、`integration-repair-tests-initial.log`。这些是修复过程中的初次失败/中间成功及专项诊断，已无后续消费者；最终完整测试、分析、构建、夹具日志及 SDK 审计继续保留。负责人为本轮主审；退出条件是工具策略允许执行已授权的精确范围，随后复用原入口和护栏实际清退并更新本节。用户询问具体文件后，已再次只读核对 24 文件仍在、总计 108,246,169 字节，源根无重解析点。
 
 合成回归不连接真实 WebDAV，不读取私人配置、真实书籍或凭据。iOS、真机音频焦点/来电、旧桌面客户端及真实网盘仍需各自环境验收；本轮没有执行全部编码表的穷举验证，也不声称已找尽全部潜在问题。
+
+
+## 1.3.8（42）签名交付、合规复核及当前待删清单
+
+本节记录随后用户要求“编译最新 APK”后的当前状态，取代前面未签名阶段的状态判断，不改写旧时点结果。
+
+已通过既有 `LocalBuild DeliverApk` 完成本地离线 ARM64 构建、固定签名、LocalApk 接收及同一 Prepare lease / SDK 守护句柄内的完整后验。Gradle 成功（42 秒，421 个任务：14 执行、407 已最新），返回 exit 0。完整包为 `D:\Dev\_releases\ddnovelreader\v1.3.8\DDNovelReader-v1.3.8-arm64-v8a.apk`，19,749,393 字节，SHA-256 `e8776a3f172fba9e41639b754048c1b8f22b7c44fc6a1c9408b7f3349c6e0e66`；固定证书 `088b9569c7e74b31dd9840b335e4755f1af5a51667d0c51ade9c5b83e0f57db1`。Path 入口、签名构建身份及独立文件哈希复核一致；未签名输入仍为前述 SHA-256。详见 [交付说明](releases/v1.3.8.md)。
+
+已清退旧 1.3.7 完整包 5 文件、19,630,464 字节，及本次相同签名输入 5 文件、19,761,636 字节。复核发现本地接收入口未清理签名脚本额外生成的校验副本，已修补：仅精确路径且内容等于已接收 APK 身份时清退，不匹配则保留并输出 pending。17 组合成生命周期测试通过，临时夹具自动清退；随后 LocalApk Finalize 清退本次匹配校验副本 1 文件、102 字节。真实接收和该次收尾的 cleanupPending 均为空，所触及路径与此前被拒绝的 24 项范围不同。共实际删除 11 文件、39,392,202 字节；未删除任何此前被拒绝目标。
+
+### 规则检查与调整
+
+- 已重读总根及项目 AGENTS，使用唯一源码根和本项目 main 实例；共享工具按固定路由只读使用，不重复展开 Gradle/Android SDK，不回退全局/云端。构建、签名及接收由既有入口在 Prepare lease 内完成；包元数据、16B 缓存只读句柄及 SDK 全树后验均通过。
+- 凭据仅由既有签名脚本及其本地子进程按持续授权消费，未向模型、日志、源码或成品展示；未读真实书籍/个人配置。没有安装、推送、远端发布、截图、改 ACL、杀进程或移活锁。
+- 前阶段测试夹具曾位于源码目录，已在最终测试前改为实例 TEMP；34 项相关验证通过。Flutter 强制的宿主测试 build 仍为已记录工具限制例外，Finalize 被具体工具策略拒绝，保留并列明，未宣称彻底清理。
+- 校验副本遗漏已修补且匹配验证通过。本次没有改动产品源码、依赖锁、原生工程或共享环境，无需重跑未受影响的 487 项套件或重编 APK。
+- **调整原删除判断**：`D:\Dev\_cache\projects\ddnovelreader\main\build\debug-symbols\app.android-arm64.symbols`（3,921,320 字节）现在匹配已交付 1.3.8，是必要符号，保留且不再待删。
+
+### 当前完整路径快照
+
+本轮三组 **23 文件、104,324,849 字节** 仍在此前被具体工具拒绝的范围内；另发现历史 staging **11 文件、3,828,806 字节** 待协调。合计 **34 文件、108,153,655 字节**。本清单仅列明当前核实范围，不代表递归扫描全部历史缓存。负责人为项目主审；本轮范围退出条件为工具策略允许后原入口/lease/身份/消费者复核及实际清退；历史组先由共享维护者协调执行者。当前自有 Java/Dart/原生消费者已自然结束，源根 owner 输出没有重解析点。新交付日志及 SDK 清单继续留在实例 TEMP，供本次验收。
+
+#### 本轮测试输出（12 文件，64,776,296 字节）
+
+宿主测试已结束；这些是测试编译输出、资源副本及 owner 标记。源码许可证和依赖原件保留。必须沿用 LocalBuild Finalize 的 owner/路径/重解析点检查；此前具体工具拒绝尚未解除，不换入口绕过。
+
+| 完整路径 | 字节 |
+| --- | ---: |
+| `D:\Dev\DDNovelReader\build\.ddnovel-test-output.json` | 99 |
+| `D:\Dev\DDNovelReader\build\native_assets\windows\native_assets.json` | 45 |
+| `D:\Dev\DDNovelReader\build\test_cache\build\8b61f7661612a76fd566b4b40b3c6008.cache.dill.track.dill` | 62,728,864 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\AssetManifest.bin` | 220 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\FontManifest.json` | 208 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\NativeAssetsManifest.json` | 45 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\NOTICES.Z` | 109,749 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\docs\third-party\MaterialSymbols-LICENSE.txt` | 11,358 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\fonts\MaterialIcons-Regular.otf` | 1,645,184 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\packages\cupertino_icons\assets\CupertinoIcons.ttf` | 257,628 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\shaders\ink_sparkle.frag` | 13,432 |
+| `D:\Dev\DDNovelReader\build\unit_test_assets\shaders\stretch_effect.frag` | 9,464 |
+
+#### 本轮已消费未签名输入（5 文件，39,412,821 字节）
+
+两份未签名 APK 及配套元数据已由本次签名消费，正式完整包已接收，且与 unsignedSha256 匹配。仅此五个具名文件待清，不清增量树或当前调试符号；此前精确删除被工具拒绝，仍未重试。
+
+| 完整路径 | 字节 |
+| --- | ---: |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\app\outputs\apk\release\app-release-unsigned.apk` | 19,705,814 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\app\outputs\apk\release\output-metadata.json` | 735 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\app\outputs\apk\release\SIGNING_STATUS.txt` | 110 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\app\outputs\apk\release\unsigned-build-info.json` | 348 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\app\outputs\flutter-apk\app-release.apk` | 19,705,814 |
+
+#### 本轮已替代日志（6 文件，135,732 字节）
+
+初次失败、专项诊断及中间结果已被最终日志取代，无后续消费者；最终测试、分析、构建、夹具和本次交付日志继续保留。仅此六份具名日志在此前被拒绝的范围内。
+
+| 完整路径 | 字节 |
+| --- | ---: |
+| `D:\Dev\_cache\projects\ddnovelreader\main\temp\integration-repair-analyze-initial.log` | 37,434 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\temp\integration-repair-focus-diagnostic.log` | 1,632 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\temp\integration-repair-focus-layout-tests.log` | 10,380 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\temp\integration-repair-focus-tests.log` | 8,597 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\temp\integration-repair-handoff-tests.log` | 22,581 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\temp\integration-repair-tests-initial.log` | 55,108 |
+
+#### 历史 staging 待协调（11 文件，3,828,806 字节）
+
+只读检查发现的旧版残留。九份校验副本对应已退役产品；v1.2.27 的分析及符号仅对应已退役旧 APK，不参与当前构建/诊断。未发现源码/脚本当前消费者，历史证据仍保留原字节；总根第 8 节要求“跨项目／历史批量整理由维护者协调执行者”，因此列为待协调清退，不把原 24 项授权扩展到这里。执行前还需复核身份、引用、占用和 Prepare lease。
+
+| 完整路径 | 字节 |
+| --- | ---: |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.2.27\apk-size-report.json` | 3,551 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.2.27\app.android-arm64.symbols` | 3,824,336 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.2.28\DDNovelReader-v1.2.28-arm64-v8a.apk.sha256` | 103 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.3.0\DDNovelReader-v1.3.0-arm64-v8a.apk.sha256` | 102 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.3.1\DDNovelReader-v1.3.1-arm64-v8a.apk.sha256` | 102 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.3.2\DDNovelReader-v1.3.2-arm64-v8a.apk.sha256` | 102 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.3.3\DDNovelReader-v1.3.3-arm64-v8a.apk.sha256` | 102 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.3.4\DDNovelReader-v1.3.4-arm64-v8a.apk.sha256` | 102 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.3.5\DDNovelReader-v1.3.5-arm64-v8a.apk.sha256` | 102 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.3.6\DDNovelReader-v1.3.6-arm64-v8a.apk.sha256` | 102 |
+| `D:\Dev\_cache\projects\ddnovelreader\main\build\v1.3.7\DDNovelReader-v1.3.7-arm64-v8a.apk.sha256` | 102 |

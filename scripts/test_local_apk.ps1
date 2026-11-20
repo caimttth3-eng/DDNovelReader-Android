@@ -56,7 +56,8 @@ $fixtureScript = $source.Substring(0, $start[0].Extent.StartOffset) +
     "# Native signature verification is mocked only in this synthetic fixture.`n" + $source.Substring($end[0].Extent.StartOffset)
 
 $cases = @('default', 'legacy-true', 'legacy-false', 'bad-checksum', 'unknown-old-file', 'busy-old-file', 'busy-lock', 'existing-version',
-    'parent-keep', 'busy-input', 'archive-extra', 'missing-companion', 'keep-failed', 'finalize-incomplete', 'post-move-failure')
+    'parent-keep', 'busy-input', 'archive-extra', 'missing-companion', 'keep-failed', 'finalize-incomplete', 'post-move-failure',
+    'checksum-sidecar', 'bad-checksum-sidecar')
 $passed = 0
 try {
     foreach ($case in $cases) {
@@ -75,6 +76,11 @@ try {
         $build = Join-Path $instance "build/v$incoming"
         New-FileBuild $build $incoming
         $manifest = Get-Content (Join-Path $build 'build-info.json') -Raw | ConvertFrom-Json
+        $checksumSidecar = Join-Path $build "$($manifest.apk).sha256"
+        if ($case -in @('checksum-sidecar', 'bad-checksum-sidecar')) {
+            $checksumText = if ($case -eq 'checksum-sidecar') { "$($manifest.sha256)  $($manifest.apk)`n" } else { 'unverified checksum; retain' }
+            [IO.File]::WriteAllText($checksumSidecar, $checksumText, $utf8)
+        }
         $archiveFiles = @{
             'app-release.apk' = [IO.File]::ReadAllBytes((Join-Path $build $manifest.apk));
             'SHA256SUMS.txt' = $utf8.GetBytes("$($manifest.sha256)  app-release.apk");
@@ -112,7 +118,8 @@ try {
         $result = $null
         try { $result = (& $receiver @arguments) | ConvertFrom-Json } catch { $failure = $_ } finally { if ($handle) { $handle.Dispose() } }
         $versions = @(Get-ChildItem -LiteralPath $releases -Directory)
-        if ($case -in @('default', 'legacy-true', 'legacy-false', 'parent-keep', 'busy-input', 'archive-extra', 'finalize-incomplete')) {
+        if ($case -in @('default', 'legacy-true', 'legacy-false', 'parent-keep', 'busy-input', 'archive-extra', 'finalize-incomplete',
+            'checksum-sidecar', 'bad-checksum-sidecar')) {
             Assert-That (!$failure) "$case failed: $failure"
             if ($case -in @('parent-keep', 'finalize-incomplete')) {
                 Assert-That ($versions.Count -eq 3 -and $result.cleanupDeferred) 'Parent artifacts were retired early'
@@ -127,6 +134,13 @@ try {
                 Copy-Item -LiteralPath (Join-Path $build 'MaterialSymbols-LICENSE.txt') -Destination $license
             }
             if ($case -eq 'busy-input') { Assert-That ($result.cleanupPending.Count -eq 1) 'Busy input did not produce a cleanup receipt' }
+            if ($case -eq 'bad-checksum-sidecar') {
+                Assert-That ($result.cleanupPending.Count -eq 1 -and $result.cleanupPending[0] -ceq $checksumSidecar) 'Unverified checksum did not produce an exact pending receipt'
+                Assert-That (([IO.File]::ReadAllText($checksumSidecar)) -ceq 'unverified checksum; retain') 'Unverified checksum was modified'
+                [IO.File]::WriteAllText($checksumSidecar, "$($manifest.sha256)  $($manifest.apk)`n", $utf8)
+                $result = (& $receiver -Action Finalize -BuildDirectory $build) | ConvertFrom-Json
+                Assert-That ($result.cleanupPending.Count -eq 0) 'Verified checksum retry remained pending'
+            }
             if ($case -in @('parent-keep', 'busy-input', 'finalize-incomplete')) {
                 $result = (& $receiver -Action Finalize -BuildDirectory $build) | ConvertFrom-Json
                 $versions = @(Get-ChildItem -LiteralPath $releases -Directory)

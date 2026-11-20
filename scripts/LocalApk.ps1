@@ -203,13 +203,18 @@ try {
                 $removed += [pscustomobject]@{ path = $directory.FullName; files = $count; bytes = $bytes }
             } catch { $pending += $directory.FullName; Write-Warning "Published APK is valid; old release cleanup deferred: $($directory.FullName)" }
         }
-        foreach ($name in @($names) + @('apk-artifact.zip', 'build-analysis.zip')) {
+        $checksumName = "$($info.apk).sha256"
+        foreach ($name in @($names) + @($checksumName, 'apk-artifact.zip', 'build-analysis.zip')) {
             $file = Join-Path $source $name
             if (!(Test-Path -LiteralPath $file)) { continue }
             try {
                 Assert-SafePath $file
                 if ($name -in $names) {
                     if ((Get-FileHash -LiteralPath $file).Hash -cne (Get-FileHash -LiteralPath (Join-Path $destination $name)).Hash) { throw 'Input is not an identical published copy' }
+                } elseif ($name -ceq $checksumName) {
+                    if (([IO.File]::ReadAllText($file)).Trim() -cne "$($info.sha256)  $($info.apk)") {
+                        throw 'Input checksum differs from the published APK identity'
+                    }
                 } elseif (!(Test-RedundantArchive $file)) { throw 'Archive has current or unverified extra content' }
                 $bytes = (Get-Item -LiteralPath $file).Length
                 Remove-Item -LiteralPath $file
