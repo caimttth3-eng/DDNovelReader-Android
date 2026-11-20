@@ -1,4 +1,5 @@
-// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+import 'dart:async';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -18,6 +19,7 @@ import 'services/reader_preparation.dart';
 import 'services/reader_screen_awake.dart';
 import 'services/tts_audio_handler.dart';
 import 'services/diag_log.dart';
+import 'services/cache_diagnostics.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,6 +40,8 @@ Future<void> main() async {
   // this same setting and must not restore last session's opposite appearance.
   await storage.saveSettings({...storedSettings, ...startupSettings.toJson()});
   AppAppearance.nightMode.value = startupSettings.themeIndex == AppAppearance.nightThemeIndex;
+  // 启动时导出缓存诊断（外部私有目录，adb 可拉取）
+  unawaited(exportCacheDiagnostics(storage));
   // 注册用户自选字体（FontLoader 仅进程内有效，每次启动需重新注册）
   await FontManager.registerAll();
   AppI18n.current = AppLang.detect(
