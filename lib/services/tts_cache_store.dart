@@ -39,12 +39,15 @@ class TtsCacheStore {
   final String voice;
   final double rate;
 
+  /// 书名：仅用于旧缓存目录收养（内容指纹漂移时按标题找回）。
+  final String? title;
+
   /// 重新格式化后的正文指纹（PR2 引入）：非空时在语速目录下再分一层，
   /// 避免改排版/过滤后旧音频错配；与 contentKey 并存（跨端目录仍按 contentKey）。
   final String? textFingerprint;
 
   TtsCacheStore(this.bookId, this.voice, this.rate,
-      {String contentKey = '', this.textFingerprint})
+      {String contentKey = '', this.textFingerprint, this.title})
       : cacheKey = (contentKey.isNotEmpty ? contentKey : bookId);
 
   /// 语速目录名 = 合成百分比整数（与 PC rate_dir_key 同值）
@@ -61,6 +64,38 @@ class TtsCacheStore {
   static const _progressFile = 'progress.json';
   static const _layoutMark = '.tts_layout_v2';
 
+  /// 当前目录没有音频、但根目录下存在同名书的旧缓存时，收养为当前 key。
+  /// 用于书籍重新解析/内容指纹变化/升级后缓存“消失”的场景。
+  Future<void> _adoptByTitle(Directory root) async {
+    final t = title;
+    if (t == null || t.isEmpty) return;
+    final sep = Platform.pathSeparator;
+    final current = Directory('${root.path}$sep${_safe(cacheKey)}');
+    try {
+      if (await current.exists()) {
+        final hasAudio = await current
+            .list(recursive: true)
+            .any((e) => e is File && e.path.endsWith('.mp3'));
+        if (hasAudio) return;
+      }
+      await for (final e in root.list(followLinks: false)) {
+        if (e is! Directory) continue;
+        final name = e.uri.pathSegments.last;
+        if (name == _safe(cacheKey) || name.startsWith('.')) continue;
+        final prog = File('${e.path}$sep$_progressFile');
+        if (!await prog.exists()) continue;
+        final data = jsonDecode(await prog.readAsString()) as Map;
+        if (data['title'] != t || data['voice'] != voice) continue;
+        if (!await current.exists()) {
+          await e.rename(current.path);
+        } else {
+          await _moveDirInto(e, current);
+        }
+        return;
+      }
+    } catch (_) {}
+  }
+
   static Future<Directory> rootDir() async {
     final base = await getApplicationSupportDirectory();
     final d = Directory('${base.path}${Platform.pathSeparator}tts_cache');
@@ -72,6 +107,7 @@ class TtsCacheStore {
   Future<Directory> dir() async {
     final root = await rootDir();
     await _migrateLegacyLayout(root);
+    await _adoptByTitle(root);
     final d = Directory([
       root.path,
       _safe(cacheKey),
@@ -112,7 +148,7 @@ class TtsCacheStore {
       final sep = Platform.pathSeparator;
       final keyDir = Directory('${root.path}$sep${_safe(cacheKey)}');
       final mark = File('${keyDir.path}$sep$_layoutMark');
-      if (await mark.exists()) return;
+      final hasMark = await mark.exists();
 
       if (cacheKey != bookId) {
         final oldDir = Directory('${root.path}$sep${_safe(bookId)}');
@@ -127,7 +163,7 @@ class TtsCacheStore {
 
       if (await keyDir.exists()) await _migrateRateDirs(keyDir);
       if (!await keyDir.exists()) await keyDir.create(recursive: true);
-      await mark.writeAsString('2', flush: true);
+      if (!hasMark) await mark.writeAsString('2', flush: true);
     } catch (_) {
       // 迁移失败不影响读写：新目录照样会被创建，只是旧 mp3 暂不命中
     }
@@ -268,6 +304,7 @@ class TtsCacheStore {
   }
 
   Future<void> saveProgress({
+    String? title,
     required int total,
     required int done,
     required Set<int> completed,
@@ -283,6 +320,7 @@ class TtsCacheStore {
         'book_id': cacheKey,
         'voice': voice,
         'rate': rateKey,
+        'title': ?title,
         'total': total,
         'done': done,
         'completed': completed.toList()..sort(),

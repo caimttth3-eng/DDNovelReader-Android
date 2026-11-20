@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
@@ -135,15 +135,25 @@ class BookCacheTask {
       _fromOffset = prog.fromOffset;
       await _buildTasks(fromChapter: _fromChapter, fromOffset: _fromOffset);
       if (prog.total == _total) {
-        _done = prog.done.clamp(0, _total);
         _completed
           ..clear()
           ..addAll(prog.completed.where((i) => i >= 0 && i < _total));
-        _state = prog.state == 'done' ? 'done' : 'paused';
+        // 校验：progress 里标记完成但文件已丢失的任务剔除，允许补全。
+        final bad = <int>[];
+        for (final idx in _completed) {
+          final (ci, off, _) = _tasks[idx];
+          if (!await store.exists(ci, off)) bad.add(idx);
+        }
+        for (final idx in bad) {
+          _completed.remove(idx);
+        }
+        _done = _completed.length;
+        _state = _done >= _total ? 'done' : (_done > 0 ? 'paused' : 'idle');
         _next = 0;
         while (_next < _total && _completed.contains(_next)) {
           _next++;
         }
+        if (bad.isNotEmpty) _save();
         _notify();
         return;
       }
@@ -152,6 +162,7 @@ class BookCacheTask {
       await _buildTasks();
     }
     var n = 0;
+    _completed.clear();
     final names = await store.listMp3Names();
     for (var i = 0; i < _tasks.length; i++) {
       final (ci, off, _) = _tasks[i];
@@ -163,9 +174,22 @@ class BookCacheTask {
       }
     }
     _done = n;
-    _state = n > 0 ? 'paused' : 'idle';
+    _state = n == 0 ? 'idle' : (n >= _total ? 'done' : 'paused');
     _next = 0;
+    while (_next < _total && _completed.contains(_next)) {
+      _next++;
+    }
+    // 统一落盘：把磁盘扫描结果写成新的 progress.json，
+    // 避免下次启动又回到 0（版本升级/任务数变化后尤其重要）。
+    if (n > 0) _save();
     _notify();
+  }
+
+  /// 重新扫描磁盘：progress 与文件对齐，丢失的标记剔除，已缓存但未记录的补上。
+  Future<void> rescan() async {
+    _state = 'idle';
+    _completed.clear();
+    await restoreFromDisk();
   }
 
   Future<void> _initAndRun({required bool resume}) async {
@@ -203,9 +227,23 @@ class BookCacheTask {
           return;
         }
       } else {
-        _done = 0;
-        _next = 0;
         _completed.clear();
+        final names = await store.listMp3Names();
+        var n = 0;
+        for (var i = 0; i < _tasks.length; i++) {
+          final (ci, off, _) = _tasks[i];
+          final fn = '${ci.toString().padLeft(4, '0')}_'
+              '${off.toString().padLeft(8, '0')}.mp3';
+          if (names.contains(fn)) {
+            _completed.add(i);
+            n++;
+          }
+        }
+        _done = n;
+        _next = 0;
+        while (_next < _total && _completed.contains(_next)) {
+          _next++;
+        }
       }
     } else {
       _done = 0;
@@ -315,6 +353,7 @@ class BookCacheTask {
 
   void _save() {
     store.saveProgress(
+      title: book.title,
       total: _total,
       done: _done,
       completed: _completed,

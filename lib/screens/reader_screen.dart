@@ -1704,7 +1704,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
   TtsCacheStore _currentCacheStore() =>
       TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate,
-        contentKey: widget.book.contentKey);
+        contentKey: widget.book.contentKey, title: widget.book.title);
 
 
   /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
@@ -2336,7 +2336,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final voice = _effectiveVoice;
     final rate = _settings.speechRate;
     final store = TtsCacheStore(_book.id, voice, rate,
-        contentKey: widget.book.contentKey);
+        contentKey: widget.book.contentKey, title: widget.book.title);
     final jobs = <Future<void>>[];
     var index = 0;
     var started = 0;
@@ -3712,7 +3712,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     final cacheBook = prepared?.book ?? _book, fingerprint = prepared?.fingerprint ?? _cacheFingerprint;
     final cacheKey = '${cacheBook.id}/$fingerprint/$voice/${rate.toStringAsFixed(2)}';
     final store = TtsCacheStore(cacheBook.id, voice, rate,
-        contentKey: cacheBook.contentKey);
+        contentKey: cacheBook.contentKey, title: cacheBook.title);
     final task = activeBookCaches[cacheKey] ??
         (activeBookCaches[cacheKey] = BookCacheTask(
               book: cacheBook,
@@ -3824,6 +3824,13 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                       Wrap(
                         alignment: WrapAlignment.end, spacing: 8, runSpacing: 4,
                         children: [
+                          TextButton(
+                            onPressed: () async {
+                              await task.rescan();
+                              if (ctx.mounted) setSheetState(() {});
+                            },
+                            child: Text(T('cacheRescan')),
+                          ),
                           if (active) ...[
                             TextButton(
                               onPressed: st.state == 'caching'

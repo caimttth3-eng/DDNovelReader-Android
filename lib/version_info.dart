@@ -6,12 +6,15 @@
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.3.1';
-  static const String build = '12';
+  static const String version = '1.3.2';
+  static const String build = '13';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.2：整本语音缓存修复。重进/升级后不再显示缓存归零：打开缓存面板会扫描磁盘实际文件，'
+        '校验并补全缺失句；新增「重新扫描」；进度写入书名，旧缓存可按书名自动收养；'
+        '续传跳过已缓存，不重复下载。',
     'v1.3.1：离线系统语音升级。音源面板可列出并选择系统音色（标注默认/优化/高级音质），'
         '支持按图书记忆音色与语速；新增「仅显示优化音质」过滤与系统设置入口；'
         '来电或其他 App 占用音频后自动续读；安卓端也可枚举系统音色。',
