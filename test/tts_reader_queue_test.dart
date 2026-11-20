@@ -93,10 +93,17 @@ class _DeferredWriteCache extends TtsCacheStore {
 
 class _ChapterCache extends TtsCacheStore {
   final writes = <(int, int, List<SpeechWord>)>[];
+  final audio = <(int, int), Uint8List>{};
+  final words = <(int, int), List<SpeechWord>>{};
+  Completer<void>? writeGate;
   _ChapterCache() : super('next-chapter', TtsReader.defaultVoice, 1, textFingerprint: 'words2-test');
-  @override Future<bool> exists(int ci, int off) async => false;
+  @override Future<Uint8List?> read(int ci, int off) async => audio[(ci, off)];
+  @override Future<List<SpeechWord>> readWords(int ci, int off) async => words[(ci, off)] ?? [];
   @override Future<void> write(int ci, int off, Uint8List audio, {List<SpeechWord>? words}) async {
     writes.add((ci, off, words ?? []));
+    await writeGate?.future;
+    this.audio[(ci, off)] = audio;
+    this.words[(ci, off)] = words ?? [];
   }
 }
 
@@ -163,33 +170,101 @@ void main() {
     await reader.dispose().timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('mock player disposal did not finish'));
   });
 
-  for (final cancellation in ['none', 'voice', 'network']) {
-    test('chapter head uses bounded shared cache coordinates with $cancellation cancellation', () async {
+  test('one preload window crosses empty chapters, shares concurrency and carries audio with word metadata', () async {
+    final chapters = [
+      Chapter(title: 'one', paragraphs: [ReadingText.paragraph('甲。乙。')]),
+      Chapter(title: 'empty', paragraphs: []),
+      Chapter(title: 'two', paragraphs: [ReadingText.paragraph('丙。丁。')]),
+      Chapter(title: 'three', paragraphs: [ReadingText.paragraph('戊。己。庚。')]),
+    ];
+    final cache = _ChapterCache()..writeGate = Completer<void>();
+    final gates = <String, Completer<Uint8List>>{}, requests = <String>[];
+    var pending = 0, peak = 0;
+    final player = _ResumePlayer();
+    final reader = TtsReader(player: player, synthesize: (text, {required voice, required rate,
+      required onWords, required cancelToken}) async {
+      requests.add(text);
+      onWords([SpeechWord(startMicros: 0, durationMicros: 1000000, textStart: 0, textEnd: 1, text: text.substring(0, 1))]);
+      if (text == '甲。') return Uint8List.fromList([1]);
+      pending++; if (pending > peak) peak = pending;
+      try { return await (gates[text] = Completer<Uint8List>()).future; }
+      finally { pending--; }
+    })..setCache(cache, chapters: chapters)..setPrefetchSentences(5);
+    addTearDown(() async {
+      cache.writeGate!.complete();
+      for (final gate in gates.values) { if (!gate.isCompleted) gate.complete(Uint8List.fromList([2])); }
+      await reader.dispose();
+    });
+    await reader.start(['甲。', '乙。'], offsets: chapterSentenceOffsets(chapters[0]));
+    await waitFor(() => pending == 3, 'The shared preloader starts at most three requests.');
+    expect(requests, ['甲。', '乙。', '丙。', '丁。']);
+    for (final gate in gates.values.toList()) { gate.complete(Uint8List.fromList([2])); }
+    await waitFor(() => requests.length == 6, 'The five lookahead slots span chapter boundaries.');
+    expect(requests, ['甲。', '乙。', '丙。', '丁。', '戊。', '己。']); expect(peak, 3);
+    for (final gate in gates.values.toList()) { if (!gate.isCompleted) gate.complete(Uint8List.fromList([2])); }
+    await waitFor(() => cache.writes.length == 6, 'All completed audio shares the cache coordinate writer.');
+    expect(cache.writes.map((write) => (write.$1, write.$2)), [
+      (0, 0), (0, chapterSentenceOffsets(chapters[0])[1]),
+      (2, 0), (2, chapterSentenceOffsets(chapters[2])[1]),
+      (3, 0), (3, chapterSentenceOffsets(chapters[3])[1]),
+    ]);
+    expect(cache.writes.every((write) => write.$3.length == 1), isTrue);
+    expect(player.played, [1], reason: 'Lookahead cannot move playback into the next chapter.');
+    expect(cache.audio, isEmpty, reason: 'Disk writes are deliberately still pending.');
+    await reader.start(['丙。', '丁。'], offsets: chapterSentenceOffsets(chapters[2]), chapterIndex: 2);
+    expect(requests.where((text) => text == '丙。'), hasLength(1), reason: 'Chapter handoff reuses ready memory instead of synthesizing again.');
+    player.tick(5);
+    await waitFor(() => reader.currentWordStart == 0, 'Word boundaries survive the chapter handoff.');
+    await waitFor(() => requests.contains('庚。'), 'The same window extends beyond the carried audio.');
+    for (final text in ['甲。', '乙。', '丙。', '丁。', '戊。', '己。']) {
+      expect(requests.where((request) => request == text), hasLength(1),
+        reason: 'Ready lookahead is reused across chapter handoff while disk writes are pending.');
+    }
+  });
+
+  test('zero preloading stays off across chapters and enabling it uses existing cache first', () async {
+    final chapters = [Chapter(title: 'one', paragraphs: [ReadingText.paragraph('甲。')]),
+      Chapter(title: 'two', paragraphs: [ReadingText.paragraph('乙。丙。丁。')])];
+    final cache = _ChapterCache();
+    cache.audio[(1, 0)] = Uint8List.fromList([2]);
+    final requests = <String>[];
+    final reader = TtsReader(player: _ResumePlayer(), synthesize: (text, {required voice, required rate,
+      required onWords, required cancelToken}) async { requests.add(text); return Uint8List.fromList([1]); })
+      ..setCache(cache, chapters: chapters)..setPrefetchSentences(0);
+    addTearDown(reader.dispose);
+    await reader.start(['甲。'], offsets: [0]);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(requests, ['甲。']);
+    reader.setPrefetchSentences(2);
+    await waitFor(() => requests.length == 2, 'Only the uncached second future sentence requires synthesis.');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(requests, ['甲。', '丙。']);
+  });
+
+  for (final cancellation in ['window', 'voice', 'network', 'stop']) {
+    test('cross-chapter lookahead rejects stale audio after $cancellation cancellation', () async {
       final requests = <String>[];
       final gate = Completer<Uint8List>();
       final reader = TtsReader(player: _ResumePlayer(), synthesize: (text, {required voice, required rate,
         required onWords, required cancelToken}) async {
-        if (text == 'current') return Uint8List.fromList([1]);
+        if (text == '甲。') return Uint8List.fromList([1]);
         requests.add(text);
         onWords([SpeechWord(startMicros: 0, durationMicros: 100, textStart: 0, textEnd: 1, text: text.substring(0, 1))]);
         return gate.future;
-      })..setPrefetchSentences(0);
+      })..setPrefetchSentences(3);
       addTearDown(reader.dispose);
-      await reader.start(['current']);
-      final chapter = Chapter(title: 'next', paragraphs: [ReadingText.paragraph('甲。乙。丙。丁。')]);
+      final chapter = Chapter(title: 'current', paragraphs: [ReadingText.paragraph('甲。')]);
       final cache = _ChapterCache();
-      final warming = reader.prefetchChapterHead(chapter, 1, cache);
-      await waitFor(() => requests.length == 3, 'Only the first three sentences are prefetched.');
+      reader.setCache(cache, chapters: [chapter, Chapter(title: 'next', paragraphs: [ReadingText.paragraph('戊。己。庚。辛。')])]);
+      await reader.start(['甲。'], offsets: [0]);
+      await waitFor(() => requests.length == 3, 'The configured window supplies cross-chapter lookahead.');
+      if (cancellation == 'window') reader.setPrefetchSentences(0);
       if (cancellation == 'voice') reader.setVoice(TtsReader.systemVoice);
       if (cancellation == 'network') reader.setNetworkAvailable(false);
+      if (cancellation == 'stop') await reader.stop();
       gate.complete(Uint8List.fromList([2]));
-      await warming;
-      expect(cache.writes.length, cancellation == 'none' ? 3 : 0);
-      if (cancellation == 'none') {
-        expect(cache.writes.map((entry) => entry.$1), everyElement(1));
-        expect(cache.writes.map((entry) => entry.$2), chapterSentenceOffsets(chapter).take(3));
-        expect(cache.writes.every((entry) => entry.$3.length == 1), isTrue);
-      }
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(cache.writes.map((entry) => entry.$1), [0], reason: 'Cancelled future audio must not reach disk.');
     });
   }
 

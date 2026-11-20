@@ -264,6 +264,43 @@ void main() {
     expect(tester.takeException(), isNull);
   }, timeout: const Timeout(Duration(seconds: 45)));
 
+  testWidgets('online cache clamps its own rate without changing the selected system voice or rate', (tester) async {
+    await configureView(tester);
+    final directory = (await tester.runAsync(() => Directory.systemTemp.createTemp('reader-target-rate-')))!;
+    const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+    messenger.setMockMethodCallHandler(pathChannel, (_) async => directory.path);
+    const id = 'system-to-online-cache', voice = 'zh-CN-YunxiNeural';
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(pathChannel, null);
+      for (final key in activeBookCaches.keys.where((key) => key.startsWith('$id/')).toList()) {
+        activeBookCaches.remove(key)!.statusNotifier.dispose();
+      }
+      await directory.delete(recursive: true);
+    });
+    final storage = AppStorage(), speech = _VoiceSpeech();
+    await storage.saveSettings((ReadingSettings()..voice = TtsReader.systemVoice..speechRate = 2.8).toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book(id, '甲乙。丙丁。'), storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip(T('read'))); await tester.pumpAndSettle();
+    await pause(tester);
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    final cache = find.byKey(const ValueKey('cache-voice-$voice'));
+    await scrollSheetTo(tester, cache); await tester.tap(cache);
+    for (var frame = 0; frame < 120 && find.byKey(const ValueKey('cache-binding')).evaluate().isEmpty; frame++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(find.byKey(const ValueKey('cache-binding')), findsOneWidget);
+    final task = activeBookCaches.values.singleWhere((task) => task.bookId == id);
+    expect(task.store.voice, voice); expect(task.store.rate, 2); expect(task.store.rateKey, '100');
+    expect(task.status.isActive, isFalse, reason: 'Inspecting a cache does not start synthesis.');
+    expect(speech.voice, TtsReader.systemVoice); expect(speech.speechRate, 2.8);
+    expect((await storage.loadSettings())['speechRate'], 2.8);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    await tester.runAsync(() => task.store.sizeBytes());
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('system fallback reparses its own pause policy and keeps the current word anchor', (tester) async {
     await configureView(tester);
     final storage = AppStorage();

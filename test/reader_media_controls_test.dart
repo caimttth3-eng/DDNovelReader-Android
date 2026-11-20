@@ -76,6 +76,12 @@ void main() {
     final events = StreamController<AudioInterruptionEvent>.broadcast();
     addTearDown(events.close);
     final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..keepScreenMinutes = 15).toJson());
+    final awake = <bool>[];
+    messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/volume_keys'), (call) async {
+      if (call.method == 'setKeepScreenOn') awake.add(call.arguments as bool);
+      return call.method == 'getMediaVolume' ? 0.5 : null;
+    });
     final speech = _MediaSpeech();
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('interruption'), storage: storage,
       ttsReader: speech, interruptionEvents: events.stream)));
@@ -83,10 +89,14 @@ void main() {
     events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pumpAndSettle();
     expect(speech.resumes, 0);
     await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    expect(awake.last, isTrue);
     events.add(AudioInterruptionEvent(true, AudioInterruptionType.pause)); await tester.pumpAndSettle();
     expect(speech.state, TtsState.paused); expect(handler.playbackState.value.playing, isFalse);
+    expect(find.byKey(const ValueKey('reading-volume-slider')), findsOneWidget);
+    expect(awake.last, isFalse, reason: 'Interruption pause must release the same screen-awake state as a manual pause.');
     events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pumpAndSettle();
     expect(speech.resumes, 1); expect(handler.playbackState.value.playing, isTrue);
+    expect(find.byKey(const ValueKey('reading-volume-slider')), findsNothing); expect(awake.last, isTrue);
     events.add(AudioInterruptionEvent(true, AudioInterruptionType.pause)); await tester.pumpAndSettle();
     await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
     events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pumpAndSettle();
@@ -94,6 +104,25 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pump();
     expect(speech.resumes, 1); expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('manual resume clears the previous interruption before a later interruption', (tester) async {
+    final events = StreamController<AudioInterruptionEvent>.broadcast();
+    addTearDown(events.close);
+    final speech = _MediaSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('manual-resume-interruption'), storage: AppStorage(),
+      ttsReader: speech, interruptionEvents: events.stream)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    events.add(AudioInterruptionEvent(true, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused);
+    await completeAction(tester, handler.play()); await tester.pumpAndSettle();
+    expect(speech.resumes, 1);
+    events.add(AudioInterruptionEvent(true, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused);
+    events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    expect(speech.resumes, 2); expect(handler.playbackState.value.playing, isTrue);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
   testWidgets('manual pause during interruption recovery cancels a delayed resume', (tester) async {

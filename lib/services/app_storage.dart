@@ -159,9 +159,11 @@ class AppStorage {
   Future<ReadingSettings> loadReadingSettings(String bookId) async {
     final settings = ReadingSettings.fromJson(await loadSettings());
     final saved = await loadBookSpeech(bookId);
-    if (saved?['voice'] case final String voice when voice.isNotEmpty) {
-      settings.voice = voice;
-      settings.systemFallbackActive = false;
+    if (saved?['voice'] case final String voice) {
+      final selected = voice.isEmpty ? ReadingSettings.defaultPauseVoice : voice;
+      final previous = settings.voice.isEmpty ? ReadingSettings.defaultPauseVoice : settings.voice;
+      if (selected != previous || SystemTtsClient.isSystemVoiceId(selected)) settings.systemFallbackActive = false;
+      settings.voice = selected;
     }
     if (saved?['rate'] case final num rate when rate.isFinite) settings.speechRate = rate.toDouble();
     settings.speechRate = ReadingSettings.normalizeSpeechRate(settings.speechRate,

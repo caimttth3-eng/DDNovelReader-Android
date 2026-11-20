@@ -510,6 +510,9 @@ void main() {
     expect(tester.widget<Slider>(speed).divisions, 75);
     tester.widget<Slider>(speed).onChanged!(2.4); await tester.pumpAndSettle();
     expect((await storage.loadSettings())['speechRate'], 2);
+    final savedSpeech = await storage.loadBookSpeech('scroll');
+    expect(savedSpeech?['voice'], TtsReader.defaultVoice);
+    expect(savedSpeech?['rate'], 2);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     final nextSpeech = _TestSpeech();
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('rate-restored'), storage: storage, ttsReader: nextSpeech)));

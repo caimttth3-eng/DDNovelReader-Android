@@ -20,6 +20,15 @@ void main() {
     expect((await storage.loadReadingSettings('other')).speechRate, 1.24);
     expect((await storage.loadSettings())['voice'], 'zh-CN-XiaoxiaoNeural');
   });
+  test('per-book restore retains sticky fallback only for the same effective online voice', () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..voice = ''..systemFallbackEnabled = true..systemFallbackActive = true).toJson());
+    await storage.saveBookSpeech('same', voice: ReadingSettings.defaultPauseVoice, rate: 1.2);
+    await storage.saveBookSpeech('other', voice: 'zh-CN-YunxiNeural', rate: 1.2);
+    expect((await storage.loadReadingSettings('same')).systemFallbackActive, isTrue);
+    expect((await storage.loadReadingSettings('other')).systemFallbackActive, isFalse);
+  });
   test('specific offline voices keep the existing system pause profile', () {
     final settings = ReadingSettings()..voice = '__system_tts__:native-name';
     final pauses = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 600);

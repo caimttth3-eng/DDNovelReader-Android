@@ -385,10 +385,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _onAudioInterruption(AudioInterruptionEvent event) async {
     if (!mounted || !_inReadingMode || _leavingReader || event.type == AudioInterruptionType.duck) return;
     if (event.begin) {
-      if (_resumeAfterInterruption || _tts.state != TtsState.playing) return;
+      if (_tts.state != TtsState.playing ||
+          _resumeAfterInterruption && _interruptedPlayback == _playbackGeneration) return;
       _resumeAfterInterruption = true;
+      _interruptionPause = _pauseReading(force: true, interrupted: true);
       _interruptedPlayback = _playbackGeneration;
-      _interruptionPause = _tts.pause();
       await _interruptionPause;
     } else if (_resumeAfterInterruption) {
       final playback = _interruptedPlayback;
@@ -1815,7 +1816,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 按当前书/音色/语速重建朗读侧磁盘缓存（切书/切音色/变速后调用）
   void _refreshTtsCache() {
-    _tts.setCache(_currentCacheStore());
+    _tts.setCache(_currentCacheStore(), chapters: _book.chapters);
   }
 
   /// 章节内段落 p 之前的句子总数（TtsReader 的起始索引）
@@ -1964,8 +1965,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   /// 朗读模式中暂停：保留全屏，弹出底部控制面板
-  Future<void> _pauseReading({bool force = false}) async {
-    _resumeAfterInterruption = false;
+  Future<void> _pauseReading({bool force = false, bool interrupted = false}) async {
+    if (!interrupted) _resumeAfterInterruption = false;
     _cancelSentenceDrag();
     if (_ttsLoading && !force) return; // Screen taps still ignore loading.
     if (!_inReadingMode || (!force && _tts.state != TtsState.playing)) return;
@@ -1974,6 +1975,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       setState(() => _ttsLoading = false);
     }
     final generation = _playbackGeneration;
+    setState(() {
+      _isPlaying = false;
+      _showReadingPanel = true;
+    });
+    _syncScreenAwake();
     if (force && _tts.state != TtsState.playing) {
       await _tts.stop();
     } else {
@@ -1981,10 +1987,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
     if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
     globalAudioHandler?.notifyPaused();
-    setState(() {
-      _isPlaying = false;
-      _showReadingPanel = true;
-    });
     // A background/OEM volume query must not hold the media pause command and
     // prevent a subsequent notification play from reaching the engine.
     unawaited(_loadMediaVolume());
@@ -1995,6 +1997,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// - 暂停中滑动跨章：重新加载目标章，从当前句开始播放
   /// - 同章恢复：TtsReader 恢复暂停处；彻底失败时 onError 已触发退出
   Future<void> _resumeReading() async {
+    _resumeAfterInterruption = false;
     print('SCREEN resumeReading state=${_tts.state} loading=$_ttsLoading');
     _debugLog('SCREEN resumeReading state=${_tts.state}');
     if (_ttsLoading) return; // 加载中忽略恢复，防误触
@@ -2425,18 +2428,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       from: from,
       initialTtsOffset: offset,
     );
-    // 章节边界预取：提前把下一章开头几句合成入库，换章不再等首句合成
-    unawaited(_prefetchNextChapterHead(c));
-  }
-
-  /// 预取下一章开头 3 句（并发），写进与朗读同一套 contentKey 缓存目录。
-  /// 复用当前缓存身份、词边界及取消机制，不影响当前播放。
-  Future<void> _prefetchNextChapterHead(int chapter) async {
-    final next = chapter + 1;
-    if (next >= _book.chapters.length || SystemTtsClient.isSystemVoiceId(_effectiveVoice)) {
-      return;
-    }
-    await _tts.prefetchChapterHead(_book.chapters[next], next, _currentCacheStore());
   }
 
   void _updateMediaChapter(int chapter) {
@@ -3395,7 +3386,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _tts.setSpeechRate(rate);
     _refreshTtsCache();
     widget.storage.saveSettings(_settings.toJson());
-    unawaited(widget.storage.saveBookSpeech(widget.book.id, rate: rate));
+    unawaited(widget.storage.saveBookSpeech(widget.book.id, voice: _effectiveVoice, rate: rate));
     setState(() {});
   }
 
@@ -3578,7 +3569,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _refreshTtsCache(); _updateMediaChapter(_chapter);
       await widget.storage.saveSettings(_settings.toJson());
       unawaited(widget.storage.saveBookSpeech(widget.book.id,
-        voice: _settings.voice, rate: _settings.speechRate));
+        voice: _effectiveVoice, rate: _settings.speechRate));
       if (prepared != null) await _restoreLineAnchor(line);
       if (mounted && !_leavingReader && generation == _playbackGeneration && wasPlaying && _inReadingMode) {
         await _startTtsFrom(_chapter, _para, _ttsSentence, displayOffset: _wordStart);
@@ -3844,8 +3835,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (SystemTtsClient.isSystemVoiceId(voice)) { _showToast(T('cacheOnlineOnly')); return; }
     // Keep every operation bound to the selected online voice/rate, even if a
     // temporary offline fallback or another settings change occurs later.
-    final rate = _settings.speechRate;
-    final targetSettings = ReadingSettings.fromJson(_settings.toJson())..voice = voice..systemFallbackActive = false;
+    final rate = ReadingSettings.normalizeSpeechRate(_settings.speechRate, maxSpeechRateFor(voice));
+    final targetSettings = ReadingSettings.fromJson(_settings.toJson())
+      ..voice = voice..speechRate = rate..systemFallbackActive = false;
     final prepared = _formatSignature(targetSettings) != _textSignature
       ? await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
           merge: targetSettings.mergeNonSentenceBreaks, indent: targetSettings.firstLineIndent,

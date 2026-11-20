@@ -1,6 +1,6 @@
 /// TTS 朗读服务：基于 Edge TTS 在线合成 + 后台预取队列。
 /// 逐句朗读 + 逐句高亮回调 + 暂停/继续/停止 + 定时停止。
-/// 预取后续句子（默认提前 8 句），缓存命中时无需再次在线合成。
+/// 预取可跨章的后续句子（默认提前 8 句），缓存命中时无需再次在线合成。
 library;
 
 import 'dart:async';
@@ -19,9 +19,11 @@ typedef OnlineSpeechSynthesizer = Future<Uint8List> Function(String text,
   {required String voice, required String rate, required void Function(List<SpeechWord>) onWords,
   required EdgeSynthCancelToken cancelToken});
 
+typedef _PrefetchSentence = ({int chapter, int offset, String text});
+
 /// 朗读服务：Edge TTS 在线合成 + 磁盘语音缓存 + 后台预取队列。
 /// 音频获取优先级：内存预取 → 磁盘缓存（TtsCacheStore）→ 在线合成（并异步落盘）。
-/// 缓存坐标 = (章节索引, 章内 tts 字符偏移)，与 BookCacheTask 共用，命中零网络。
+/// 缓存坐标由 chapterSentenceOffsets 提供，与 BookCacheTask 共用，命中零网络。
 class TtsReader {
   static const defaultPrefetchSentences = 8;
   static const minPrefetchSentences = 0;
@@ -29,7 +31,6 @@ class TtsReader {
   static const systemVoice = SystemTtsClient.voiceId;
   final SystemTtsClient _system = SystemTtsClient();
   final Map<String, EdgeSynthCancelToken> _requestTokens = {};
-  final Set<EdgeSynthCancelToken> _chapterHeadTokens = {};
   final Map<int, Object> _audioFailures = {};
   Object? lastFailure;
   ValueChanged<bool>? onLoadingChanged;
@@ -96,6 +97,8 @@ class TtsReader {
 
   // 磁盘缓存：坐标 (章节索引, 章内 tts 偏移)
   TtsCacheStore? _cache;
+  List<Chapter> _chapters = const [];
+  final _followingSentences = <_PrefetchSentence>[];
   int _chapterIndex = 0;
   List<int> _offsets = const [];
 
@@ -158,8 +161,6 @@ class TtsReader {
         _audioRequests.remove(entry.key); _requestTokens.remove(entry.key);
         entry.value.cancel();
       }
-      for (final token in _chapterHeadTokens.toList()) { token.cancel(); }
-      _chapterHeadTokens.clear();
       // Unlike stop/jump, do not change content generation: a cache read
       // already in progress may still supply perfectly usable offline audio.
       _networkEvents.add(false);
@@ -224,33 +225,6 @@ class TtsReader {
 
   Future<bool> openSystemVoiceSettings() => _system.openSettings();
 
-  Future<void> prefetchChapterHead(Chapter chapter, int chapterIndex, TtsCacheStore store) async {
-    if (_disposed || usesSystemVoice || !_networkAvailable || _state != TtsState.playing) return;
-    final generation = _contentGeneration, voice = _voice, rate = _rateStr();
-    final offsets = chapterSentenceOffsets(chapter);
-    final sentences = chapter.paragraphs.expand((paragraph) => paragraph.sentences).take(3).toList();
-    await Future.wait([for (var i = 0; i < sentences.length; i++) () async {
-      final token = EdgeSynthCancelToken();
-      _chapterHeadTokens.add(token);
-      try {
-        if (sentences[i].tts.isEmpty || await store.exists(chapterIndex, offsets[i])) return;
-        if (_disposed || generation != _contentGeneration || token.cancelled || !_networkAvailable) return;
-        List<SpeechWord> words = [];
-        final audio = await _synthesize(sentences[i].tts, voice: voice, rate: rate,
-          onWords: (value) => words = value, cancelToken: token).timeout(const Duration(seconds: 30));
-        if (_disposed || generation != _contentGeneration || token.cancelled || audio.isEmpty) return;
-        final write = store.write(chapterIndex, offsets[i], audio, words: words);
-        _cacheWrites.add(write);
-        try { await write; } finally { _cacheWrites.remove(write); }
-      } catch (error) {
-        if (!token.cancelled) debugPrint('Next-chapter speech prefetch failed: $error');
-      } finally {
-        token.cancel();
-        _chapterHeadTokens.remove(token);
-      }
-    }()]);
-  }
-
   /// 设置音色（zh-CN 等）
   void setVoice(String v) {
     if (_voice == v && !_usingSystemFallback && _onlineNetworkFailure == null) return;
@@ -293,7 +267,30 @@ class TtsReader {
   }
 
   /// 设置/替换磁盘缓存（切换书/音色/语速时由上层重建传入）
-  void setCache(TtsCacheStore? store) => _cache = store;
+  void setCache(TtsCacheStore? store, {List<Chapter> chapters = const []}) {
+    if ((_cache?.cacheKey, _cache?.voice, _cache?.rate, _cache?.textFingerprint) !=
+        (store?.cacheKey, store?.voice, store?.rate, store?.textFingerprint)) {
+      _prefetchCache.clear(); _wordCache.clear();
+    }
+    _cache = store;
+    _chapters = chapters;
+  }
+
+  void _prepareFollowingSentences() {
+    _followingSentences.clear();
+    chapters: for (var ci = _chapterIndex + 1; ci < _chapters.length; ci++) {
+      final chapter = _chapters[ci], offsets = chapterSentenceOffsets(_chapters[ci]);
+      var sentence = 0;
+      for (final paragraph in chapter.paragraphs) {
+        for (final value in paragraph.sentences) {
+          final offset = offsets[sentence++];
+          if (value.tts.isEmpty) continue;
+          _followingSentences.add((chapter: ci, offset: offset, text: value.tts));
+          if (_followingSentences.length == maxPrefetchSentences) break chapters;
+        }
+      }
+    }
+  }
 
   /// 设置语速（0.1~3.0，映射到 Edge rate 百分比 +200%）
   Future<void> setSpeechRate(double rate) async {
@@ -401,7 +398,7 @@ class TtsReader {
   }
 
   /// 开始朗读整章
-  /// [offsets]：与 [sentences] 等长的章内 tts 字符偏移列表；长度不符则禁用缓存。
+  /// [offsets]：与 [sentences] 等长的章内缓存坐标；长度不符则禁用当前章磁盘缓存。
   /// [chapterIndex]：章节索引，缓存坐标的一部分。
   Future<void> start(List<String> sentences,
       {List<int>? offsets, List<int>? pauseAfterMilliseconds, int chapterIndex = 0, int from = 0,
@@ -411,14 +408,26 @@ class TtsReader {
       final generation = _playGeneration;
       await stopping;
       if (_disposed || generation != _playGeneration) return;
-      _sentences.clear(); _pauseAfterMilliseconds.clear(); _index = -1;
+      _sentences.clear(); _followingSentences.clear(); _prefetchCache.clear(); _wordCache.clear();
+      _pauseAfterMilliseconds.clear(); _index = -1;
       _setState(TtsState.stopped);
       onCompleted?.call();
       return;
     }
+    // Carry completed lookahead into its chapter, even if disk writes are pending.
+    final carriedAudio = <_PrefetchSentence, Uint8List>{}, carriedWords = <_PrefetchSentence, List<SpeechWord>>{};
+    if (chapterIndex > _chapterIndex && offsets != null && offsets.length == sentences.length) {
+      for (final entry in _prefetchCache.entries) {
+        final next = entry.key - _sentences.length;
+        if (next < 0 || next >= _followingSentences.length) continue;
+        final target = _followingSentences[next];
+        if (target.chapter < chapterIndex) continue;
+        carriedAudio[target] = entry.value;
+        carriedWords[target] = _wordCache[entry.key] ?? const [];
+      }
+    }
     _contentGeneration++;
     _onlineNetworkFailure = null;
-    _wordCache.clear();
     final stopping = _stopInternal();
     final generation = _playGeneration;
     await stopping;
@@ -433,9 +442,22 @@ class TtsReader {
         ? offsets
         : const [];
     _chapterIndex = chapterIndex;
+    _prepareFollowingSentences();
     _index = from.clamp(0, sentences.length - 1);
     _preparationPending = false;
-    _prefetchCache.clear();
+    _prefetchCache.clear(); _wordCache.clear();
+    final currentByOffset = {for (var i = 0; i < _offsets.length; i++) _offsets[i]: i};
+    for (final entry in carriedAudio.entries) {
+      final target = entry.key;
+      final current = target.chapter == _chapterIndex ? currentByOffset[target.offset] : null;
+      final following = _followingSentences.indexOf(target);
+      final index = current != null && _sentences[current] == target.text ? current
+        : following >= 0 ? _sentences.length + following : null;
+      if (index != null && _inMemoryWindow(index)) {
+        _prefetchCache[index] = entry.value;
+        _wordCache[index] = carriedWords[target] ?? const [];
+      }
+    }
     _prefetchIndex = _index - 1;
     _prefetchCompletes = 0;
     _setState(TtsState.playing);
@@ -569,11 +591,12 @@ class TtsReader {
 
   Future<Uint8List> _fetchAudio(int idx, int generation,
       {int start = 0, ValueChanged<List<SpeechWord>>? onWords}) async {
-    if (idx < 0 || idx >= _sentences.length) return Uint8List(0);
+    if (idx < 0 || idx >= _sentences.length + _followingSentences.length) return Uint8List(0);
+    final following = idx < _sentences.length ? null : _followingSentences[idx - _sentences.length];
     final partial = start > 0;
-    final text = _sentences[idx].substring(start), voice = _voice, rate = _rateStr();
+    final text = (following?.text ?? _sentences[idx]).substring(start), voice = _voice, rate = _rateStr();
     // A manual seek suffix must never read or overwrite a whole-sentence cache.
-    final off = partial ? -1 : _cacheOff(idx), chapter = _chapterIndex;
+    final off = partial ? -1 : following?.offset ?? _cacheOff(idx), chapter = following?.chapter ?? _chapterIndex;
     final cache = _cache;
     if (off >= 0 && cache != null) {
       final disk = await cache.read(chapter, off);
@@ -628,7 +651,9 @@ class TtsReader {
       late final Future<void> pending;
       pending = Future<void>.sync(() => cache.write(chapter, off, audio, words: words))
         // Cache persistence is optional for playback, including storage errors.
-        .then<void>((_) {}, onError: (Object _, StackTrace __) {})
+        .then<void>((_) {}, onError: (Object error, StackTrace stack) {
+          debugPrint('Speech cache write failed: $error');
+        })
         .whenComplete(() { _cacheWrites.remove(pending); });
       _cacheWrites.add(pending);
       unawaited(pending);
@@ -777,8 +802,6 @@ class TtsReader {
     _contentGeneration++;
     _prefetchGeneration++; _prefetching = false;
     for (final token in _requestTokens.values.toList()) { token.cancel(); }
-    for (final token in _chapterHeadTokens.toList()) { token.cancel(); }
-    _chapterHeadTokens.clear();
     _requestTokens.clear(); _audioFailures.clear(); _audioRequests.clear();
   }
 
@@ -808,7 +831,7 @@ class TtsReader {
         final batch = <int>[];
         while (batch.length < parallelism) {
           final next = _prefetchIndex + 1;
-          if (next > maxPrefetch || next >= _sentences.length) break;
+          if (next > maxPrefetch || next >= _sentences.length + _followingSentences.length) break;
           _prefetchIndex = next;
           if (!_prefetchCache.containsKey(next)) batch.add(next);
         }
@@ -821,7 +844,9 @@ class TtsReader {
         if (_disposed || generation != _contentGeneration || worker != _prefetchGeneration) return;
         _prunePrefetch();
       }
-    } catch (_) {} finally {
+    } catch (error) {
+      debugPrint('Speech prefetch failed: $error');
+    } finally {
       if (worker == _prefetchGeneration) _prefetching = false;
       if (worker == _prefetchGeneration && !_disposed && !usesSystemVoice && _state == TtsState.playing && generation != _contentGeneration) {
         _startPrefetch();
