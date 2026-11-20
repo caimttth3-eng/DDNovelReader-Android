@@ -1,8 +1,9 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
 import '../models/book.dart';
+import '../models/speech_word.dart';
 import 'edge_tts.dart';
 import 'tts_cache_store.dart';
 
@@ -22,7 +23,7 @@ class BookCacheStatus {
 ///
 /// 对齐 PC 端 WholeBookCacher 设计：
 /// - 与朗读侧同一套坐标（章节+章内 tts 偏移），缓存命中零网络；
-/// - 并发 3 路（手机网络/内存比 PC 保守，也避微软限流）；
+/// - 并发 2 路（手机网络/内存比 PC 保守，也避微软限流）；
 /// - 失败不标记完成，留待续传补齐；全部完成→done，有失败→paused；
 /// - 进度持久化 progress.json，resume 续传自动跳过已缓存文件；
 /// - 完全独立于朗读（不占用 TtsReader，朗读时缓存照跑）。
@@ -30,8 +31,8 @@ class BookCacheTask {
   final Book book;
   final String bookId;
   final TtsCacheStore store;
+  final OnlineSpeechSynthesizer _synthesize;
 
-  // 边听边缓存时留出带宽给朗读，2 路更稳
   static const int workerCount = 2;
   static const int saveInterval = 20;
 
@@ -46,10 +47,13 @@ class BookCacheTask {
   int? _fromChapter;
   int? _fromOffset;
 
-  bool _cancelled = false;
-  bool _paused = false;
-  int _aliveWorkers = 0;
+  int _generation = 0;
+  final Set<EdgeSynthCancelToken> _requests = {};
+  Future<void> _operations = Future<void>.value();
+  Future<void> _workers = Future<void>.value();
+  Future<void> _progressWrites = Future<void>.value();
   int _lastSave = 0;
+  Object? lastFailure;
 
   /// 进度变化回调（UI 刷新）
   ValueChanged<BookCacheStatus>? onProgress;
@@ -58,7 +62,8 @@ class BookCacheTask {
   final ValueNotifier<BookCacheStatus> statusNotifier =
       ValueNotifier(const BookCacheStatus('idle', 0, 0));
 
-  BookCacheTask({required this.book, required this.bookId, required this.store});
+  BookCacheTask({required this.book, required this.bookId, required this.store,
+    OnlineSpeechSynthesizer? synthesize}) : _synthesize = synthesize ?? edgeSynth;
 
   BookCacheStatus get status => BookCacheStatus(_state, _done, _total);
 
@@ -103,43 +108,52 @@ class BookCacheTask {
     bool resume = false,
     int? fromChapter,
     int? fromOffset,
-  }) async {
-    if (_state == 'caching' || _state == 'building') return;
+  }) {
+    if (_state == 'caching' || _state == 'building') return Future<void>.value();
+    final generation = _invalidate();
     _state = 'building';
-    _cancelled = false;
-    _paused = false;
+    lastFailure = null;
     _notify();
-    if (resume) {
-      final prog = await store.loadProgress();
-      if (prog != null) {
-        _fromChapter = prog.fromChapter;
-        _fromOffset = prog.fromOffset;
+    return _serialize(() async {
+      await _workers;
+      if (resume) {
+        final prog = await store.loadProgress();
+        if (prog != null) {
+          _fromChapter = prog.fromChapter;
+          _fromOffset = prog.fromOffset;
+        }
+      } else {
+        _fromChapter = fromChapter;
+        _fromOffset = fromOffset;
       }
       await _buildTasks(fromChapter: _fromChapter, fromOffset: _fromOffset);
-    } else {
-      _fromChapter = fromChapter;
-      _fromOffset = fromOffset;
-      await _buildTasks(fromChapter: fromChapter, fromOffset: fromOffset);
-    }
-    await _initAndRun(resume: resume);
+      await _initAndRun(resume: resume, generation: generation);
+    });
   }
 
   /// 从磁盘恢复进度（进程重启/重进页面时调用；仅 idle 状态可用）。
   /// 有匹配的 progress.json 则恢复其进度；否则按磁盘实际文件数统计，
   /// 让"重进后整本缓存为 0"不再发生——已有缓存始终可见、可续传。
-  Future<void> restoreFromDisk() async {
+  Future<void> restoreFromDisk() => _serialize(_restoreFromDisk);
+
+  Future<void> _restoreFromDisk() async {
     if (_state != 'idle') return;
+    final generation = _generation;
     final prog = await store.loadProgress();
+    if (generation != _generation) return;
     if (prog != null && prog.total > 0) {
       _fromChapter = prog.fromChapter;
       _fromOffset = prog.fromOffset;
       await _buildTasks(fromChapter: _fromChapter, fromOffset: _fromOffset);
       if (prog.total == _total) {
-        _done = prog.done.clamp(0, _total);
         _completed
           ..clear()
           ..addAll(prog.completed.where((i) => i >= 0 && i < _total));
-        _state = prog.state == 'done' ? 'done' : 'paused';
+        final names = await store.listMp3Names();
+        if (generation != _generation) return;
+        _completed.removeWhere((i) => !names.contains(TtsCacheStore.fileName(_tasks[i].$1, _tasks[i].$2)));
+        _done = _completed.length;
+        _state = _done == _total ? 'done' : 'paused';
         _next = 0;
         while (_next < _total && _completed.contains(_next)) {
           _next++;
@@ -153,6 +167,8 @@ class BookCacheTask {
     }
     var n = 0;
     final names = await store.listMp3Names();
+    if (generation != _generation) return;
+    _completed.clear();
     for (var i = 0; i < _tasks.length; i++) {
       final (ci, off, _) = _tasks[i];
       final fn = '${ci.toString().padLeft(4, '0')}_'
@@ -168,17 +184,20 @@ class BookCacheTask {
     _notify();
   }
 
-  Future<void> _initAndRun({required bool resume}) async {
+  Future<void> _initAndRun({required bool resume, required int generation}) async {
     if (_total == 0) {
+      _done = 0;
+      _next = 0;
+      _completed.clear();
+      if (generation != _generation) return;
       _state = 'done';
-      _save();
+      await _save();
       _notify();
       return;
     }
     if (resume) {
       final prog = await store.loadProgress();
       if (prog != null && prog.total == _total) {
-        _done = prog.done.clamp(0, _total);
         _completed
           ..clear()
           ..addAll(prog.completed.where((i) => i >= 0 && i < _total));
@@ -190,15 +209,16 @@ class BookCacheTask {
         }
         for (final idx in bad) {
           _completed.remove(idx);
-          if (_done > 0) _done--;
         }
+        _done = _completed.length;
         _next = 0;
         while (_next < _total && _completed.contains(_next)) {
           _next++;
         }
         if (_next >= _total) {
+          if (generation != _generation) return;
           _state = 'done';
-          _save();
+          await _save();
           _notify();
           return;
         }
@@ -212,116 +232,147 @@ class BookCacheTask {
       _next = 0;
       _completed.clear();
     }
+    if (generation != _generation) return;
     _state = 'caching';
+    _lastSave = _done;
+    lastFailure = null;
     _notify();
-    _spawnWorkers();
+    _spawnWorkers(generation);
   }
 
-  void pause() {
-    if (_state != 'caching') return;
-    _paused = true;
-    _state = 'paused';
-    _save();
-    _notify();
-  }
-
-  void resume() {
-    if (_state != 'paused') return;
-    _paused = false;
-    _state = 'caching';
-    _notify();
-    _spawnWorkers();
-  }
-
-  void cancel() {
-    _cancelled = true;
-    _paused = false;
-    _state = 'cancelled';
-    _save();
-    _notify();
-  }
-
-  void _spawnWorkers() {
-    _aliveWorkers = workerCount;
-    for (var i = 0; i < workerCount; i++) {
-      unawaited(_worker());
+  /// 返回前等待旧 worker、音频写入和进度写入全部结清。
+  Future<void> pause() {
+    if (_state != 'caching' && _state != 'building' && _state != 'paused') {
+      return _serialize(() async { await _workers; await _progressWrites; });
     }
+    _invalidate();
+    _state = 'paused';
+    _notify();
+    return _serialize(() async { await _workers; await _save(); });
   }
 
-  Future<void> _worker() async {
-    while (true) {
-      if (_cancelled) {
-        _finalizeWorker();
-        return;
+  /// 等待前一次暂停结清后启动同一个有界 worker 组。
+  Future<void> resume() {
+    if (_state != 'paused') return _operations;
+    final generation = _invalidate();
+    return _serialize(() async {
+      await _workers;
+      if (generation != _generation || _state != 'paused') return;
+      if (_tasks.isEmpty) {
+        await _buildTasks(fromChapter: _fromChapter, fromOffset: _fromOffset);
+        if (generation != _generation) return;
       }
-      if (_paused) {
-        _finalizeWorker();
-        return;
-      }
+      // Claimed-but-cancelled indices must be retried, not skipped.
+      _next = 0;
+      _state = 'caching';
+      _lastSave = _done;
+      lastFailure = null;
+      _notify();
+      _spawnWorkers(generation);
+    });
+  }
+
+  /// 返回后本任务不再写入缓存；调用方此时可安全删除缓存。
+  Future<void> cancel() {
+    _invalidate();
+    _state = 'cancelled';
+    _notify();
+    return _serialize(() async { await _workers; await _save(); });
+  }
+
+  int _invalidate() {
+    _generation++;
+    for (final token in _requests.toList()) { token.cancel(); }
+    return _generation;
+  }
+
+  Future<void> _serialize(Future<void> Function() action) {
+    final pending = _operations.then((_) => action());
+    _operations = pending.then<void>((_) {}, onError: (Object error, StackTrace stack) {
+      lastFailure = error;
+      debugPrint('Book cache control failed: $error');
+      if (_state == 'building') _state = 'paused';
+      _notify();
+    });
+    return pending;
+  }
+
+  void _spawnWorkers(int generation) {
+    _workers = Future.wait(List.generate(workerCount, (_) => _worker(generation))).then((_) async {
+      if (generation != _generation) return;
+      _state = _done == _total ? 'done' : 'paused';
+      await _save();
+      _notify();
+    });
+  }
+
+  bool _isCurrent(int generation) => generation == _generation && _state == 'caching';
+
+  Future<void> _worker(int generation) async {
+    while (_isCurrent(generation)) {
       final idx = _next++;
-      if (idx >= _total) break;
+      if (idx >= _total) return;
       if (_completed.contains(idx)) continue;
       final (ci, off, text) = _tasks[idx];
-      if (await store.exists(ci, off)) {
-        _markDone(idx);
-        continue;
-      }
-      Uint8List audio = Uint8List(0);
-      for (var attempt = 0; attempt < 2 && audio.isEmpty; attempt++) {
-        try {
-          audio = await edgeSynth(
-            text,
-            voice: store.voice,
-            rate: edgeRateStr(store.rate),
-          );
-        } catch (_) {
-          if (attempt == 0) {
-            await Future<void>.delayed(const Duration(milliseconds: 600));
+      final token = EdgeSynthCancelToken();
+      _requests.add(token);
+      try {
+        final exists = await store.exists(ci, off);
+        if (!_isCurrent(generation)) return;
+        if (!exists) {
+          var audio = Uint8List(0);
+          List<SpeechWord> words = [];
+          for (var attempt = 0; attempt < 2 && audio.isEmpty; attempt++) {
+            try {
+              audio = await _synthesize(text, voice: store.voice, rate: edgeRateStr(store.rate),
+                onWords: (value) => words = value, cancelToken: token);
+            } catch (error) {
+              if (!_isCurrent(generation) || token.cancelled) return;
+              if (attempt == 1) lastFailure = error;
+              debugPrint('Book cache synthesis failed: $error');
+              if (attempt == 0) await Future<void>.delayed(const Duration(milliseconds: 600));
+            }
+            if (!_isCurrent(generation) || token.cancelled) return;
           }
+          if (audio.isEmpty) {
+            lastFailure = const EdgeTtsException('no_audio');
+            debugPrint('Book cache synthesis produced no audio for task $idx.');
+            continue;
+          }
+          await store.write(ci, off, audio, words: words);
+          if (!_isCurrent(generation)) return;
         }
+        _markDone(idx);
+      } catch (error) {
+        lastFailure = error;
+        debugPrint('Book cache persistence failed for task $idx: $error');
+      } finally {
+        _requests.remove(token);
       }
-      if (audio.isEmpty) continue; // 多次失败：不标记完成，留待续传重试
-      if (audio.isEmpty) continue;
-      await store.write(ci, off, audio);
-      _markDone(idx);
     }
-    _finalizeWorker();
   }
 
   void _markDone(int idx) {
-    _completed.add(idx);
-    _done++;
+    if (!_completed.add(idx)) return;
+    _done = _completed.length;
     if (_done - _lastSave >= saveInterval) {
       _lastSave = _done;
-      _save();
+      unawaited(_save());
       _notify();
     }
   }
 
-  void _finalizeWorker() {
-    _aliveWorkers--;
-    if (_aliveWorkers > 0) return;
-    // 最后一个 worker 退出：判定终态（单 isolate 内同步检查，无竞态）
-    if (_cancelled) return;
-    if (_done >= _total) {
-      _state = 'done';
-    } else if (_state == 'caching' || _state == 'building') {
-      // 有任务因合成失败未完成：转暂停，进度保留，可续传补齐
-      _state = 'paused';
-    }
-    _save();
-    _notify();
-  }
-
-  void _save() {
-    store.saveProgress(
-      total: _total,
-      done: _done,
-      completed: _completed,
-      state: _state,
-      fromChapter: _fromChapter,
-      fromOffset: _fromOffset,
-    );
+  Future<void> _save() {
+    final total = _total, done = _done, completed = Set<int>.of(_completed), state = _state;
+    final fromChapter = _fromChapter, fromOffset = _fromOffset;
+    return _progressWrites = _progressWrites.then((_) => store.saveProgress(
+      total: total, done: done, completed: completed, state: state,
+      fromChapter: fromChapter, fromOffset: fromOffset,
+    )).then<void>((_) {}, onError: (Object error, StackTrace stack) {
+      lastFailure = error;
+      debugPrint('Book cache progress persistence failed: $error');
+      _notify();
+    });
   }
 
   void _notify() {

@@ -1,4 +1,4 @@
-﻿package com.ddnovelreader
+package com.ddnovelreader
 
 import android.content.Context
 import android.content.Intent
@@ -67,10 +67,20 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
                         started = false
                         val rate = call.argument<Number>("rate")?.toDouble() ?: 1.0
                         val voiceName = call.argument<String>("voice")
-                        if (voiceName != null && engine != null) {
+                        if (engine != null) {
                             try {
-                                engine!!.voices?.firstOrNull { it.name == voiceName }?.let { engine!!.voice = it }
-                            } catch (error: RuntimeException) { /* keep current voice */ }
+                                val selected = if (voiceName == null) engine!!.defaultVoice
+                                    else engine!!.voices?.firstOrNull { it.name == voiceName }
+                                if (selected == null || engine!!.setVoice(selected) != TextToSpeech.SUCCESS) {
+                                    requestId = null
+                                    result.error("voice_unavailable", "System speech voice is unavailable", null)
+                                    return@setMethodCallHandler
+                                }
+                            } catch (error: RuntimeException) {
+                                requestId = null
+                                result.error("voice_unavailable", "System speech voice selection failed", null)
+                                return@setMethodCallHandler
+                            }
                         }
                         if (!rate.isFinite() || engine!!.setSpeechRate(SystemSpeechRate.toPlatformRate(rate)) != TextToSpeech.SUCCESS) {
                             requestId = null

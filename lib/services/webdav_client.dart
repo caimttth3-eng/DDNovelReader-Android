@@ -113,13 +113,14 @@ class WebDavClient {
     List<int>? body,
     Map<String, String>? headers,
     Set<int> allow = const {},
+    String? targetUrl,
   }) async {
     final http = HttpClient()..connectionTimeout = timeout;
     if (!verifyTls) {
       http.badCertificateCallback = (cert, host, port) => true;
     }
     try {
-      final req = await http.openUrl(method, Uri.parse(urlOf(rel)))
+      final req = await http.openUrl(method, Uri.parse(targetUrl ?? urlOf(rel)))
           .timeout(timeout);
       _baseHeaders.forEach((k, v) {
         req.headers.set(k, v, preserveHeaderCase: true);
@@ -182,7 +183,7 @@ class WebDavClient {
 
   // ---------- 目录 ----------
 
-  /// 列目录。失败（404/405）返回空列表。
+  /// A missing collection is empty; unreadable/malformed listings stop sync.
   Future<List<WebDavEntry>> propfind([String rel = '', String depth = '1']) async {
     const body = '<?xml version="1.0" encoding="utf-8"?>'
         '<D:propfind xmlns:D="DAV:"><D:prop>'
@@ -198,13 +199,22 @@ class WebDavClient {
       },
       allow: {404, 405},
     );
-    if (resp.status == 404 || resp.status == 405) return [];
-    return parsePropfind(utf8.decode(resp.body, allowMalformed: true), urlOf(''));
+    if (resp.status == 404) return [];
+    if (resp.status == 405) throw WebDavException('服务器不支持读取 WebDAV 目录，已停止同步', 405);
+    final xml = utf8.decode(resp.body);
+    if (!RegExp(r'<(?:[A-Za-z0-9_.-]+:)?multistatus\b').hasMatch(xml)) {
+      throw WebDavException('WebDAV 目录响应无效，已停止同步');
+    }
+    final requestUrl = urlOf(rel);
+    return parsePropfind(xml, urlOf(''), requestUrl: requestUrl.endsWith('/') ? requestUrl : '$requestUrl/');
   }
 
   /// 解析 PROPFIND 响应体（正则实现，命名空间前缀任意）。
-  static List<WebDavEntry> parsePropfind(String xml, String selfUrl) {
-    final basePath = Uri.parse(selfUrl).path.replaceAll(RegExp(r'/+$'), '');
+  static List<WebDavEntry> parsePropfind(String xml, String selfUrl, {String? requestUrl}) {
+    final self = Uri.parse(selfUrl);
+    // pathSegments decodes exactly once on both sides. Decoding href alone
+    // duplicates encoded roots, while decodeFull leaves escaped '%' ambiguous.
+    final base = self.pathSegments.where((segment) => segment.isNotEmpty).toList();
     final out = <WebDavEntry>[];
     final respRe = RegExp(r'<(?:[A-Za-z0-9_.-]+:)?response\b[^>]*>([\s\S]*?)'
         r'</(?:[A-Za-z0-9_.-]+:)?response>');
@@ -219,25 +229,29 @@ class WebDavClient {
     for (final m in respRe.allMatches(xml)) {
       final chunk = m.group(1) ?? '';
       final hm = hrefRe.firstMatch(chunk);
-      if (hm == null) continue;
-      var href = (hm.group(1) ?? '').trim();
-      if (href.isEmpty) continue;
-      String path;
+      if (hm == null) throw WebDavException('WebDAV 目录项缺少路径，已停止同步');
+      final href = (hm.group(1) ?? '').trim()
+          .replaceAll('&amp;', '&').replaceAll('&lt;', '<').replaceAll('&gt;', '>')
+          .replaceAll('&quot;', '"').replaceAll('&apos;', "'");
+      if (href.isEmpty) throw WebDavException('WebDAV 目录项路径为空，已停止同步');
+      List<String> segments;
       try {
-        path = Uri.decodeFull(Uri.parse(href).path);
+        final resolved = Uri.parse(requestUrl ?? selfUrl).resolve(href);
+        if (resolved.origin != self.origin) throw const FormatException('Different WebDAV origin');
+        segments = resolved.pathSegments.where((part) => part.isNotEmpty).toList();
+        if (segments.any((part) => part.contains('/') || part == '.' || part == '..')) {
+          throw const FormatException('Invalid WebDAV path segment');
+        }
       } catch (_) {
-        path = href;
+        throw WebDavException('WebDAV 返回了无法解析的目录路径，已停止同步');
       }
-      final norm = path.replaceAll(RegExp(r'/+$'), '');
-      if (norm == basePath) continue; // 目录自身
-      final name = norm.split('/').last;
-      final sub = (path.startsWith(basePath) && basePath.isNotEmpty)
-          ? norm.substring(basePath.length)
-          : norm;
-      final rel = sub
-          .split('/')
-          .where((s) => s.isNotEmpty)
-          .join('/');
+      if (segments.length < base.length ||
+          List.generate(base.length, (i) => segments[i] == base[i]).contains(false)) {
+        throw WebDavException('WebDAV 返回了同步根目录以外的路径，已停止同步');
+      }
+      if (segments.length == base.length) continue;
+      final name = segments.last;
+      final rel = segments.skip(base.length).join('/');
       final isDir = isDirRe.hasMatch(chunk);
       int size = 0;
       final lm2 = lenRe.firstMatch(chunk);
@@ -278,10 +292,15 @@ class WebDavClient {
 
   /// 逐级创建目录（已存在跳过）。
   Future<void> mkdirs(String rel) async {
+    var root = baseUrl;
+    for (final segment in remoteDir.split('/').where((part) => part.isNotEmpty)) {
+      root += '${Uri.encodeComponent(segment)}/';
+      await _request('MKCOL', '', targetUrl: root, body: const <int>[], allow: {301, 405});
+    }
     var cur = '';
     for (final seg in rel.split('/').where((s) => s.isNotEmpty)) {
       cur = cur.isEmpty ? seg : '$cur/$seg';
-      await mkdir(cur);
+      if (!await mkdir(cur)) throw WebDavException('无法创建远端目录：$cur', 409);
     }
   }
 

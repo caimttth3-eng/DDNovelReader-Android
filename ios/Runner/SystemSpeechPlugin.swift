@@ -1,5 +1,6 @@
 import Flutter
 import AVFoundation
+import UIKit
 
 /// iOS 离线系统语音（AVSpeechSynthesizer），对应 Dart 端
 /// `com.ddnovelreader/system_tts` 通道：initialize / speak / stop，
@@ -8,6 +9,7 @@ public class SystemSpeechPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDel
   private let channel: FlutterMethodChannel
   private let synthesizer = AVSpeechSynthesizer()
   private var requestId: String?
+  private var activeUtterance: AVSpeechUtterance?
 
   init(channel: FlutterMethodChannel) {
     self.channel = channel
@@ -49,11 +51,19 @@ public class SystemSpeechPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDel
         return
       }
       let rate = (args["rate"] as? NSNumber)?.doubleValue ?? 1.0
+      guard rate.isFinite else {
+        result(FlutterError(code: "speak_failed", message: "Invalid speech rate", details: nil))
+        return
+      }
       stopInternal()
       requestId = id
       let utterance = AVSpeechUtterance(string: text)
-      if let voiceId = args["voice"] as? String,
-         let selected = AVSpeechSynthesisVoice(identifier: voiceId) {
+      if let voiceId = args["voice"] as? String {
+        guard let selected = AVSpeechSynthesisVoice(identifier: voiceId) else {
+          requestId = nil
+          result(FlutterError(code: "voice_unavailable", message: "System speech voice is unavailable", details: nil))
+          return
+        }
         // 用户在音源面板里明确选择的系统音色（可能是"优化音质"音色）。
         utterance.voice = selected
       } else {
@@ -71,6 +81,7 @@ public class SystemSpeechPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDel
       // AVSpeech 默认语速 0.5，对应本 App 的 1.0x。
       utterance.rate = Float(min(max(0.5 * rate, 0.05), 1.0))
       utterance.pitchMultiplier = 1.0
+      activeUtterance = utterance
       synthesizer.speak(utterance)
       result(nil)
 
@@ -91,6 +102,7 @@ public class SystemSpeechPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDel
 
   private func stopInternal() {
     requestId = nil
+    activeUtterance = nil
     if synthesizer.isSpeaking || synthesizer.isPaused {
       synthesizer.stopSpeaking(at: .immediate)
     }
@@ -117,13 +129,14 @@ public class SystemSpeechPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDel
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-    guard let id = requestId else { return }
+    guard utterance === activeUtterance, let id = requestId else { return }
     send("start", ["id": id])
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-    guard let id = requestId else { return }
+    guard utterance === activeUtterance, let id = requestId else { return }
     requestId = nil
+    activeUtterance = nil
     send("done", ["id": id])
   }
 
@@ -136,7 +149,7 @@ public class SystemSpeechPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDel
     willSpeakRangeOfSpeechString characterRange: NSRange,
     utterance: AVSpeechUtterance
   ) {
-    guard let id = requestId else { return }
+    guard utterance === activeUtterance, let id = requestId else { return }
     send("range", [
       "id": id,
       "start": characterRange.location,

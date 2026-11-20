@@ -1,13 +1,13 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
 import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
 import '../models/speech_word.dart';
-import 'tts_text.dart';
 
 /// 恢复的进度记录（total 与当前任务不符即作废；from* 记录缓存起点）
 typedef CacheProgress = ({
@@ -60,6 +60,8 @@ class TtsCacheStore {
 
   static const _progressFile = 'progress.json';
   static const _layoutMark = '.tts_layout_v2';
+  static final Map<String, Future<void>> _migrations = {};
+  static final Map<String, Future<void>> _writes = {};
 
   static Future<Directory> rootDir() async {
     final base = await getApplicationSupportDirectory();
@@ -107,7 +109,15 @@ class TtsCacheStore {
   /// 1) 一级目录 `<book.id>` → `<contentKey>`；
   /// 2) 语速目录 `1.00` / `1.50` → `0` / `50`（纯整数的目录视为已是新格式，跳过）。
   /// 已迁移过（有标记文件）就只做一次 exists 判断，后续零成本。
-  Future<void> _migrateLegacyLayout(Directory root) async {
+  Future<void> _migrateLegacyLayout(Directory root) {
+    final key = '${root.path}/$bookId/$cacheKey';
+    return _migrations.putIfAbsent(key, () async {
+      try { await _performLegacyMigration(root); }
+      finally { _migrations.remove(key); }
+    });
+  }
+
+  Future<void> _performLegacyMigration(Directory root) async {
     try {
       final sep = Platform.pathSeparator;
       final keyDir = Directory('${root.path}$sep${_safe(cacheKey)}');
@@ -128,8 +138,9 @@ class TtsCacheStore {
       if (await keyDir.exists()) await _migrateRateDirs(keyDir);
       if (!await keyDir.exists()) await keyDir.create(recursive: true);
       await mark.writeAsString('2', flush: true);
-    } catch (_) {
-      // 迁移失败不影响读写：新目录照样会被创建，只是旧 mp3 暂不命中
+    } on FileSystemException catch (error) {
+      debugPrint('Speech cache migration failed; existing audio retained: $error');
+      rethrow;
     }
   }
 
@@ -140,13 +151,25 @@ class TtsCacheStore {
       if (voiceDir is! Directory) continue;
       await for (final sub in voiceDir.list(followLinks: false)) {
         if (sub is! Directory) continue;
-        final name = sub.uri.pathSegments.last;
+        final name = sub.uri.pathSegments.where((segment) => segment.isNotEmpty).last;
         final m = rateNameRe.firstMatch(name);
         if (m == null) continue; // 纯整数 pct 目录：已是新格式
         final r = double.tryParse(name);
         if (r == null) continue;
         final target = Directory(
             '${voiceDir.path}$sep${ratePctOfSpeechRate(r).toString()}');
+        final children = await sub.list(followLinks: false).toList();
+        if (children.any((entry) => entry is File && entry.path.endsWith('.mp3'))) {
+          // Legacy raw audio used TTS offsets, not desktop source offsets.
+          // Preserve it without exposing it under the new coordinate scheme.
+          await target.create(recursive: true);
+          for (final child in children.whereType<Directory>()) {
+            final leaf = child.uri.pathSegments.where((part) => part.isNotEmpty).last;
+            if (leaf.startsWith('text-')) await _moveDirInto(child, Directory('${target.path}$sep$leaf'));
+          }
+          debugPrint('Legacy unversioned audio retained at ${sub.path}; new source-coordinate audio will be rebuilt.');
+          continue;
+        }
         if (!await target.exists()) {
           await sub.rename(target.path);
         } else {
@@ -159,22 +182,46 @@ class TtsCacheStore {
   static Future<void> _moveDirInto(Directory src, Directory dst) async {
     final sep = Platform.pathSeparator;
     await dst.create(recursive: true);
-    await for (final e in src.list(recursive: true, followLinks: false)) {
-      if (e is! File) continue;
+    final files = await src.list(recursive: true, followLinks: false).where((e) => e is File).cast<File>().toList();
+    final pairedSidecars = {for (final file in files.where((e) => e.path.endsWith('.mp3'))) '${file.path}.words.json'};
+    for (final e in files) {
+      if (pairedSidecars.contains(e.path) || e.path.endsWith('.mp3.words.json')) continue;
       final rel = e.path.substring(src.path.length + 1);
       final target = File('${dst.path}$sep$rel');
       await target.parent.create(recursive: true);
-      try {
-        if (!await target.exists()) {
-          await e.rename(target.path);
-        } else {
-          await e.delete();
+      if (e.path.endsWith('.mp3')) {
+        final sourceWords = File('${e.path}.words.json');
+        final targetWords = File('${target.path}.words.json');
+        final hasSourceWords = await sourceWords.exists();
+        final hasTarget = await target.exists();
+        final hasTargetWords = await targetWords.exists();
+        // Decide the entire entry before moving either member. In particular,
+        // rejected audio must never donate its timings to retained target audio.
+        final audioConflict = hasTarget && !listEquals(await e.readAsBytes(), await target.readAsBytes());
+        final wordsConflict = hasSourceWords && hasTargetWords &&
+            !listEquals(await sourceWords.readAsBytes(), await targetWords.readAsBytes());
+        if (audioConflict || wordsConflict || !hasTarget && hasTargetWords) {
+          debugPrint('Speech cache migration kept a differing legacy entry: ${e.path}');
+          continue;
         }
-      } catch (_) {}
+        if (hasSourceWords && !hasTargetWords) await sourceWords.rename(targetWords.path);
+        if (hasTarget) { await e.delete(); } else { await e.rename(target.path); }
+        if (await sourceWords.exists()) await sourceWords.delete();
+        continue;
+      }
+      if (!await target.exists()) {
+        await e.rename(target.path);
+      } else if (listEquals(await e.readAsBytes(), await target.readAsBytes())) {
+        await e.delete();
+      } else {
+        debugPrint('Speech cache migration kept a differing legacy file: ${e.path}');
+      }
     }
-    try {
-      await src.delete(recursive: true);
-    } catch (_) {}
+    final directories = await src.list(recursive: true, followLinks: false).where((entry) => entry is Directory).cast<Directory>().toList();
+    directories.sort((a, b) => b.path.length.compareTo(a.path.length));
+    for (final directory in [...directories, src]) {
+      if (await directory.list(followLinks: false).isEmpty) await directory.delete();
+    }
   }
 
   /// 读缓存音频；未命中或空文件返回 null
@@ -201,24 +248,38 @@ class TtsCacheStore {
     }
   }
 
-  /// 原子写入：先写 `.tmp` 再 rename 发布
+  /// 原子写入：先写 `.tmp` 再 rename 发布；失败向调用方抛出。
   Future<void> write(int ci, int off, Uint8List audio,
       {List<SpeechWord>? words}) async {
+    if (audio.isEmpty) throw ArgumentError.value(audio, 'audio', 'Cannot persist empty speech');
+    final d = await dir();
+    final finalPath = '${d.path}${Platform.pathSeparator}${fileName(ci, off)}';
+    final previous = _writes[finalPath] ?? Future<void>.value();
+    final pending = previous.then<void>((_) {}, onError: (Object _, StackTrace __) {})
+        .then((_) => _writeEntry(finalPath, audio, words));
+    _writes[finalPath] = pending;
+    try { await pending; }
+    finally { if (identical(_writes[finalPath], pending)) _writes.remove(finalPath); }
+  }
+
+  static Future<void> _writeEntry(String path, Uint8List audio, List<SpeechWord>? words) async {
+    final tmp = File('$path.tmp'), metadata = File('$path.words.json.tmp');
     try {
-      final d = await dir();
-      final finalPath = '${d.path}${Platform.pathSeparator}${fileName(ci, off)}';
-      final tmpPath = '$finalPath.tmp';
-      final tmp = File(tmpPath);
-      if (words != null) {
-        final metadata = File('$finalPath.words.json.tmp');
-        await metadata.writeAsString(
-            jsonEncode(words.map((w) => w.toJson()).toList()),
-            flush: true);
-        await metadata.rename('$finalPath.words.json');
-      }
       await tmp.writeAsBytes(audio, flush: true);
-      await tmp.rename(finalPath);
-    } catch (_) {}
+      if (words != null) {
+        await metadata.writeAsString(jsonEncode(words.map((w) => w.toJson()).toList()), flush: true);
+      }
+      // Missing timings are safe; timings for the previous audio are not.
+      final oldWords = File('$path.words.json');
+      if (await oldWords.exists()) await oldWords.delete();
+      await tmp.rename(path);
+      if (words != null) await metadata.rename(oldWords.path);
+    } finally {
+      for (final file in [tmp, metadata]) {
+        try { if (await file.exists()) await file.delete(); }
+        on FileSystemException catch (error) { debugPrint('Speech cache staging cleanup failed: $error'); }
+      }
+    }
   }
 
   /// 读取某段音频的字级时间轴（PR2 引入，系统/在线词级高亮共用）
@@ -275,37 +336,32 @@ class TtsCacheStore {
     int? fromChapter,
     int? fromOffset,
   }) async {
-    try {
-      final d = await dir();
-      final data = {
-        // 双键：PC 读 book_id，安卓历史版本读 bookId，值统一为 contentKey
-        'bookId': cacheKey,
-        'book_id': cacheKey,
-        'voice': voice,
-        'rate': rateKey,
-        'total': total,
-        'done': done,
-        'completed': completed.toList()..sort(),
-        'state': state,
-        'fromChapter': ?fromChapter,
-        'fromOffset': ?fromOffset,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-      };
-      final finalPath = '${d.path}${Platform.pathSeparator}$_progressFile';
-      final tmpPath = '$finalPath.tmp';
-      final tmp = File(tmpPath);
-      await tmp.writeAsString(jsonEncode(data), flush: true);
-      await tmp.rename(finalPath);
-    } catch (_) {}
+    final d = await dir();
+    final data = {
+      // 双键：PC 读 book_id，安卓历史版本读 bookId，值统一为 contentKey
+      'bookId': cacheKey,
+      'book_id': cacheKey,
+      'voice': voice,
+      'rate': rateKey,
+      'total': total,
+      'done': done,
+      'completed': completed.toList()..sort(),
+      'state': state,
+      'fromChapter': ?fromChapter,
+      'fromOffset': ?fromOffset,
+      'updatedAt': DateTime.now().millisecondsSinceEpoch,
+    };
+    final finalPath = '${d.path}${Platform.pathSeparator}$_progressFile';
+    final tmpPath = '$finalPath.tmp';
+    final tmp = File(tmpPath);
+    await tmp.writeAsString(jsonEncode(data), flush: true);
+    await tmp.rename(finalPath);
   }
 
   /// 删除本书当前语音/语速的进度文件（清除缓存时调用）
   Future<void> removeProgress() async {
-    try {
-      final d = await dir();
-      final p = File('${d.path}${Platform.pathSeparator}$_progressFile');
-      if (await p.exists()) await p.delete();
-    } catch (_) {}
+    final d = await dir();
+    await _deleteIfPresent(File('${d.path}${Platform.pathSeparator}$_progressFile'));
   }
 
   // ---------- 大小统计与清理 ----------
@@ -330,23 +386,32 @@ class TtsCacheStore {
     }
   }
 
-  /// 清除本书当前语音/语速的全部缓存（含进度），返回删除文件数
+  static bool _isMissing(FileSystemException error) =>
+      error.osError?.errorCode == 2 || Platform.isWindows && error.osError?.errorCode == 3;
+
+  static Future<List<FileSystemEntity>> _cacheEntries(Directory directory, {bool recursive = false}) async {
+    try { return await directory.list(recursive: recursive, followLinks: false).toList(); }
+    on FileSystemException catch (error) {
+      if (_isMissing(error)) return const [];
+      rethrow;
+    }
+  }
+
+  static Future<bool> _deleteIfPresent(FileSystemEntity entry, {bool recursive = false}) async {
+    try { await entry.delete(recursive: recursive); return true; }
+    on FileSystemException catch (error) {
+      if (_isMissing(error)) return false;
+      rethrow;
+    }
+  }
+
+  /// 清除本书当前语音/语速的全部缓存（含进度）；缺失可忽略，其他 IO 失败抛出。
   Future<int> clear() async {
     var n = 0;
-    try {
-      final d = await dir();
-      if (await d.exists()) {
-        await for (final e in d.list(followLinks: false)) {
-          try {
-            if (e is File) {
-              await e.delete();
-              n++;
-            }
-          } catch (_) {}
-        }
-      }
-      await removeProgress();
-    } catch (_) {}
+    final d = await dir();
+    for (final e in await _cacheEntries(d)) {
+      if (e is File && await _deleteIfPresent(e)) n++;
+    }
     return n;
   }
 
@@ -360,7 +425,7 @@ class TtsCacheStore {
         await for (final e in d.list(followLinks: false)) {
           if (e is File) {
             final name = e.uri.pathSegments.last;
-            if (name == _progressFile || name.endsWith('.tmp')) continue;
+            if (!name.endsWith('.mp3') || await e.length() == 0) continue;
             result.add(name);
           }
         }
@@ -390,25 +455,13 @@ class TtsCacheStore {
     }
   }
 
-  /// 清空全部缓存，返回删除文件数
+  /// 清空全部缓存；缺失可忽略，其他 IO 失败抛出。
   static Future<int> clearAll() async {
     var n = 0;
-    try {
-      final root = await rootDir();
-      if (await root.exists()) {
-        await for (final e in root.list(followLinks: false)) {
-          try {
-            if (e is Directory) {
-              await e.delete(recursive: true);
-              n++;
-            } else {
-              await e.delete();
-              n++;
-            }
-          } catch (_) {}
-        }
-      }
-    } catch (_) {}
+    final root = await rootDir();
+    for (final e in await _cacheEntries(root)) {
+      if (await _deleteIfPresent(e, recursive: e is Directory)) n++;
+    }
     return n;
   }
 
@@ -423,7 +476,7 @@ class TtsCacheStore {
       if (!await root.exists()) return result;
       await for (final e in root.list(followLinks: false)) {
         if (e is! Directory) continue;
-        final bookId = e.uri.pathSegments.last;
+        final bookId = e.uri.pathSegments.where((segment) => segment.isNotEmpty).last;
         var total = 0;
         await for (final f in e.list(recursive: true, followLinks: false)) {
           if (f is File) {
@@ -441,25 +494,15 @@ class TtsCacheStore {
     return result;
   }
 
-  /// 清除某本书（contentKey 目录名）的全部语音缓存，返回删除文件数
+  /// 清除某本书的全部语音缓存；缺失可忽略，其他 IO 失败抛出。
   static Future<int> clearBook(String cacheKeyName) async {
     var n = 0;
-    try {
-      final root = await rootDir();
-      final d = Directory(
-          [root.path, cacheKeyName].join(Platform.pathSeparator));
-      if (await d.exists()) {
-        await for (final e in d.list(recursive: true, followLinks: false)) {
-          if (e is File) {
-            try {
-              await e.delete();
-              n++;
-            } catch (_) {}
-          }
-        }
-        await d.delete(recursive: true);
-      }
-    } catch (_) {}
+    final root = await rootDir();
+    final d = Directory([root.path, cacheKeyName].join(Platform.pathSeparator));
+    for (final e in await _cacheEntries(d, recursive: true)) {
+      if (e is File && await _deleteIfPresent(e)) n++;
+    }
+    await _deleteIfPresent(d, recursive: true);
     return n;
   }
 }
@@ -472,14 +515,15 @@ class TtsCacheStore {
 /// 播放与缓存任务共用同一套坐标，保证命中。
 List<int> chapterSentenceOffsets(Chapter ch) {
   final offs = <int>[];
+  final whitespace = RegExp(r'\s');
   var acc = 0;
   for (final p in ch.paragraphs) {
-    final cpMap = utf16ToCodePointMap(p.display);
     for (final s in p.sentences) {
-      final ds = s.displayStart.clamp(0, p.display.length);
-      offs.add(acc + cpMap[ds]);
+      var ds = s.displayStart.clamp(0, p.display.length);
+      while (ds < p.display.length && whitespace.hasMatch(p.display[ds])) { ds++; }
+      offs.add(ch.sourceCoordinates[acc + ds]);
     }
-    acc += codePointLength(p.display) + 1;
+    acc += p.display.length + 1;
   }
   return offs;
 }

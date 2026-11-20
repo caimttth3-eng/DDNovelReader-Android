@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
@@ -99,10 +99,26 @@ class ReadingText {
     final chapters = <Chapter>[];
     for (final chapter in source.chapters) {
       final result = _paragraphs(chapter, merge, indent, filter, pauseSettings);
-      chapters.add(Chapter(title: chapter.title, paragraphs: result.$1));
+      final sourceAnchors = <int>[];
+      var sourceOffset = 0;
+      for (final paragraph in chapter.paragraphs) {
+        for (var i = 0; i < paragraph.display.length; i++) {
+          if (!_spaces.hasMatch(paragraph.display[i])) sourceAnchors.add(chapter.sourceCoordinates[sourceOffset + i]);
+        }
+        sourceOffset += paragraph.display.length + 1;
+      }
+      sourceAnchors.add(chapter.sourceCoordinates.last);
+      int project(int anchor) => sourceAnchors[anchor.clamp(0, sourceAnchors.length - 1)];
+      final coordinates = <int>[];
+      for (var p = 0; p < result.$1.length; p++) {
+        coordinates.addAll(result.$2[p].take(result.$1[p].display.length).map(project));
+        if (p < result.$1.length - 1) coordinates.add(project(result.$2[p].last));
+      }
+      coordinates.add(project(result.$2.last.last));
+      chapters.add(Chapter(title: chapter.title, paragraphs: result.$1, sourceCoordinates: coordinates));
       maps.add(result.$2);
     }
-    final book = Book(id: source.id, title: source.title, filePath: source.filePath,
+    final book = Book(id: source.id, title: source.title, filePath: source.filePath, contentKey: source.contentKey,
       format: source.format, addedAt: source.addedAt, chapters: [
         ...chapters,
       ]);

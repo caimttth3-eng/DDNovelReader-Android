@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -28,7 +28,7 @@ class SnapshotLookup {
 class BookSnapshotCache {
   static final shared = BookSnapshotCache();
   // Bump when parser/preparation semantics or the serialized graph change.
-  static const schema = 2;
+  static const schema = 3;
   static const maxBytes = 64 * 1024 * 1024;
   final String? directoryPath;
   int _generation = 0;
@@ -175,15 +175,17 @@ Future<bool> _writeSnapshot(String path, List<Object> key, Map<String, dynamic> 
 }
 
 Map<String, dynamic> _bookJson(Book b) => {'id': b.id, 'title': b.title, 'path': b.filePath,
+  'contentKey': b.contentKey,
   'format': b.format.name, 'added': b.addedAt.toIso8601String(), 'chapters': [for (final c in b.chapters)
-    {'title': c.title, 'paragraphs': [for (final p in c.paragraphs)
+    {'title': c.title, 'coordinates': c.sourceCoordinates, 'paragraphs': [for (final p in c.paragraphs)
       {'display': p.display, 'tts': p.tts, 'starts': p.sentenceStartTts, 'sentences': [for (final s in p.sentences)
         {'display': s.display, 'tts': s.tts, 'start': s.displayStart, 'end': s.displayEnd, 'pause': s.pauseAfterMilliseconds}]}]}]};
 
 Book _bookFromJson(Map<String, dynamic> b) => Book(id: b['id'] as String, title: b['title'] as String,
   filePath: b['path'] as String, format: BookFormat.values.byName(b['format'] as String),
+  contentKey: b['contentKey'] as String? ?? '',
   addedAt: DateTime.parse(b['added'] as String), chapters: [for (final c in b['chapters'] as List)
-    Chapter(title: c['title'] as String, paragraphs: [for (final p in c['paragraphs'] as List)
+    Chapter(title: c['title'] as String, sourceCoordinates: (c['coordinates'] as List).cast<int>(), paragraphs: [for (final p in c['paragraphs'] as List)
       Paragraph(display: p['display'] as String, tts: p['tts'] as String, sentenceStartTts: (p['starts'] as List).cast<int>(),
         sentences: [for (final s in p['sentences'] as List) Sentence(s['display'] as String, s['tts'] as String,
           displayStart: s['start'] as int, displayEnd: s['end'] as int, pauseAfterMilliseconds: s['pause'] as int)])])]);

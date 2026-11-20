@@ -1,5 +1,6 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// iOS / Android 系统语音的一个可选音色。
@@ -59,7 +60,11 @@ class SystemTtsClient {
   Future<bool> openSettings() async {
     try {
       return await channel.invokeMethod<bool>('openSettings') ?? false;
-    } catch (_) {
+    } on PlatformException catch (error) {
+      debugPrint('System speech settings unavailable: ${error.code}');
+      return false;
+    } on MissingPluginException {
+      debugPrint('System speech settings are not supported.');
       return false;
     }
   }
@@ -68,7 +73,7 @@ class SystemTtsClient {
   /// 不支持或未实现时返回空列表，调用方保留默认音色入口。
   Future<List<SystemVoice>> voices() async {
     try {
-      final raw = await channel.invokeMethod<List<dynamic>>('voices');
+      final raw = await _enumerateVoices().timeout(const Duration(seconds: 15));
       if (raw == null) return const [];
       return raw.whereType<Map>().map((m) => SystemVoice(
         id: '${m['id'] ?? ''}',
@@ -78,10 +83,24 @@ class SystemTtsClient {
         gender: '${m['gender'] ?? ''}',
       )).where((v) => v.id.isNotEmpty).toList();
     } on MissingPluginException {
+      debugPrint('System voice enumeration is not supported.');
       return const [];
-    } on PlatformException {
+    } on PlatformException catch (error) {
+      debugPrint('System voice enumeration failed: ${error.code}');
+      return const [];
+    } on TimeoutException catch (error) {
+      debugPrint('System voice enumeration timed out; keeping the default entry: $error');
+      return const [];
+    } catch (error) {
+      debugPrint('System voice enumeration failed; keeping the default entry: $error');
       return const [];
     }
+  }
+
+  Future<List<dynamic>?> _enumerateVoices() async {
+    await initialize();
+    if (_disposed || _owner != this) return null;
+    return channel.invokeMethod<List<dynamic>>('voices');
   }
 
   /// [startOffset] is a requested visible-text cursor or the latest reported

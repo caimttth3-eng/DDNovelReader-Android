@@ -13,14 +13,14 @@ import 'package:duoduo_langdu/services/sync_engine.dart';
 import 'package:duoduo_langdu/services/webdav_client.dart';
 
 /// 端到端：真跑 HTTP 打到本机 mock WebDAV（tools/mock_webdav.py）。
-/// 默认端口 8090：8080 常被桌面版/其它服务占用，误连时会 401。
-/// 需要 mock server 监听 127.0.0.1:8090/dav，否则整组跳过。
-const _port = int.fromEnvironment('DD_MOCK_DAV_PORT', defaultValue: 8090);
+/// 必须通过 DD_MOCK_DAV_PORT 指定本轮自有 mock 端口，不探测其他本机服务。
+const _port = int.fromEnvironment('DD_MOCK_DAV_PORT');
 final _server = 'http://127.0.0.1:$_port/dav';
 const _user = 'demo';
 const _pass = 'demo';
 
 Future<bool> _serverUp() async {
+  if (_port <= 0) return false;
   try {
     final s = await Socket.connect('127.0.0.1', _port,
         timeout: const Duration(seconds: 1));
@@ -34,7 +34,7 @@ Future<bool> _serverUp() async {
 BookMeta _meta(String ck) => BookMeta(
       id: 'local-id',
       title: '测试书',
-      filePath: '/books/test.txt',
+      filePath: '',
       format: 'txt',
       addedAt: DateTime(2026, 1, 1),
       contentKey: ck,
@@ -146,8 +146,8 @@ void main() {
     expect(p, isNotNull);
     expect(p!.chapterIndex, 9);
     expect(p.paragraphIndex, 2);
-    // 记录里带段落坐标 → 不需要换算，但 char_offset 原值必须保留以便回写 PC
-    expect(p.charOffsetInChapter, isNull);
+    // Wire canonical offset wins even when Android paragraph fields are present.
+    expect(p.charOffsetInChapter, 888);
     expect(p.pcCharOffset, 888);
     expect(p.toPcJson()['char_offset'], 888);
     expect(p.percent, closeTo(0.31, 0.001));
@@ -161,6 +161,7 @@ void main() {
     }
     const sample = '第一章 开端\n正文一。\n\n第二章 转折\n正文二。\n';
     final tmp = Directory.systemTemp.createTempSync('dd_import_src');
+    addTearDown(() => tmp.delete(recursive: true));
     final srcPath = '${tmp.path}/remote_book.txt';
     File(srcPath).writeAsStringSync(sample);
     // 先用本机解析器算出 key（等价于桌面端算出的同一个 key）
@@ -197,7 +198,7 @@ void main() {
         'format': 'txt',
         'total_chars': probe.totalDisplayLength,
         'chapter_count': probe.chapterCount,
-        'progress': {'chapter_idx': 1, 'char_offset': 30, 'percent': 0.5},
+        'progress': {'chapter_idx': 1, 'char_offset': 30, 'percent': 0.5, 'percent_unit': 'ratio'},
         'bookmarks': [
           {
             'id': 'bm1',
@@ -287,11 +288,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final storage = AppStorage();
     await storage.saveSettings(_settings(dir));
-    final eng = SyncEngine(
-      storage: storage,
-      annotations: AnnotationStore(),
-      sourceDirOverride: Directory.systemTemp.createTempSync('dd_nosrc').path,
-    );
+    final temporary = Directory.systemTemp.createTempSync('dd_nosrc');
+    addTearDown(() => temporary.delete(recursive: true));
+    final eng = SyncEngine(storage: storage, annotations: AnnotationStore(), sourceDirOverride: temporary.path);
     final rep = await eng.sync();
     expect(rep.ok, isTrue, reason: rep.error);
     expect(rep.imported, 0);

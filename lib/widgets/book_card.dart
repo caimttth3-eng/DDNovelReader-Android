@@ -23,6 +23,7 @@ class BookCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final aspect = 9 / 16;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return AspectRatio(
       aspectRatio: aspect,
       child: Material(
@@ -46,10 +47,10 @@ class BookCard extends StatelessWidget {
                 width: 1.5,
               ),
               // 木纹纹理：用多条纵向渐变 + 木节效果
-              gradient: const LinearGradient(
+              gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
+                colors: dark ? const [Color(0xFF60462E), Color(0xFF523B27), Color(0xFF463222), Color(0xFF38281B)] : const [
                   Color(0xFFB07A3E),
                   Color(0xFF9A6733),
                   Color(0xFF8A5A2B),
@@ -214,6 +215,8 @@ class AddBookCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return AspectRatio(
       aspectRatio: 9 / 16,
       child: Material(
@@ -225,13 +228,13 @@ class AddBookCard extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: const Color(0xFFB5A58A),
+                color: colors.outline,
                 width: 1.5,
               ),
-              gradient: const LinearGradient(
+              gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
+                colors: dark ? [colors.surfaceContainerHighest, colors.surfaceContainer] : const [
                   Color(0xFFD9C7A8),
                   Color(0xFFCBB58F),
                   Color(0xFFBFA982),
@@ -256,16 +259,15 @@ class AddBookCard extends StatelessWidget {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.add,
-                            size: 34, color: Color(0xFF8A5A2B)),
+                        Icon(Icons.add, size: 34, color: dark ? colors.primary : const Color(0xFF8A5A2B)),
                         const SizedBox(height: 8),
                         Text(
                           T('addBook'),
                           style: TextStyle(
-                            color: const Color(0xFF6B4A20),
+                            color: dark ? colors.onSurface : const Color(0xFF6B4A20),
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            shadows: [
+                            shadows: dark ? null : [
                               Shadow(
                                 color: Colors.white.withValues(alpha: 0.5),
                                 blurRadius: 1,

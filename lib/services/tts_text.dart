@@ -16,7 +16,8 @@ import 'dart:math';
 
 import 'unicode_symbols.dart';
 
-/// 清洗结果：纯净朗读文本 + 「纯净下标 → 原文 UTF-16 下标」映射
+/// 清洗结果：纯净朗读文本 + 「纯净 UTF-16 下标 → 原文 UTF-16 下标」映射。
+/// [cmap] 为 [clean] 的每个 code unit 保留一项（不含结束哨兵）。
 class TtsClean {
   final String clean;
   final List<int> cmap;
@@ -61,9 +62,12 @@ bool _isDecorCp(int cp) => isDecorSymbolCp(cp);
 /// 行尾连续装饰符号（与 PC _TAIL_DECOR_RE 一致）：如 -------------、====、***
 final RegExp _tailDecorRe = RegExp(r'[=\-_~*#·—]{3,}\s*$');
 
-/// 有朗读价值的最小字符集（与 PC _READABLE_RE 一致）
-final RegExp _readableRe =
-    RegExp(r'[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7afA-Za-z0-9]');
+/// 有朗读价值的最小字符集；补充平面汉字也不能当作装饰行丢弃。
+final RegExp _readableRe = RegExp(
+  r'[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7afA-Za-z0-9'
+  r'\u{20000}-\u{2ee5f}\u{2f800}-\u{2fa1f}\u{30000}-\u{3347f}]',
+  unicode: true,
+);
 
 /// 过滤装饰行（与 PC _strip_decor_lines 同逻辑）：
 /// 1) 截掉行尾连续装饰符号（保留行首正文）；
@@ -94,7 +98,7 @@ final RegExp _readableRe =
   return (out.toString(), idx);
 }
 
-/// 把原文清洗为朗读文本，并返回「纯净下标 → 原文下标」映射。
+/// 把原文清洗为朗读文本，并返回「纯净 UTF-16 下标 → 原文 UTF-16 下标」映射。
 ///
 /// 输入应是**整章**正文（段落用 '\n' 连接）；与 PC 端 ch.tts_content() 同口径。
 TtsClean preprocessForTts(String content) {
@@ -160,43 +164,53 @@ TtsClean preprocessForTts(String content) {
     }
     // 普通字符保留
     out.write(ch);
-    cmap.add(u16[i]);
+    for (var unit = 0; unit < ch.length; unit++) {
+      cmap.add(u16[i] + unit);
+    }
     i++;
   }
   return TtsClean(out.toString(), cmap);
 }
 
-/// 切句：返回 [(起始纯净下标, 结束纯净下标)) 列表，顺序即朗读顺序。
+/// 切句：返回纯净文本的 UTF-16 半开区间，供 substring 使用，不拆代理对。
 ///
 /// 与 PC split_sentences 一致：先按句末标点切（标点归前句），
-/// 再对超长句按「，」→「,」→ 硬切 160 三级回退。纯净文本没有空白，
+/// 再按 Unicode 码点计数，对超长句按「，」→「,」→ 硬切 160 三级回退。
+/// 纯净文本没有空白，
 /// 因此 PC 的 strip / '\n' 二次切在这里天然不产生额外切点。
 List<(int, int)> splitSentenceRanges(String clean) {
+  final codePoints = clean.runes.toList();
+  final utf16Offsets = <int>[0];
+  for (final cp in codePoints) {
+    utf16Offsets.add(utf16Offsets.last + (cp > 0xffff ? 2 : 1));
+  }
   final parts = <(int, int)>[];
   var start = 0;
-  for (var i = 0; i < clean.length; i++) {
-    if (_kSentEnd.contains(clean[i])) {
+  for (var i = 0; i < codePoints.length; i++) {
+    if (_kSentEnd.contains(String.fromCharCode(codePoints[i]))) {
       parts.add((start, i + 1));
       start = i + 1;
     }
   }
-  if (start < clean.length) parts.add((start, clean.length));
+  if (start < codePoints.length) parts.add((start, codePoints.length));
 
   final out = <(int, int)>[];
   for (final (s, e) in parts) {
-    out.addAll(_hardSplit(clean, s, e));
+    for (final (a, b) in _hardSplit(codePoints, s, e)) {
+      out.add((utf16Offsets[a], utf16Offsets[b]));
+    }
   }
   return out;
 }
 
-/// 超长句硬切（与 PC _hard_split 同逻辑，含 80 字半程阈值）
-List<(int, int)> _hardSplit(String s, int start, int end) {
+/// 超长句硬切，内部下标均为码点（与 PC 同逻辑，含 80 字半程阈值）。
+List<(int, int)> _hardSplit(List<int> codePoints, int start, int end) {
   final out = <(int, int)>[];
   var a = start;
   while (end - a > _maxChunk) {
     final hi = a + _maxChunk - 1;
-    var cut = s.lastIndexOf('，', hi);
-    if (cut < a + _maxChunk ~/ 2) cut = s.lastIndexOf(',', hi);
+    var cut = codePoints.lastIndexOf(0xff0c, hi);
+    if (cut < a + _maxChunk ~/ 2) cut = codePoints.lastIndexOf(0x2c, hi);
     if (cut < a + _maxChunk ~/ 2) cut = a + _maxChunk;
     out.add((a, cut));
     a = cut;
@@ -252,4 +266,3 @@ int codePointLength(String s) {
   }
   return max(cp, 0);
 }
-
