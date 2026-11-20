@@ -1,12 +1,15 @@
 // 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/progress.dart';
 import 'speech_breaks.dart';
+import 'system_tts.dart';
 
 /// 本地持久化：
 ///  - 书架书籍列表（BookMeta）
@@ -14,6 +17,7 @@ import 'speech_breaks.dart';
 ///  - 阅读页设置（亮度/字号/行距/语速/音源）
 class AppStorage {
   static const _booksKey = 'duoduo.books.v1';
+  static const _bookSpeechKey = 'duoduo.bookSpeech.v1';
   static const _progressPrefix = 'duoduo.progress.';
   static const _settingsKey = 'duoduo.settings.v1';
   static const _lastBookKey = 'duoduo.lastBookId';
@@ -92,6 +96,77 @@ class AppStorage {
     }
     if (changed) await saveBooks(out);
     return out;
+  }
+
+  /// 按书记忆音色/语速（v1.3.1）。
+  Future<Map<String, dynamic>?> loadBookSpeech(String bookId) async {
+    await _speechWrites;
+    final sp = await _sp;
+    final raw = sp.getString(_bookSpeechKey);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final item = map[bookId];
+      return item is Map ? item.cast<String, dynamic>() : null;
+    } catch (error) {
+      debugPrint('Loading book speech preferences failed: $error');
+      return null;
+    }
+  }
+
+  static Future<void>? _speechWrites;
+
+  Future<void> saveBookSpeech(String bookId, {String? voice, double? rate}) {
+    final write = (_speechWrites ?? Future<void>.value()).then((_) => _saveBookSpeech(bookId, voice: voice, rate: rate));
+    final settled = write.then<void>((_) {}, onError: (Object error, StackTrace stack) {
+      debugPrint('Saving book speech preferences failed: $error');
+    });
+    _speechWrites = settled;
+    unawaited(settled.then((_) {
+      if (identical(_speechWrites, settled)) _speechWrites = null;
+    }));
+    return write;
+  }
+
+  Future<void> _saveBookSpeech(String bookId, {String? voice, double? rate}) async {
+    final sp = await _sp;
+    Map<String, dynamic> map = {};
+    try {
+      final raw = sp.getString(_bookSpeechKey);
+      if (raw != null && raw.isNotEmpty) {
+        map = (jsonDecode(raw) as Map).cast<String, dynamic>();
+      }
+    } catch (error) {
+      debugPrint('Reading saved book speech preferences failed: $error');
+    }
+    final item = (map[bookId] as Map?)?.cast<String, dynamic>() ?? {};
+    if (voice != null) item['voice'] = voice;
+    if (rate != null) item['rate'] = rate;
+    map.remove(bookId);
+    map[bookId] = item;
+    // 只保留最近 200 本，避免无限增长。
+    if (map.length > 200) {
+      final keys = map.keys.take(map.length - 200).toList();
+      for (final k in keys) {
+        map.remove(k);
+      }
+    }
+    if (!await sp.setString(_bookSpeechKey, jsonEncode(map))) {
+      throw StateError('Book speech preferences could not be saved.');
+    }
+  }
+
+  Future<ReadingSettings> loadReadingSettings(String bookId) async {
+    final settings = ReadingSettings.fromJson(await loadSettings());
+    final saved = await loadBookSpeech(bookId);
+    if (saved?['voice'] case final String voice when voice.isNotEmpty) {
+      settings.voice = voice;
+      settings.systemFallbackActive = false;
+    }
+    if (saved?['rate'] case final num rate when rate.isFinite) settings.speechRate = rate.toDouble();
+    settings.speechRate = ReadingSettings.normalizeSpeechRate(settings.speechRate,
+      ReadingSettings.maxSpeechRateFor(settings.speechPauseVoice));
+    return settings;
   }
 
   Future<void> saveBooks(List<BookMeta> books) async {
@@ -263,8 +338,8 @@ class AppStorage {
 class ReadingSettings {
   static const speechRateStep = 0.02;
   static const speechRateDivisions = 125;
-  static double normalizeSpeechRate(double rate) =>
-      (rate.clamp(0.5, 3.0) * 50).round() / 50;
+  static double normalizeSpeechRate(double rate, [double max = 3.0]) =>
+      (rate.clamp(0.5, max) * 50).round() / 50;
   static const defaultPrefetchSentences = 8;
   static const minPrefetchSentences = 0;
   static const maxPrefetchSentences = 100;
@@ -303,19 +378,22 @@ class ReadingSettings {
   // online selection is the same Xiaoxiao voice used by the reader.
   static const defaultPauseVoice = 'zh-CN-XiaoxiaoNeural';
   static const systemPauseVoice = '__system_tts__';
+  static double maxSpeechRateFor(String voice) =>
+    SystemTtsClient.isSystemVoiceId(voice) ? (Platform.isIOS ? 2.0 : 3.0) : 2.0;
   static String _pauseVoiceKey(String value) =>
     value.trim().isEmpty ? defaultPauseVoice : value.trim();
   String get speechPauseVoice => systemFallbackActive ? systemPauseVoice : _pauseVoiceKey(voice);
   SpeechPauseSettings get effectiveSpeechPauses => speechPausesForVoice(speechPauseVoice);
   SpeechPauseSettings speechPausesForVoice(String voiceId) =>
-    _pauseVoiceKey(voiceId) == systemPauseVoice
+    SystemTtsClient.isSystemVoiceId(_pauseVoiceKey(voiceId))
       ? perVoiceSpeechPauses[systemPauseVoice] ?? speechPauses
       : const SpeechPauseSettings();
-  bool hasVoiceSpeechPauses(String voiceId) => _pauseVoiceKey(voiceId) == systemPauseVoice &&
+  bool hasVoiceSpeechPauses(String voiceId) => SystemTtsClient.isSystemVoiceId(_pauseVoiceKey(voiceId)) &&
     perVoiceSpeechPauses.containsKey(systemPauseVoice);
   void setVoiceSpeechPauses(String voiceId, SpeechPauseSettings pauses) =>
-    perVoiceSpeechPauses[_pauseVoiceKey(voiceId)] = pauses;
-  void clearVoiceSpeechPauses(String voiceId) => perVoiceSpeechPauses.remove(_pauseVoiceKey(voiceId));
+    perVoiceSpeechPauses[SystemTtsClient.isSystemVoiceId(voiceId) ? systemPauseVoice : _pauseVoiceKey(voiceId)] = pauses;
+  void clearVoiceSpeechPauses(String voiceId) =>
+    perVoiceSpeechPauses.remove(SystemTtsClient.isSystemVoiceId(voiceId) ? systemPauseVoice : _pauseVoiceKey(voiceId));
 
   // Legacy global and online overrides remain serialized for compatibility.
   // Only the system voice may consume customized pauses. Its explicit profile

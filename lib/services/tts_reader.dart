@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'edge_tts.dart';
 import 'tts_cache_store.dart';
 import '../models/speech_word.dart';
+import '../models/book.dart';
 import 'system_tts.dart';
 
 enum TtsState { idle, playing, paused, stopped }
@@ -28,6 +29,7 @@ class TtsReader {
   static const systemVoice = SystemTtsClient.voiceId;
   final SystemTtsClient _system = SystemTtsClient();
   final Map<String, EdgeSynthCancelToken> _requestTokens = {};
+  final Set<EdgeSynthCancelToken> _chapterHeadTokens = {};
   final Map<int, Object> _audioFailures = {};
   Object? lastFailure;
   ValueChanged<bool>? onLoadingChanged;
@@ -38,7 +40,8 @@ class TtsReader {
   Object? _onlineNetworkFailure;
   ValueChanged<bool>? onVoiceModeChanged;
   bool get usingSystemFallback => _usingSystemFallback;
-  bool get usesSystemVoice => _voice == systemVoice || _usingSystemFallback;
+  bool get usesSystemVoice => SystemTtsClient.isSystemVoiceId(_voice) || _usingSystemFallback;
+  String? get _systemVoiceIdentifier => SystemTtsClient.identifierFrom(_voice);
   static const defaultVoice = 'zh-CN-XiaoxiaoNeural';
   static const _positionReadTimeout = Duration(seconds: 2);
   static const _loadingIndicatorDelay = Duration(milliseconds: 150);
@@ -137,7 +140,7 @@ class TtsReader {
   /// Restore the saved effective mode after restoring the selected voice.
   /// Connectivity changes and chapter starts never clear this sticky choice.
   void restoreSystemFallback(bool active) {
-    final fallback = active && _systemFallbackEnabled && _voice != systemVoice;
+    final fallback = active && _systemFallbackEnabled && !SystemTtsClient.isSystemVoiceId(_voice);
     if (_usingSystemFallback == fallback) return;
     _usingSystemFallback = fallback;
     if (fallback) _cancelRequests();
@@ -155,6 +158,8 @@ class TtsReader {
         _audioRequests.remove(entry.key); _requestTokens.remove(entry.key);
         entry.value.cancel();
       }
+      for (final token in _chapterHeadTokens.toList()) { token.cancel(); }
+      _chapterHeadTokens.clear();
       // Unlike stop/jump, do not change content generation: a cache read
       // already in progress may still supply perfectly usable offline audio.
       _networkEvents.add(false);
@@ -213,6 +218,37 @@ class TtsReader {
       if (_state != TtsState.playing) return;
       _sentenceFinished();
     });
+  }
+
+  Future<List<SystemVoice>> systemVoices() => _system.voices();
+
+  Future<bool> openSystemVoiceSettings() => _system.openSettings();
+
+  Future<void> prefetchChapterHead(Chapter chapter, int chapterIndex, TtsCacheStore store) async {
+    if (_disposed || usesSystemVoice || !_networkAvailable || _state != TtsState.playing) return;
+    final generation = _contentGeneration, voice = _voice, rate = _rateStr();
+    final offsets = chapterSentenceOffsets(chapter);
+    final sentences = chapter.paragraphs.expand((paragraph) => paragraph.sentences).take(3).toList();
+    await Future.wait([for (var i = 0; i < sentences.length; i++) () async {
+      final token = EdgeSynthCancelToken();
+      _chapterHeadTokens.add(token);
+      try {
+        if (sentences[i].tts.isEmpty || await store.exists(chapterIndex, offsets[i])) return;
+        if (_disposed || generation != _contentGeneration || token.cancelled || !_networkAvailable) return;
+        List<SpeechWord> words = [];
+        final audio = await _synthesize(sentences[i].tts, voice: voice, rate: rate,
+          onWords: (value) => words = value, cancelToken: token).timeout(const Duration(seconds: 30));
+        if (_disposed || generation != _contentGeneration || token.cancelled || audio.isEmpty) return;
+        final write = store.write(chapterIndex, offsets[i], audio, words: words);
+        _cacheWrites.add(write);
+        try { await write; } finally { _cacheWrites.remove(write); }
+      } catch (error) {
+        if (!token.cancelled) debugPrint('Next-chapter speech prefetch failed: $error');
+      } finally {
+        token.cancel();
+        _chapterHeadTokens.remove(token);
+      }
+    }()]);
   }
 
   /// 设置音色（zh-CN 等）
@@ -640,6 +676,7 @@ class TtsReader {
       try {
         await _system.speak(_sentences[sentence], _speechRate,
           startOffset: _systemResumeOffset,
+          voiceId: _systemVoiceIdentifier,
           onDone: () {
             if (_disposed || generation != _playGeneration || _state != TtsState.playing) return;
             _sentenceFinished();
@@ -740,6 +777,8 @@ class TtsReader {
     _contentGeneration++;
     _prefetchGeneration++; _prefetching = false;
     for (final token in _requestTokens.values.toList()) { token.cancel(); }
+    for (final token in _chapterHeadTokens.toList()) { token.cancel(); }
+    _chapterHeadTokens.clear();
     _requestTokens.clear(); _audioFailures.clear(); _audioRequests.clear();
   }
 

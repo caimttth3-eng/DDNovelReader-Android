@@ -1,4 +1,4 @@
-import Flutter
+﻿import Flutter
 import UIKit
 
 @main
@@ -12,5 +12,8 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "SystemSpeechPlugin") {
+      SystemSpeechPlugin.register(with: registrar)
+    }
   }
 }

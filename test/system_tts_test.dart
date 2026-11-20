@@ -35,6 +35,36 @@ void main() {
       return null;
     });
   });
+  test('enumeration initializes the engine and selected native voice survives resume offsets', () async {
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+      calls.add(call);
+      if (call.method == 'voices') {
+        return [
+        {'id': 'native-one', 'name': 'Offline voice', 'lang': 'zh-CN', 'quality': 'enhanced'},
+        ];
+      }
+      if (call.method == 'speak') {
+        spoken.add(call.arguments as Map);
+        scheduleMicrotask(() => emit('start', {'id': spoken.last['id']}));
+      }
+      return null;
+    });
+    final reader = TtsReader()..setVoice('${SystemTtsClient.voicePrefix}native-one')..setSystemFallbackEnabled(true);
+    addTearDown(reader.dispose);
+    final voices = await reader.systemVoices();
+    expect(calls.take(2).map((call) => call.method), ['initialize', 'voices']);
+    expect(voices.single.name, 'Offline voice');
+    expect(reader.usesSystemVoice, isTrue);
+    reader.restoreSystemFallback(true);
+    expect(reader.usingSystemFallback, isFalse);
+    await reader.start(['甲乙丙丁。'], initialTtsOffset: 2);
+    expect(spoken.single['voice'], 'native-one'); expect(spoken.single['text'], '丙丁。');
+    await reader.pause(); await reader.resume();
+    expect(spoken.last['voice'], 'native-one'); expect(spoken.last['text'], '丙丁。');
+    reader.setVoice(TtsReader.systemVoice);
+    await reader.start(['默认音色。']);
+    expect(spoken.last.containsKey('voice'), isFalse);
+  });
   test('system voice uses phone engine, range callbacks, pause and sentence continuation', () async {
     final reader = TtsReader()..setVoice(TtsReader.systemVoice);
     final words = <(int,int)>[];

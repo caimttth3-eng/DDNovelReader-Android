@@ -92,6 +92,17 @@ void main() {
     }
   });
 
+  testWidgets('prepared opening route applies per-book speech before handing off to the reader', (tester) async {
+    final storage = AppStorage();
+    await storage.saveBookSpeech(readableBook().id, voice: '__system_tts__:saved-offline', rate: 2.4);
+    await open(tester, _NavigationLog(), () async => (readableBook(), null));
+    await tester.pumpAndSettle();
+    final reader = tester.widget<ReaderScreen>(find.byType(ReaderScreen));
+    expect(reader.initialData!.settings.voice, '__system_tts__:saved-offline');
+    expect(reader.initialData!.settings.speechRate, 2.4);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
   testWidgets('a late successful load cannot reopen the reader after returning', (tester) async {
     final log = _NavigationLog(), pending = Completer<(Book, BookProgress?)>();
     await open(tester, log, () => pending.future);
@@ -214,7 +225,7 @@ void main() {
     AppAppearance.updateSystemBrightness(Brightness.dark);
     completions[1].complete(ReaderPreparation.prepareSynchronously(requests[1])); await tester.pump(); await tester.pump();
     final reader = tester.widget<ReaderScreen>(find.byType(ReaderScreen));
-    expect(reader.initialData!.settings.fontSize, 45); expect(reader.initialData!.settings.speechRate, 2.3);
+    expect(reader.initialData!.settings.fontSize, 45); expect(reader.initialData!.settings.speechRate, 2);
     expect(tester.widget<Scaffold>(find.descendant(of: find.byType(ReaderScreen), matching: find.byType(Scaffold))).backgroundColor,
       const Color(0xFF1A1A1A));
     expect(find.byType(CircularProgressIndicator), findsNothing); expect(tester.takeException(), isNull);

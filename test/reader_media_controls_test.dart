@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:audio_session/audio_session.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -70,6 +71,51 @@ void main() {
   Book book(String id) => Book(id: id, title: '媒体暂停继续', filePath: '', format: BookFormat.txt,
     addedAt: DateTime(2026), chapters: [Chapter(title: '第一章',
       paragraphs: [ReadingText.paragraph('清晨山间的风吹过树林。朋友带来一封远方的来信。')])]);
+
+  testWidgets('interruption resumes only interrupted playback and never resurrects a manual pause', (tester) async {
+    final events = StreamController<AudioInterruptionEvent>.broadcast();
+    addTearDown(events.close);
+    final storage = AppStorage();
+    final speech = _MediaSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('interruption'), storage: storage,
+      ttsReader: speech, interruptionEvents: events.stream)));
+    await tester.pumpAndSettle();
+    events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    expect(speech.resumes, 0);
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    events.add(AudioInterruptionEvent(true, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused); expect(handler.playbackState.value.playing, isFalse);
+    events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    expect(speech.resumes, 1); expect(handler.playbackState.value.playing, isTrue);
+    events.add(AudioInterruptionEvent(true, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    await completeAction(tester, handler.pause()); await tester.pumpAndSettle();
+    events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    expect(speech.resumes, 1); expect(speech.state, TtsState.paused);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+    events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pump();
+    expect(speech.resumes, 1); expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('manual pause during interruption recovery cancels a delayed resume', (tester) async {
+    final events = StreamController<AudioInterruptionEvent>.broadcast();
+    addTearDown(events.close);
+    final speech = _MediaSpeech();
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('delayed-interruption'), storage: AppStorage(),
+      ttsReader: speech, interruptionEvents: events.stream)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    final pauseGate = Completer<void>();
+    speech.pendingPause = pauseGate;
+    addTearDown(() { if (!pauseGate.isCompleted) pauseGate.complete(); });
+    events.add(AudioInterruptionEvent(true, AudioInterruptionType.pause)); await tester.pumpAndSettle();
+    expect(speech.state, TtsState.paused);
+    events.add(AudioInterruptionEvent(false, AudioInterruptionType.pause)); await tester.pump();
+    await completeAction(tester, handler.pause());
+    pauseGate.complete(); await tester.pumpAndSettle();
+    expect(speech.resumes, 0); expect(speech.state, TtsState.paused);
+    expect(handler.playbackState.value.playing, isFalse);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
 
   for (final voice in [TtsReader.defaultVoice, TtsReader.systemVoice]) {
     testWidgets('notification and screen pause/resume share one playback state for $voice', (tester) async {
@@ -365,6 +411,7 @@ class _MediaSpeech extends TtsReader {
   int starts = 0, resumes = 0;
   int sentenceIndex = -1;
   Completer<void>? pendingStart;
+  Completer<void>? pendingPause;
   void changeState(TtsState state) { status = state; onStateChanged?.call(); }
   void emitSentence(int index) { sentenceIndex = index; onSentenceChanged?.call(index); }
   @override int get currentIndex => sentenceIndex;
@@ -377,6 +424,7 @@ class _MediaSpeech extends TtsReader {
   @override Future<void> pause() async {
     changeState(TtsState.paused);
     if (pendingStart != null && !pendingStart!.isCompleted) pendingStart!.complete();
+    await pendingPause?.future;
   }
   @override Future<bool> resume() async { resumes++; changeState(TtsState.playing); return true; }
   @override Future<void> stop() async { changeState(TtsState.stopped); }

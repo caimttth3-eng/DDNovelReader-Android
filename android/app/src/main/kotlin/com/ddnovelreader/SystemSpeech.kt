@@ -1,7 +1,10 @@
 package com.ddnovelreader
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
+import android.provider.Settings
+import android.speech.tts.Voice
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -63,12 +66,59 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
                         chunkIndex = 0
                         started = false
                         val rate = call.argument<Number>("rate")?.toDouble() ?: 1.0
+                        val voiceName = call.argument<String>("voice")
+                        if (engine != null) {
+                            try {
+                                val selected = if (voiceName == null) engine!!.defaultVoice
+                                    else engine!!.voices?.firstOrNull { it.name == voiceName }
+                                if (selected == null || engine!!.setVoice(selected) != TextToSpeech.SUCCESS) {
+                                    requestId = null
+                                    result.error("voice_unavailable", "System speech voice is unavailable", null)
+                                    return@setMethodCallHandler
+                                }
+                            } catch (error: RuntimeException) {
+                                requestId = null
+                                result.error("voice_unavailable", "System speech voice selection failed", null)
+                                return@setMethodCallHandler
+                            }
+                        }
                         if (!rate.isFinite() || engine!!.setSpeechRate(SystemSpeechRate.toPlatformRate(rate)) != TextToSpeech.SUCCESS) {
                             requestId = null
                             result.error("speak_failed", "System engine rejected speech rate", null)
                         } else if (speakChunk()) result.success(null)
                         else { requestId = null; result.error("speak_failed", "System engine rejected speech", null) }
                     }
+                }
+                "voices" -> {
+                    val list = mutableListOf<Map<String, String>>()
+                    val voices = if (ready) engine?.voices else null
+                    voices?.forEach { voice ->
+                        val lang = voice.locale.toLanguageTag().lowercase()
+                        if (!voice.isNetworkConnectionRequired &&
+                            (lang.startsWith("zh") || lang.startsWith("en") || lang.startsWith("ja") || lang.startsWith("ko"))) {
+                            list.add(mapOf(
+                                "id" to voice.name,
+                                "name" to voice.name,
+                                "lang" to lang,
+                                "quality" to if (voice.quality >= Voice.QUALITY_HIGH) "enhanced" else "default",
+                                "gender" to ""))
+                        }
+                    }
+                    result.success(list.sortedBy { it["name"] })
+                }
+                "openSettings" -> {
+                    val opened = try {
+                        appContext.startActivity(Intent("com.android.settings.TTS_SETTINGS")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        true
+                    } catch (error: RuntimeException) {
+                        try {
+                            appContext.startActivity(Intent(Settings.ACTION_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            true
+                        } catch (inner: RuntimeException) { false }
+                    }
+                    result.success(opened)
                 }
                 "stop" -> { stop(); result.success(null) }
                 else -> result.notImplemented()

@@ -15,6 +15,7 @@ import 'package:duoduo_langdu/screens/shelf_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
 import 'package:duoduo_langdu/services/app_appearance.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
+import 'package:duoduo_langdu/services/system_tts.dart';
 import 'package:duoduo_langdu/services/tts_audio_handler.dart';
 import 'package:duoduo_langdu/services/playback_notifications.dart';
 import 'package:duoduo_langdu/services/display_cutout.dart';
@@ -44,6 +45,7 @@ void main() {
       (call) async { volumeCalls.add(call); return ['getMediaVolume', 'getSystemBrightness'].contains(call.method) ? 0.5 : null; });
     messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async { platformCalls.add(call); return null; });
     messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/debug_log'), (_) async => null);
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async => call.method == 'voices' ? [] : null);
     messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (_) async =>
       {'supported': false, 'enabled': false, 'canRequest': false, 'asked': false});
     messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async => null);
@@ -504,13 +506,15 @@ void main() {
     expect(tester.getRect(volume).left, closeTo(tester.getRect(speed).left, 0.1));
     expect(tester.getCenter(speed).dy, closeTo(tester.getCenter(find.byKey(const ValueKey('reading-rate-minus'))).dy, 0.1));
     expect(tester.getCenter(speed).dy, closeTo(tester.getCenter(find.byKey(const ValueKey('reading-rate-plus'))).dy, 0.1));
+    expect(tester.widget<Slider>(speed).max, 2);
+    expect(tester.widget<Slider>(speed).divisions, 75);
     tester.widget<Slider>(speed).onChanged!(2.4); await tester.pumpAndSettle();
-    expect((await storage.loadSettings())['speechRate'], 2.4);
+    expect((await storage.loadSettings())['speechRate'], 2);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     final nextSpeech = _TestSpeech();
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('rate-restored'), storage: storage, ttsReader: nextSpeech)));
     await tester.pumpAndSettle();
-    expect(nextSpeech.speechRate, 2.4);
+    expect(nextSpeech.speechRate, 2);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
@@ -654,7 +658,7 @@ void main() {
 
   for (final target in [
     ('zh-CN-YunxiNeural', '云希（男·阳光）'),
-    (TtsReader.systemVoice, '使用系统文本转语音能力'),
+    (TtsReader.systemVoice, '系统语音（离线）'),
   ]) {
     testWidgets('changing paused speech voice to ${target.$1} resumes UI follow state', (tester) async {
       tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
@@ -670,6 +674,7 @@ void main() {
       expect(speech.state, TtsState.paused);
       expect(find.byKey(const ValueKey('reading-volume-slider')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(find.text(target.$2), 250, scrollable: find.byType(Scrollable).last);
       await tester.tap(find.text(target.$2)); await tester.pumpAndSettle();
       expect(speech.voice, target.$1);
       expect(speech.state, TtsState.playing);
@@ -1067,16 +1072,18 @@ void main() {
     expect(activeBookCaches[key(TtsReader.defaultVoice)], same(first));
     ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
     await tester.pumpAndSettle(); await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
-    await tester.tap(find.text('使用系统文本转语音能力')); await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('系统语音（离线）'), 250, scrollable: find.byType(Scrollable).last);
+    await tester.tap(find.text('系统语音（离线）')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('reading-cache')), findsNothing);
     expect(find.text('音源：系统'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
-    final systemOption = find.widgetWithText(ListTile, '使用系统文本转语音能力');
+    final systemOption = find.widgetWithText(ListTile, '系统语音（离线）');
+    await tester.scrollUntilVisible(systemOption, 250, scrollable: find.byType(Scrollable).last);
     expect(tester.widget<ListTile>(systemOption).trailing?.key, const ValueKey('pause-voice-__system_tts__'));
     expect(find.descendant(of: systemOption, matching: find.byIcon(Icons.download_outlined)), findsNothing);
     expect(find.descendant(of: systemOption, matching: find.byIcon(Icons.hourglass_empty)), findsOneWidget);
-    expect(tester.widget<ListTile>(systemOption).subtitle, isNull);
+    expect(tester.widget<ListTile>(systemOption).subtitle, isNotNull);
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await _captureReaderPreview(tester, preview, 'reader-system-cache-disabled');
     expect(tester.takeException(), isNull);
@@ -1253,7 +1260,7 @@ void main() {
     await tester.tap(find.text('浅色').last); await tester.pumpAndSettle();
     expect(background(), const Color(0xFFC7EDCC));
     expect((await storage.loadSettings())['themeMode'], 'light');
-    expect((await storage.loadSettings())['fontSize'], 37); expect((await storage.loadSettings())['speechRate'], 2.4);
+    expect((await storage.loadSettings())['fontSize'], 37); expect((await storage.loadSettings())['speechRate'], 2);
     AppAppearance.updateSystemBrightness(Brightness.dark); await tester.pumpAndSettle();
     expect(background(), const Color(0xFFC7EDCC), reason: 'Explicit light mode must ignore system darkness');
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
@@ -1277,7 +1284,7 @@ void main() {
     tester.widget<Slider>(lineHeight).onChanged!(1.9); await tester.pumpAndSettle();
     expect(background(), const Color(0xFF1A1A1A), reason: 'Editing an old settings copy must resolve the current system theme');
     expect((await storage.loadSettings())['fontSize'], 37); expect((await storage.loadSettings())['lineHeight'], 1.9);
-    expect((await storage.loadSettings())['speechRate'], 2.4);
+    expect((await storage.loadSettings())['speechRate'], 2);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
@@ -1664,6 +1671,8 @@ void main() {
     await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('pause-voice-zh-CN-XiaoxiaoNeural')), findsNothing);
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('pause-voice-__system_tts__')), 250,
+      scrollable: find.byType(Scrollable).last);
     await tester.tap(find.byKey(const ValueKey('pause-voice-__system_tts__'))); await tester.pumpAndSettle();
     final expandPauses = find.byKey(const ValueKey('pause-expand'));
     expect(expandPauses, findsOneWidget);

@@ -111,16 +111,17 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     const targetVoice = TtsReader.systemVoice;
     final voicePause = find.byKey(const ValueKey('pause-voice-$targetVoice'));
+    await tester.scrollUntilVisible(voicePause, 250, scrollable: find.byType(Scrollable).last);
     expect(voicePause, findsOneWidget);
     expect(find.byKey(const ValueKey('pause-customized-$targetVoice')), findsNothing);
     for (final voice in edgeVoices) {
       final cache = find.byKey(ValueKey('cache-voice-${voice.id}'));
-      await scrollSheetTo(tester, cache);
+      await scrollSheetTo(tester, cache, delta: voice == edgeVoices.first ? -150 : 150);
       expect(cache, findsOneWidget);
       expect(find.byKey(ValueKey('pause-voice-${voice.id}')), findsNothing,
         reason: 'Online voices have their cache action without an added-pause action');
     }
-    await scrollSheetTo(tester, voicePause, delta: -150);
+    await scrollSheetTo(tester, voicePause);
     await tester.tap(voicePause); await tester.pumpAndSettle();
     await expectOpenPauses(tester);
     await editComma(tester, '0.25');
@@ -153,6 +154,51 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));
+
+  testWidgets('native voice selection preserves system pauses and caps the saved rate when switching online', (tester) async {
+    await configureView(tester);
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async => call.method == 'voices' ? [
+      {'id': 'enhanced-test', 'name': 'Enhanced test voice', 'lang': 'zh-CN', 'quality': 'enhanced'},
+      {'id': 'default-test', 'name': 'Default test voice', 'lang': 'zh-CN', 'quality': 'default'},
+    ] : null);
+    const native = '${SystemTtsClient.voicePrefix}enhanced-test';
+    final storage = AppStorage(), speech = _VoiceSpeech();
+    final settings = ReadingSettings()..voice = TtsReader.systemVoice..speechRate = 2.8;
+    settings.setVoiceSpeechPauses(TtsReader.systemVoice,
+      const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 450));
+    await storage.saveSettings(settings.toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('native-selection', '甲乙，丙丁。'),
+      storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip(T('read'))); await tester.pumpAndSettle();
+    await pause(tester);
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    final tile = find.byKey(const ValueKey('pause-voice-$native'));
+    await scrollSheetTo(tester, tile);
+    expect(find.text('Default test voice'), findsNothing);
+    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value, isTrue);
+    await tester.tap(find.byType(SwitchListTile)); await tester.pumpAndSettle();
+    await scrollSheetTo(tester, find.text('Default test voice'));
+    expect(find.text('Default test voice'), findsOneWidget);
+    await scrollSheetTo(tester, tile, delta: -150);
+    expect(find.byKey(const ValueKey('cache-voice-$native')), findsNothing);
+    await tester.tap(find.ancestor(of: tile, matching: find.byType(ListTile)).first); await tester.pumpAndSettle();
+    expect(speech.voice, native); expect(speech.usesSystemVoice, isTrue); expect(speech.speechRate, 2.8);
+    expect(preparations, hasLength(1), reason: 'Specific system voices reuse the existing system pause split');
+    expect((await storage.loadReadingSettings('native-selection')).effectiveSpeechPauses
+      .millisecondsFor(SpeechPauseKind.comma), 450);
+    await pause(tester);
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    final online = find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural'));
+    await scrollSheetTo(tester, online);
+    await tester.tap(find.ancestor(of: online, matching: find.byType(ListTile)).first); await tester.pumpAndSettle();
+    expect(speech.voice, TtsReader.defaultVoice); expect(speech.speechRate, 2);
+    final saved = await storage.loadReadingSettings('native-selection');
+    expect(saved.voice, TtsReader.defaultVoice); expect(saved.speechRate, 2);
+    expect(saved.effectiveSpeechPauses, const SpeechPauseSettings());
+    expect(preparations, hasLength(2)); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
 
   testWidgets('online cache ignores legacy global and voice-specific pauses without changing the reader', (tester) async {
     await configureView(tester);

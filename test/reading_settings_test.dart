@@ -5,6 +5,31 @@ import 'package:duoduo_langdu/services/speech_breaks.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('per-book voice and rate override global settings without overwriting another book', () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..voice = 'zh-CN-XiaoxiaoNeural'..speechRate = 1.24).toJson());
+    await Future.wait([
+      storage.saveBookSpeech('one', voice: '__system_tts__:offline-voice'),
+      AppStorage().saveBookSpeech('one', rate: 2.4),
+      storage.saveBookSpeech('two', voice: 'zh-CN-YunxiNeural', rate: 2.8),
+    ]);
+    final one = await storage.loadReadingSettings('one'), two = await storage.loadReadingSettings('two');
+    expect(one.voice, '__system_tts__:offline-voice'); expect(one.speechRate, 2.4);
+    expect(two.voice, 'zh-CN-YunxiNeural'); expect(two.speechRate, 2);
+    expect((await storage.loadReadingSettings('other')).speechRate, 1.24);
+    expect((await storage.loadSettings())['voice'], 'zh-CN-XiaoxiaoNeural');
+  });
+  test('specific offline voices keep the existing system pause profile', () {
+    final settings = ReadingSettings()..voice = '__system_tts__:native-name';
+    final pauses = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 600);
+    settings.setVoiceSpeechPauses(settings.voice, pauses);
+    final restored = ReadingSettings.fromJson(settings.toJson());
+    expect(restored.voice, settings.voice);
+    expect(restored.effectiveSpeechPauses, pauses);
+    expect(restored.hasVoiceSpeechPauses(settings.voice), isTrue);
+    expect(restored.speechPausesForVoice('zh-CN-YunxiNeural'), const SpeechPauseSettings());
+  });
   test('legacy global pauses migrate to the system voice without changing online voices', () {
     final previous = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 450);
     final settings = ReadingSettings.fromJson({'speechPauses': previous.toJson()});

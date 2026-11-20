@@ -4,6 +4,8 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:duoduo_langdu/models/speech_word.dart';
+import 'package:duoduo_langdu/models/book.dart';
+import 'package:duoduo_langdu/services/reading_text.dart';
 import 'package:duoduo_langdu/services/edge_tts.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
 import 'package:duoduo_langdu/services/tts_cache_store.dart';
@@ -86,6 +88,16 @@ class _DeferredWriteCache extends TtsCacheStore {
     if (!started.isCompleted) started.complete();
     return release.future;
   }
+
+}
+
+class _ChapterCache extends TtsCacheStore {
+  final writes = <(int, int, List<SpeechWord>)>[];
+  _ChapterCache() : super('next-chapter', TtsReader.defaultVoice, 1, textFingerprint: 'words2-test');
+  @override Future<bool> exists(int ci, int off) async => false;
+  @override Future<void> write(int ci, int off, Uint8List audio, {List<SpeechWord>? words}) async {
+    writes.add((ci, off, words ?? []));
+  }
 }
 
 void main() {
@@ -150,6 +162,36 @@ void main() {
     expect(player.played, [1, 2, 3]);
     await reader.dispose().timeout(const Duration(seconds: 3), onTimeout: () => throw StateError('mock player disposal did not finish'));
   });
+
+  for (final cancellation in ['none', 'voice', 'network']) {
+    test('chapter head uses bounded shared cache coordinates with $cancellation cancellation', () async {
+      final requests = <String>[];
+      final gate = Completer<Uint8List>();
+      final reader = TtsReader(player: _ResumePlayer(), synthesize: (text, {required voice, required rate,
+        required onWords, required cancelToken}) async {
+        if (text == 'current') return Uint8List.fromList([1]);
+        requests.add(text);
+        onWords([SpeechWord(startMicros: 0, durationMicros: 100, textStart: 0, textEnd: 1, text: text.substring(0, 1))]);
+        return gate.future;
+      })..setPrefetchSentences(0);
+      addTearDown(reader.dispose);
+      await reader.start(['current']);
+      final chapter = Chapter(title: 'next', paragraphs: [ReadingText.paragraph('甲。乙。丙。丁。')]);
+      final cache = _ChapterCache();
+      final warming = reader.prefetchChapterHead(chapter, 1, cache);
+      await waitFor(() => requests.length == 3, 'Only the first three sentences are prefetched.');
+      if (cancellation == 'voice') reader.setVoice(TtsReader.systemVoice);
+      if (cancellation == 'network') reader.setNetworkAvailable(false);
+      gate.complete(Uint8List.fromList([2]));
+      await warming;
+      expect(cache.writes.length, cancellation == 'none' ? 3 : 0);
+      if (cancellation == 'none') {
+        expect(cache.writes.map((entry) => entry.$1), everyElement(1));
+        expect(cache.writes.map((entry) => entry.$2), chapterSentenceOffsets(chapter).take(3));
+        expect(cache.writes.every((entry) => entry.$3.length == 1), isTrue);
+      }
+    });
+  }
 
   test('cache writes do not delay playback but disposal drains them before cache teardown', () async {
     final cache = _DeferredWriteCache();

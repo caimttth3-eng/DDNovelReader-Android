@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../i18n.dart';
@@ -61,6 +62,8 @@ class ReaderScreen extends StatefulWidget {
   final Future<void> Function(BookProgress p)? onProgressChanged;
   @visibleForTesting
   final TtsReader? ttsReader;
+  @visibleForTesting
+  final Stream<AudioInterruptionEvent>? interruptionEvents;
 
   const ReaderScreen({
     super.key,
@@ -70,6 +73,7 @@ class ReaderScreen extends StatefulWidget {
     this.initialData,
     this.onProgressChanged,
     this.ttsReader,
+    this.interruptionEvents,
   });
 
   static Color backgroundFor(ReadingSettings settings) =>
@@ -151,6 +155,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   bool _viewportPrepared = false;
   (Size, double)? _preparedViewportKey;
   bool _leavingReader = false;
+  Map<String, String> _systemVoiceNames = const {};
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
+  bool _resumeAfterInterruption = false;
+  Future<void> _interruptionPause = Future<void>.value();
+  int? _interruptedPlayback;
   final Map<(Size, double), ReaderHeaderLayout> _stableHeaders = {};
   late List<_Item> _items;
   late Book _book;
@@ -335,6 +344,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _tts.onCompleted = _onTtsCompleted;
     _tts.onError = _onTtsError;
     _tts.onStateChanged = _syncSpeechPlaybackState;
+    unawaited(_listenForAudioInterruptions());
     _tts.onLoadingChanged = (loading) { if (mounted && _inReadingMode && _ttsLoading != loading) setState(() => _ttsLoading = loading); };
     _book = widget.book;
     _items = [];
@@ -352,6 +362,44 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _loadMediaVolume();
     // 加载书签与划线
 
+  }
+
+  Future<void> _listenForAudioInterruptions() async {
+    try {
+      final events = widget.interruptionEvents ?? (await AudioSession.instance).interruptionEventStream;
+      if (!mounted || _leavingReader) return;
+      _interruptionSub = events.listen((event) async {
+        try { await _onAudioInterruption(event); }
+        catch (error) {
+          _resumeAfterInterruption = false;
+          debugPrint('Audio interruption recovery failed: $error');
+        }
+      });
+    } on PlatformException catch (error) {
+      debugPrint('Audio interruption events unavailable: ${error.code}');
+    } on MissingPluginException {
+      debugPrint('Audio interruption events are not supported on this platform.');
+    }
+  }
+
+  Future<void> _onAudioInterruption(AudioInterruptionEvent event) async {
+    if (!mounted || !_inReadingMode || _leavingReader || event.type == AudioInterruptionType.duck) return;
+    if (event.begin) {
+      if (_resumeAfterInterruption || _tts.state != TtsState.playing) return;
+      _resumeAfterInterruption = true;
+      _interruptedPlayback = _playbackGeneration;
+      _interruptionPause = _tts.pause();
+      await _interruptionPause;
+    } else if (_resumeAfterInterruption) {
+      final playback = _interruptedPlayback;
+      final pause = _interruptionPause;
+      await pause;
+      if (!_resumeAfterInterruption || !identical(pause, _interruptionPause) || _interruptedPlayback != playback) return;
+      _resumeAfterInterruption = false;
+      if (mounted && !_leavingReader && _inReadingMode && playback == _playbackGeneration && _tts.state == TtsState.paused) {
+        await _resumeReading();
+      }
+    }
   }
 
   static const _volumeChannel =
@@ -374,6 +422,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Future<void> _onHeadsetPause() async {
+    _resumeAfterInterruption = false;
     _cancelSentenceDrag();
     print('SCREEN onHeadsetPause ttsState=${_tts.state}');
     _debugLog('SCREEN onHeadsetPause state=${_tts.state}');
@@ -410,6 +459,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _releaseSpeechPagePreparation();
     _sentenceDrag = null;
     AppAppearance.nightMode.removeListener(_onAppearanceChanged);
+    _interruptionSub?.cancel();
     _networkSubscription?.cancel();
     _permissionGate?.cancel(); _permissionGate = null;
     _volumePollTimer?.cancel(); _volumePollTimer = null; _volumePollEpoch++;
@@ -637,9 +687,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _activatePrepared(initial.prepared, initial.settings, initial.progress);
       return;
     }
-    final raw = await widget.storage.loadSettings();
+    final settings = await widget.storage.loadReadingSettings(widget.book.id);
     if (!mounted || _leavingReader) return;
-    _settings = AppAppearance.applyCurrentMode(ReadingSettings.fromJson(raw));
+    _settings = AppAppearance.applyCurrentMode(settings);
     final prepared = await ReaderPreparation.prepare(ReaderPreparationRequest(widget.book,
       merge: _settings.mergeNonSentenceBreaks, indent: _settings.firstLineIndent,
       pauseSettings: _settings.effectiveSpeechPauses,
@@ -661,6 +711,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _applyReaderBrightness();
     if (_settings.automaticBrightness) _syncSystemBrightness();
     _applySystemUi();
+    _settings.speechRate = ReadingSettings.normalizeSpeechRate(
+        _settings.speechRate, maxSpeechRateFor(_settings.voice));
     _tts.setSpeechRate(_settings.speechRate);
     _tts.setPrefetchSentences(_settings.prefetchSentences);
     _tts.setSystemFallbackEnabled(_settings.systemFallbackEnabled);
@@ -1752,6 +1804,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   String get _effectiveVoice =>
       _settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice;
 
+  /// 不同音源的最大语速：Edge TTS 协议上限 +100%（2.0x）；
+  /// iOS AVSpeech 的 1.0 约等于 2.0x；安卓系统引擎通常可到 3.0x。
+  static double maxSpeechRateFor(String voice) => ReadingSettings.maxSpeechRateFor(voice);
+
   /// 当前书/音色/语速对应的缓存（朗读与全书缓存共用同一坐标）
   TtsCacheStore _currentCacheStore() =>
       TtsCacheStore(_book.id, _effectiveVoice, _settings.speechRate, contentKey: _book.contentKey, textFingerprint: _cacheFingerprint);
@@ -1909,6 +1965,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 朗读模式中暂停：保留全屏，弹出底部控制面板
   Future<void> _pauseReading({bool force = false}) async {
+    _resumeAfterInterruption = false;
     _cancelSentenceDrag();
     if (_ttsLoading && !force) return; // Screen taps still ignore loading.
     if (!_inReadingMode || (!force && _tts.state != TtsState.playing)) return;
@@ -2368,6 +2425,18 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       from: from,
       initialTtsOffset: offset,
     );
+    // 章节边界预取：提前把下一章开头几句合成入库，换章不再等首句合成
+    unawaited(_prefetchNextChapterHead(c));
+  }
+
+  /// 预取下一章开头 3 句（并发），写进与朗读同一套 contentKey 缓存目录。
+  /// 复用当前缓存身份、词边界及取消机制，不影响当前播放。
+  Future<void> _prefetchNextChapterHead(int chapter) async {
+    final next = chapter + 1;
+    if (next >= _book.chapters.length || SystemTtsClient.isSystemVoiceId(_effectiveVoice)) {
+      return;
+    }
+    await _tts.prefetchChapterHead(_book.chapters[next], next, _currentCacheStore());
   }
 
   void _updateMediaChapter(int chapter) {
@@ -3204,8 +3273,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   padding: EdgeInsets.zero, icon: const Icon(Icons.remove_circle_outline, color: Color(0xFF9BC5DD)),
                   onPressed: () => _adjustRate(-ReadingSettings.speechRateStep))),
                 Expanded(child: Slider(key: const ValueKey('reading-rate-slider'),
-                  padding: const EdgeInsets.symmetric(horizontal: 12), value: rate.clamp(0.5, 3.0),
-                  min: 0.5, max: 3, divisions: ReadingSettings.speechRateDivisions, activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  value: rate.clamp(0.5, maxSpeechRateFor(_effectiveVoice)),
+                  min: 0.5, max: maxSpeechRateFor(_effectiveVoice),
+                  divisions: ((maxSpeechRateFor(_effectiveVoice) - 0.5) /
+                      ReadingSettings.speechRateStep).round(), activeColor: const Color(0xFF9BC5DD), inactiveColor: const Color(0x44C9A96E),
                   onChanged: _setRate)),
                 SizedBox(width: 44, height: 44, child: IconButton(key: const ValueKey('reading-rate-plus'),
                   padding: EdgeInsets.zero, icon: const Icon(Icons.add_circle_outline, color: Color(0xFF9BC5DD)),
@@ -3314,15 +3386,16 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   void _adjustRate(double delta) {
-    _setRate((_settings.speechRate + delta).clamp(0.5, 3.0));
+    _setRate((_settings.speechRate + delta).clamp(0.5, maxSpeechRateFor(_effectiveVoice)));
   }
 
   void _setRate(double rate) {
-    rate = ReadingSettings.normalizeSpeechRate(rate);
+    rate = ReadingSettings.normalizeSpeechRate(rate, maxSpeechRateFor(_effectiveVoice));
     _settings.speechRate = rate;
     _tts.setSpeechRate(rate);
     _refreshTtsCache();
     widget.storage.saveSettings(_settings.toJson());
+    unawaited(widget.storage.saveBookSpeech(widget.book.id, rate: rate));
     setState(() {});
   }
 
@@ -3400,7 +3473,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   Future<void> _openVoiceSpeechPauses(String voice) async {
-    if (_applyingSpeechPauses || voice != TtsReader.systemVoice) return;
+    if (_applyingSpeechPauses || !SystemTtsClient.isSystemVoiceId(voice)) return;
     final selected = await showModalBottomSheet<SpeechPauseSettings>(context: context, isScrollControlled: true,
       builder: (ctx) => SafeArea(child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.85),
@@ -3410,7 +3483,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         ]))));
     if (selected == null || !mounted) return;
     final desired = ReadingSettings.fromJson(_settings.toJson());
-    desired.setVoiceSpeechPauses(TtsReader.systemVoice, selected);
+    desired.setVoiceSpeechPauses(voice, selected);
     await _applySpeechConfiguration(desired);
   }
 
@@ -3422,6 +3495,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     if (updateVoice) {
       _settings.voice = desired.voice;
       _settings.systemFallbackActive = desired.systemFallbackActive;
+      _settings.speechRate = desired.speechRate;
     }
   }
 
@@ -3453,6 +3527,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<bool> _applySpeechConfiguration(ReadingSettings desired, {bool updateVoice = false,
     bool setEngineVoice = true, bool? resumeAfter}) async {
     if (_applyingSpeechPauses || _book.chapters.isEmpty) return false;
+    desired.speechRate = ReadingSettings.normalizeSpeechRate(desired.speechRate,
+      maxSpeechRateFor(desired.speechPauseVoice));
     final needsPreparation = _textSignature != _formatSignature(desired);
     if (!needsPreparation && !updateVoice) {
       setState(() => _commitPauseConfiguration(desired, updateVoice: false));
@@ -3497,9 +3573,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         _speechPauseResumeCursor = (_chapter, _para, _ttsSentence, location.$2);
       });
       if (updateVoice && setEngineVoice) _tts.setVoice(_settings.voice.isEmpty ? TtsReader.defaultVoice : _settings.voice);
+      if (updateVoice) await _tts.setSpeechRate(_settings.speechRate);
       if (prepared != null) _remapAnnotations(previous);
       _refreshTtsCache(); _updateMediaChapter(_chapter);
       await widget.storage.saveSettings(_settings.toJson());
+      unawaited(widget.storage.saveBookSpeech(widget.book.id,
+        voice: _settings.voice, rate: _settings.speechRate));
       if (prepared != null) await _restoreLineAnchor(line);
       if (mounted && !_leavingReader && generation == _playbackGeneration && wasPlaying && _inReadingMode) {
         await _startTtsFrom(_chapter, _para, _ttsSentence, displayOffset: _wordStart);
@@ -3673,33 +3752,77 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (sheet.mounted) update(() {});
     });
 
-  /// Voice settings and cache actions stay attached to stable voice IDs.
+  /// 音源选择：在线 Edge 音色优先，其后是本地离线系统音色。
+  /// 同类语言放一起：简体中文 / 繁体中文 / 英语 / 日语 / 韩语。
   Future<void> _openVoiceSelector() async {
     if (_applyingSpeechPauses) return;
-    final selected = await showModalBottomSheet<String>(context: context,
+    final systemVoices = await _tts.systemVoices();
+    if (!mounted) return;
+    _systemVoiceNames = {for (final v in systemVoices) v.id: v.name};
+    var enhancedOnly = true;
+    final selected = await showModalBottomSheet<String>(context: context, isScrollControlled: true,
+      constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .85),
       builder: (ctx) => StatefulBuilder(builder: (sheet, update) {
         final voices = sortedEdgeVoices();
         final active = _settings.speechPauseVoice;
-        final items = <Widget>[ListTile(
-          leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
-          title: Text(T('systemTts')),
-          trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
-          onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)), const Divider()];
-        String? lastLang;
-        for (final v in voices) {
-          if (v.langCode != lastLang) {
-            lastLang = v.langCode;
-            items.add(Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
-              child: Text(_groupLabel(v.langCode), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                color: Theme.of(sheet).colorScheme.onSurfaceVariant))));
+        final items = <Widget>[];
+        void addHeader(String text) => items.add(Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+          child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+            color: Theme.of(sheet).colorScheme.onSurfaceVariant)),
+        ));
+
+        // 在线语音（Edge TTS）在前：同语言分组。
+        addHeader(T('voiceSectionOnline'));
+        for (final family in _voiceFamilyOrder) {
+          final group = voices.where((v) => _voiceFamily(v.langCode) == family).toList();
+          if (group.isEmpty) continue;
+          addHeader(_familyLabel(family));
+          for (final v in group) {
+            items.add(ListTile(dense: true,
+              leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
+                color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
+              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
+                  icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
+              ]), onTap: () => Navigator.pop(ctx, v.id)));
           }
-          items.add(ListTile(dense: true,
-            leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
-              color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
-            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-              IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
-                icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
-            ]), onTap: () => Navigator.pop(ctx, v.id)));
+        }
+
+        // 本地语音（离线）在后：只保留简繁中文 / 英语 / 日语 / 韩语。
+        items.add(const Divider());
+        addHeader(T('voiceSectionLocal'));
+        items.add(ListTile(
+          leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
+          title: Text(T('systemTtsName')),
+          subtitle: Text(T('systemTtsDescription'), maxLines: 2, overflow: TextOverflow.ellipsis),
+          trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
+          onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)));
+        items.add(SwitchListTile(dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+          title: Text(T('voiceOnlyEnhanced'), style: const TextStyle(fontSize: 13)),
+          value: enhancedOnly, onChanged: (v) { enhancedOnly = v; update(() {}); }));
+        for (final family in _voiceFamilyOrder) {
+          final group = systemVoices.where((v) => _voiceFamily(v.lang) == family &&
+              (!enhancedOnly || v.quality != 'default')).toList()
+            ..sort((a, b) {
+              final qa = a.quality == 'default' ? 1 : 0;
+              final qb = b.quality == 'default' ? 1 : 0;
+              if (qa != qb) return qa - qb;
+              return a.name.compareTo(b.name);
+            });
+          if (group.isEmpty) continue;
+          addHeader(_familyLabel(family));
+          for (final v in group) {
+            final id = '${SystemTtsClient.voicePrefix}${v.id}';
+            items.add(ListTile(dense: true,
+              leading: Icon(id == active ? Icons.radio_button_checked : Icons.radio_button_off,
+                color: const Color(0xFF6498B5)),
+              title: Text(v.name),
+              subtitle: Text(_qualityLabel(v.quality)),
+              trailing: _voicePauseButton(id, update, sheet),
+              onTap: () => Navigator.pop(ctx, id)));
+          }
         }
         return SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
           Padding(padding: const EdgeInsets.all(16), child: Text(T('voiceTitle'),
@@ -3709,6 +3832,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       }));
     if (selected == null || !mounted) return;
     final desired = ReadingSettings.fromJson(_settings.toJson())..voice = selected..systemFallbackActive = false;
+    desired.speechRate = ReadingSettings.normalizeSpeechRate(
+        desired.speechRate, maxSpeechRateFor(selected));
     await _applySpeechConfiguration(desired, updateVoice: true, resumeAfter: _inReadingMode);
   }
 
@@ -3716,7 +3841,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   Future<void> _openBookCache({String? cacheVoice}) async {
     if (_applyingSpeechPauses) return;
     final voice = cacheVoice ?? _effectiveVoice;
-    if (voice == TtsReader.systemVoice) { _showToast(T('cacheOnlineOnly')); return; }
+    if (SystemTtsClient.isSystemVoiceId(voice)) { _showToast(T('cacheOnlineOnly')); return; }
     // Keep every operation bound to the selected online voice/rate, even if a
     // temporary offline fallback or another settings change occurs later.
     final rate = _settings.speechRate;
@@ -4219,9 +4344,43 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   // 设置面板（由右上角菜单触发）
+  static const _voiceFamilyOrder = ['zh-Hans', 'zh-Hant', 'en', 'ja', 'ko'];
+
+  /// 把 zh-CN / zh-TW / en-US / ja-JP / ko-KR 归到同一语言类，
+  /// 未支持的语言返回 null（本地列表据此过滤）。
+  static String? _voiceFamily(String lang) {
+    final l = lang.toLowerCase();
+    if (l.startsWith('zh')) {
+      return (l.contains('tw') || l.contains('hk') || l.contains('hant')) ? 'zh-Hant' : 'zh-Hans';
+    }
+    if (l.startsWith('en')) return 'en';
+    if (l.startsWith('ja')) return 'ja';
+    if (l.startsWith('ko')) return 'ko';
+    return null;
+  }
+
+  static String _familyLabel(String family) => switch (family) {
+        'zh-Hans' => AppLang.zhHans.nativeName,
+        'zh-Hant' => AppLang.zhHant.nativeName,
+        'en' => AppLang.en.nativeName,
+        'ja' => AppLang.ja.nativeName,
+        'ko' => AppLang.ko.nativeName,
+        _ => family,
+      };
+
+  static String _qualityLabel(String quality) => switch (quality) {
+        'premium' => T('voiceQualityPremium'),
+        'enhanced' => T('voiceQualityEnhanced'),
+        _ => T('voiceQualityDefault'),
+      };
+
   /// 音色显示名：中文界面显示中文友好名，其他界面显示英文名
-  static String _voiceLabel(String id) {
-    if (id == TtsReader.systemVoice) return T('systemTts');
+  String _voiceLabel(String id) {
+    if (id == TtsReader.systemVoice) return T('systemTtsName');
+    if (SystemTtsClient.isSystemVoiceId(id)) {
+      final vid = SystemTtsClient.identifierFrom(id);
+      return _systemVoiceNames[vid] ?? T('systemTtsName');
+    }
     for (final v in edgeVoices) {
       if (v.id == id) {
         return (AppI18n.current == AppLang.zhHans ||
@@ -4233,18 +4392,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     return id;
   }
 
-  static String _shortVoiceLabel(String id) => id == TtsReader.systemVoice ? T('shortSystemVoice')
-    : _voiceLabel(id).split(RegExp(r'[（(]')).first.trim();
-
-  /// 音色组标题（语言自称，各界面语言下通用）
-  static String _groupLabel(String langCode) => switch (langCode) {
-        'zh-CN' => AppLang.zhHans.nativeName,
-        'zh-TW' => AppLang.zhHant.nativeName,
-        'en' => AppLang.en.nativeName,
-        'ja-JP' => AppLang.ja.nativeName,
-        'ko-KR' => AppLang.ko.nativeName,
-        _ => langCode,
-      };
+  String _shortVoiceLabel(String id) {
+    if (id == TtsReader.systemVoice) return T('shortSystemVoice');
+    final label = _voiceLabel(id);
+    if (SystemTtsClient.isSystemVoiceId(id)) return label;
+    return label.split(RegExp(r'[（(]')).first.trim();
+  }
 
   void _setFlowBreak(int chapter, int paragraph, int offset) {
     final text = _book.chapters[chapter].paragraphs[paragraph].display;

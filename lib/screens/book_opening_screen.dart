@@ -47,13 +47,13 @@ class _BookOpeningScreenState extends State<BookOpeningScreen> {
   Future<(Book, ReaderInitialData)> _load() async {
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || _leaving) throw StateError('Book opening cancelled');
-    final settingsFuture = widget.storage.loadSettings().then((raw) {
-      if (mounted && !_leaving) setState(() => _loadingSettings = ReadingSettings.fromJson(raw));
-      return raw;
+    final settingsFuture = widget.storage.loadReadingSettings(widget.sourceMeta?.id ?? '').then((settings) {
+      if (mounted && !_leaving) setState(() => _loadingSettings = settings);
+      return settings;
     });
     final geometryFuture = DisplayCutoutService.read().catchError((Object _) => null);
     final dpr = WidgetsBinding.instance.platformDispatcher.implicitView?.devicePixelRatio ?? 1.0;
-    var settings = ReadingSettings.fromJson(await settingsFuture);
+    var settings = await settingsFuture;
     if (!mounted || _leaving) throw StateError('Book opening cancelled');
     final meta = widget.sourceMeta;
     final snapshots = widget.snapshotCache ?? BookSnapshotCache.shared;
@@ -77,7 +77,7 @@ class _BookOpeningScreenState extends State<BookOpeningScreen> {
       if (!mounted || _leaving) throw StateError('Book opening cancelled');
       final geometry = await geometryFuture;
       if (!mounted || _leaving) throw StateError('Book opening cancelled');
-      final latest = ReadingSettings.fromJson(await widget.storage.loadSettings());
+      final latest = await widget.storage.loadReadingSettings(result.$1.id);
       if (!mounted || _leaving) throw StateError('Book opening cancelled');
       final latestKey = (latest.mergeNonSentenceBreaks, latest.firstLineIndent,
         latest.informationFilter ? latest.informationFilterLevel : 'none', latest.autoExtractToc, latest.effectiveSpeechPauses.cacheKey);
