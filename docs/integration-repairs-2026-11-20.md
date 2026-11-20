@@ -58,19 +58,36 @@
 
 最终日志保留在实例 `temp/integration-repair-tests-final.log`、`integration-repair-analyze-final.log`、`integration-repair-build.log`、`integration-repair-fixture-tests.log`；SDK 审计为 `temp/sdk-buildapk-before.json` / `sdk-buildapk-after.json`。依赖声明、锁字节、原生工程、共享环境及本地构建入口未改；锁 SHA-256 仍为 `b5fb94b4365c6c4a321e04f64c6dc205d60de7f12c17c6801402c8d5c3363c2e`。没有生成 UI 截图、读取签名私钥、签名、安装或远端发布。`LocalApk Path` 仍选择既有已签名 1.3.7。
 
-### 清理受阻：未执行删除
+### 清理已获授权，工具策略仍拒绝：未执行删除
 
-收尾复合命令被自动审批在执行前拒绝，返回 `blocked by policy`，没有更具体原因；其中 `LocalBuild Finalize` 及精确产物删除均未运行。遵守项目“具体拒绝不得绕过”约定，未改用其他工具、间接脚本或移锁重试。当前删除数为 **0**，以下为待用户明确批准后，按原入口、Prepare lease、身份及消费者检查完成的范围：
+收尾复合命令首次被自动审批在执行前拒绝，返回 `blocked by policy`，没有更具体原因。用户随后明确回复“允许”，授权下表的 24 文件精确清理范围；基于该新增授权重试后，命令仍在启动前被工具策略以相同原因拒绝。其中 `LocalBuild Finalize` 及精确产物删除均未运行。当前删除数为 **0**，不再重复索取相同授权，也不改用其他工具、间接脚本或移锁绕过。后续仅在工具策略允许执行时，按原入口、Prepare lease、身份及消费者检查完成此范围。
 
 | 位置 | 文件数 | 字节 | 当前用途 / 退出条件 |
 | --- | ---: | ---: | --- |
-| 源根 `build/` | 12 | 64,776,296 | 已核 owner 为本项目 `flutter-host-tests`，无重解析点；原入口 Finalize 待批准 |
+| 源根 `build/` | 12 | 64,776,296 | 已核 owner 为本项目 `flutter-host-tests`，无重解析点；已获授权，Finalize 执行仍受策略阻止 |
 | 实例 `build/` 的本次未签名包及对应元数据/符号 | 6 | 43,334,141 | 仅编译验证，未交付；核 APK 原字节后精确退役 |
 | 实例 `temp/` 的本轮中间日志 | 6 | 135,732 | 已被最终日志取代；仅清下列具名文件 |
 | 合计 | **24** | **108,246,169** | 自有进程均已自然结束，仍须执行时再次核对 |
 
 6 个编译产物为实例内 `build/app/outputs/apk/release/` 的 `app-release-unsigned.apk`、`output-metadata.json`、`SIGNING_STATUS.txt`、`unsigned-build-info.json`，以及 `build/app/outputs/flutter-apk/app-release.apk`、`build/debug-symbols/app.android-arm64.symbols`。两份 APK 的大小、SHA-256 已由入口和本轮清单确认；清理不得触及当前 1.3.7 成品或增量/依赖缓存。
 
-6 份中间日志为 `integration-repair-analyze-initial.log`、`integration-repair-focus-diagnostic.log`、`integration-repair-focus-layout-tests.log`、`integration-repair-focus-tests.log`、`integration-repair-handoff-tests.log`、`integration-repair-tests-initial.log`。最终测试、分析、构建、夹具日志和 SDK 审计保留在实例缓存。负责人为本轮主审；退出条件是此精确删除范围获新授权，随后复用原入口和护栏实际清退并更新本节。
+源根 12 个文件的精确相对路径及字节如下，均为已结束宿主测试的编译输出、测试资源副本或 owner 标记。许可证和字体仅删除测试副本，源码许可证原件、固定依赖及当前产品资源保留：
+
+| 相对源根 `build/` 的文件 | 字节 |
+| --- | ---: |
+| `.ddnovel-test-output.json` | 99 |
+| `native_assets/windows/native_assets.json` | 45 |
+| `test_cache/build/8b61f7661612a76fd566b4b40b3c6008.cache.dill.track.dill` | 62,728,864 |
+| `unit_test_assets/AssetManifest.bin` | 220 |
+| `unit_test_assets/FontManifest.json` | 208 |
+| `unit_test_assets/NativeAssetsManifest.json` | 45 |
+| `unit_test_assets/NOTICES.Z` | 109,749 |
+| `unit_test_assets/docs/third-party/MaterialSymbols-LICENSE.txt` | 11,358 |
+| `unit_test_assets/fonts/MaterialIcons-Regular.otf` | 1,645,184 |
+| `unit_test_assets/packages/cupertino_icons/assets/CupertinoIcons.ttf` | 257,628 |
+| `unit_test_assets/shaders/ink_sparkle.frag` | 13,432 |
+| `unit_test_assets/shaders/stretch_effect.frag` | 9,464 |
+
+6 份中间日志为 `integration-repair-analyze-initial.log`、`integration-repair-focus-diagnostic.log`、`integration-repair-focus-layout-tests.log`、`integration-repair-focus-tests.log`、`integration-repair-handoff-tests.log`、`integration-repair-tests-initial.log`。这些是修复过程中的初次失败/中间成功及专项诊断，已无后续消费者；最终完整测试、分析、构建、夹具日志及 SDK 审计继续保留。负责人为本轮主审；退出条件是工具策略允许执行已授权的精确范围，随后复用原入口和护栏实际清退并更新本节。用户询问具体文件后，已再次只读核对 24 文件仍在、总计 108,246,169 字节，源根无重解析点。
 
 合成回归不连接真实 WebDAV，不读取私人配置、真实书籍或凭据。iOS、真机音频焦点/来电、旧桌面客户端及真实网盘仍需各自环境验收；本轮没有执行全部编码表的穷举验证，也不声称已找尽全部潜在问题。
