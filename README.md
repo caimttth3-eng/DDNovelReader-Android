@@ -10,7 +10,7 @@
 
 ## 🎉 iOS 版正式上线
 
-**v1.3.0 起支持 iPhone / iPad**，与安卓共用同一套阅读、朗读与同步能力。
+**v1.3.0 起支持 iPhone / iPad，v1.3.1 完善系统音色选择**，与安卓共用同一套阅读、朗读与同步能力。
 
 > iOS 版以**未签名 IPA** 形式发布（不走 App Store），需要用签名工具自签安装。
 > 这是苹果的限制，不是安装包损坏；按下面的教程操作即可。
@@ -19,7 +19,7 @@
 
 前往 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载：
 
-- iOS：`DDNovelReader_v1.3.0_unsigned.ipa`（约 9MB）
+- iOS：`DDNovelReader_v1.3.1_unsigned.ipa`（约 9MB）
 - Android：三个架构 APK（见下方「下载」）
 
 ### 系统要求
@@ -69,7 +69,7 @@
 ## 下载
 
 - **Android**：本仓库 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载 APK（三架构）
-- **iOS**：同页下载 `DDNovelReader_v1.3.0_unsigned.ipa`，按上面的教程自签
+- **iOS**：同页下载 `DDNovelReader_v1.3.1_unsigned.ipa`，按上面的教程自签
 - **Windows / macOS / Linux**：前往 [桌面版发布页](https://github.com/caimttth3-eng/DDNovelReader) 下载（Windows 绿色免安装 exe / macOS DMG / Linux 单文件）
 
 > 桌面版功能更全：本地离线语音 + Edge 神经语音、整本语音缓存、书签划线笔记、全文搜索、多主题、定时播放。
@@ -188,7 +188,7 @@ zip -qry DuoDuoLangDu-unsigned.ipa Payload
 ## 版本历史
 
 ### v1.3.1（2026-11-20）
-离线系统语音升级：音源面板可列出并选择系统音色（标注默认/优化/高级音质），支持按图书记忆音色与语速；新增「仅显示优化音质」过滤与系统设置入口；来电或其他 App 占用音频后自动续读；安卓端也可枚举系统音色。iOS 版随后发布。
+离线系统语音升级：音源面板可列出并选择系统音色（标注默认/优化/高级音质），支持按图书记忆音色与语速；新增「仅显示优化音质」过滤与系统设置入口；来电或其他 App 占用音频后自动续读；安卓端也可枚举系统音色。iOS 版同步发布。
 
 ### v1.3.0（2026-11-18）
 阅读和朗读大更新，**iOS 版首次上线**。翻页更顺：支持上下滚动、整页不裁字、可开翻页动画；新增自动目录、字号最大 64、两端对齐、深浅主题、刘海适配；朗读支持逐字高亮、拖动切句、设置记忆；通知栏和锁屏可上一句、暂停、下一句、停止；数据同步与语音缓存继续保留。
