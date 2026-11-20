@@ -15,6 +15,7 @@ import '../services/book_cache_task.dart';
 import '../services/book_parser.dart';
 import '../services/sync_engine.dart';
 import '../services/tts_cache_store.dart';
+import '../services/cache_diagnostics.dart';
 import '../services/updater.dart';
 import '../widgets/book_card.dart';
 import 'about_screen.dart';
@@ -542,6 +543,29 @@ class _ShelfScreenState extends State<ShelfScreen> {
                           style: const TextStyle(
                               fontSize: 16, fontWeight: FontWeight.bold)),
                       const Spacer(),
+                      TextButton(
+                        key: const ValueKey('cache-export-diag'),
+                        onPressed: () async {
+                          final path = await exportCacheDiagnostics(_storage);
+                          if (!ctx.mounted) return;
+                          await showDialog<void>(
+                            context: ctx,
+                            builder: (dctx) => AlertDialog(
+                              title: const Text('缓存诊断'),
+                              content: Text(path == null
+                                  ? '导出失败，请重试'
+                                  : '已导出到：\n$path\n\n可在「文件」App 的“多多朗读”文件夹里找到 cache_report.json'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(dctx),
+                                  child: Text(T('ok')),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        child: const Text('导出诊断', style: TextStyle(fontSize: 12)),
+                      ),
                       IconButton(
                         icon: const Icon(Icons.refresh, size: 20),
                         onPressed: () async {
