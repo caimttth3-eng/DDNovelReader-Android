@@ -228,7 +228,8 @@ class TtsReader {
   }
 
   Future<List<SystemVoice>> systemVoices() => _system.voices();
-
+  Future<SystemVoiceCatalog> systemVoiceCatalog() => _system.catalog();
+  String get currentSystemVoiceName => _system.currentVoiceName;
   Future<bool> openSystemVoiceSettings() => _system.openSettings();
 
   /// 设置音色（zh-CN 等）

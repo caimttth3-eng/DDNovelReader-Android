@@ -46,7 +46,8 @@ void main() {
       (call) async { volumeCalls.add(call); return ['getMediaVolume', 'getSystemBrightness'].contains(call.method) ? 0.5 : null; });
     messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async { platformCalls.add(call); return null; });
     messenger.setMockMethodCallHandler(const MethodChannel('com.ddnovelreader/debug_log'), (_) async => null);
-    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async => call.method == 'voices' ? [] : null);
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async =>
+      call.method == 'voices' ? [] : call.method == 'initialize' ? {'voiceName': '系统默认测试音色'} : null);
     messenger.setMockMethodCallHandler(PlaybackNotifications.channel, (_) async =>
       {'supported': false, 'enabled': false, 'canRequest': false, 'asked': false});
     messenger.setMockMethodCallHandler(DisplayCutoutService.channel, (_) async => null);
@@ -745,7 +746,7 @@ void main() {
 
   for (final target in [
     ('zh-CN-YunxiNeural', '云希（男·阳光）'),
-    (TtsReader.systemVoice, '系统语音（离线）'),
+    (TtsReader.systemVoice, '系统默认测试音色'),
   ]) {
     testWidgets('changing paused speech voice to ${target.$1} resumes UI follow state', (tester) async {
       tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
@@ -1202,18 +1203,18 @@ void main() {
       reason: 'Restarting from an already open cleared-cache sheet must register its controller again.');
     ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
     await tester.pumpAndSettle(); await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('系统语音（离线）'), 250, scrollable: find.byType(Scrollable).last);
-    await tester.tap(find.text('系统语音（离线）')); await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('系统默认测试音色'), 250, scrollable: find.byType(Scrollable).last);
+    await tester.tap(find.text('系统默认测试音色')); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('reading-cache')), findsNothing);
-    expect(find.text('音源：系统'), findsOneWidget);
+    expect(find.text('音源：系统默认测试音色'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
-    final systemOption = find.widgetWithText(ListTile, '系统语音（离线）');
+    final systemOption = find.widgetWithText(ListTile, '系统默认测试音色');
     await tester.scrollUntilVisible(systemOption, 250, scrollable: find.byType(Scrollable).last);
     expect(tester.widget<ListTile>(systemOption).trailing?.key, const ValueKey('pause-voice-__system_tts__'));
     expect(find.descendant(of: systemOption, matching: find.byIcon(Icons.download_outlined)), findsNothing);
     expect(find.descendant(of: systemOption, matching: find.byIcon(Icons.hourglass_empty)), findsOneWidget);
-    expect(tester.widget<ListTile>(systemOption).subtitle, isNotNull);
+    expect(tester.widget<ListTile>(systemOption).subtitle, isNull);
     await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
     await _captureReaderPreview(tester, preview, 'reader-system-cache-disabled');
     expect(tester.takeException(), isNull);

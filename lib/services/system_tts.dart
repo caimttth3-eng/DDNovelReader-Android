@@ -10,6 +10,9 @@ class SystemVoice {
   final String lang;
   final String quality; // default / enhanced / premium
   final String gender;
+  final String engine;
+  final bool isDefault;
+  final bool requiresNetwork;
 
   const SystemVoice({
     required this.id,
@@ -17,7 +20,27 @@ class SystemVoice {
     required this.lang,
     this.quality = 'default',
     this.gender = '',
+    this.engine = '',
+    this.isDefault = false,
+    this.requiresNetwork = false,
   });
+
+  String get identifier => engine.isEmpty ? id : SystemTtsClient.engineVoiceIdentifier(engine, id);
+}
+
+class SystemTtsEngine {
+  final String id, name, defaultVoiceId, defaultVoiceName;
+  final bool available;
+  final List<SystemVoice> voices;
+  const SystemTtsEngine({required this.id, required this.name,
+    this.defaultVoiceId = '', this.defaultVoiceName = '', this.available = true, this.voices = const []});
+}
+
+class SystemVoiceCatalog {
+  final List<SystemTtsEngine> engines;
+  final String defaultEngine;
+  const SystemVoiceCatalog({this.engines = const [], this.defaultEngine = ''});
+  List<SystemVoice> get voices => [for (final engine in engines) ...engine.voices];
 }
 
 class SystemTtsClient {
@@ -34,6 +57,10 @@ class SystemTtsClient {
       id.startsWith(voicePrefix) ? id.substring(voicePrefix.length) : null;
 
   Future<void>? _initialization;
+  String? _initializedEngine;
+  int _initializationSerial = 0;
+  String? _knownDefaultEngine;
+  String currentVoiceName = '';
   String? _request;
   int _serial = 0;
   int _epoch = 0;
@@ -51,10 +78,29 @@ class SystemTtsClient {
     channel.setMethodCallHandler(_onEvent);
   }
 
-  Future<void> initialize() => _initialization ??= channel.invokeMethod('initialize')
-      .timeout(const Duration(seconds: 15)).then<void>((_) {}, onError: (Object error) {
-        _initialization = null; throw error;
+  static String engineVoiceIdentifier(String engine, String voice) =>
+      '@engine:${Uri.encodeComponent(engine)}:${Uri.encodeComponent(voice)}';
+
+  static ({String? engine, String? voice}) decodeIdentifier(String? identifier) {
+    if (identifier == null || !identifier.startsWith('@engine:')) return (engine: null, voice: identifier);
+    final parts = identifier.substring(8).split(':');
+    if (parts.length != 2 || parts[0].isEmpty) throw const FormatException('Invalid system voice identifier');
+    final voice = Uri.decodeComponent(parts[1]);
+    return (engine: Uri.decodeComponent(parts[0]), voice: voice.isEmpty ? null : voice);
+  }
+
+  Future<void> initialize({String? engine}) {
+    if (engine != _initializedEngine) { _initialization = null; _initializedEngine = engine; }
+    if (_initialization != null) return _initialization!;
+    final serial = ++_initializationSerial;
+    return _initialization = channel.invokeMethod('initialize', engine == null ? null : {'engine': engine})
+      .timeout(const Duration(seconds: 15)).then<void>((value) {
+        if (serial == _initializationSerial && value is Map) currentVoiceName = '${value['voiceName'] ?? ''}';
+      }, onError: (Object error) {
+        if (serial == _initializationSerial) _initialization = null;
+        throw error;
       });
+  }
 
   /// 打开系统设置（iOS 是 App 设置页，Android 是 TTS 设置页），引导用户下载更好音质。
   Future<bool> openSettings() async {
@@ -69,31 +115,53 @@ class SystemTtsClient {
     }
   }
 
-  /// 列出系统可用的离线音色（iOS AVSpeechSynthesisVoice / Android TTS voices）。
+  /// 列出系统可用音色（iOS AVSpeechSynthesisVoice / Android TTS voices）。
   /// 不支持或未实现时返回空列表，调用方保留默认音色入口。
-  Future<List<SystemVoice>> voices() async {
+  Future<List<SystemVoice>> voices() async => (await catalog()).voices;
+
+  static SystemVoice _voice(Map raw, {String engine = ''}) => SystemVoice(
+    id: '${raw['id'] ?? ''}', name: '${raw['name'] ?? raw['id'] ?? ''}',
+    lang: '${raw['lang'] ?? ''}', quality: '${raw['quality'] ?? 'default'}',
+    gender: '${raw['gender'] ?? ''}', engine: engine,
+    isDefault: raw['isDefault'] == true, requiresNetwork: raw['requiresNetwork'] == true);
+
+  Future<SystemVoiceCatalog> catalog() async {
     try {
+      Map<dynamic, dynamic>? result;
+      try { result = await channel.invokeMapMethod('voiceCatalog').timeout(const Duration(seconds: 15)); }
+      on MissingPluginException { /* Older plugins and iOS use voice enumeration below. */ }
+      if (_disposed || _owner != this) return const SystemVoiceCatalog();
+      if (result != null && result['engines'] is List && (result['engines'] as List).isNotEmpty) {
+        final defaultEngine = '${result['defaultEngine'] ?? ''}';
+        if (_initializedEngine == null && _knownDefaultEngine != defaultEngine) {
+          _initialization = null;
+          _initializationSerial++;
+        }
+        _knownDefaultEngine = defaultEngine;
+        return SystemVoiceCatalog(defaultEngine: '${result['defaultEngine'] ?? ''}', engines: [
+          for (final raw in (result['engines'] as List).whereType<Map>())
+            SystemTtsEngine(id: '${raw['id'] ?? ''}', name: '${raw['name'] ?? raw['id'] ?? ''}',
+              defaultVoiceId: '${raw['defaultVoiceId'] ?? ''}', defaultVoiceName: '${raw['defaultVoiceName'] ?? ''}',
+              available: raw['available'] != false,
+              voices: [for (final voice in (raw['voices'] as List? ?? const []).whereType<Map>())
+                if ('${voice['id'] ?? ''}'.isNotEmpty) _voice(voice, engine: '${raw['id'] ?? ''}')]),
+        ]);
+      }
       final raw = await _enumerateVoices().timeout(const Duration(seconds: 15));
-      if (raw == null) return const [];
-      return raw.whereType<Map>().map((m) => SystemVoice(
-        id: '${m['id'] ?? ''}',
-        name: '${m['name'] ?? ''}',
-        lang: '${m['lang'] ?? ''}',
-        quality: '${m['quality'] ?? 'default'}',
-        gender: '${m['gender'] ?? ''}',
-      )).where((v) => v.id.isNotEmpty).toList();
+      return SystemVoiceCatalog(engines: [SystemTtsEngine(id: '', name: '', defaultVoiceName: currentVoiceName,
+        voices: (raw ?? const []).whereType<Map>().map((m) => _voice(m)).where((v) => v.id.isNotEmpty).toList())]);
     } on MissingPluginException {
       debugPrint('System voice enumeration is not supported.');
-      return const [];
+      return const SystemVoiceCatalog();
     } on PlatformException catch (error) {
       debugPrint('System voice enumeration failed: ${error.code}');
-      return const [];
+      return const SystemVoiceCatalog();
     } on TimeoutException catch (error) {
       debugPrint('System voice enumeration timed out; keeping the default entry: $error');
-      return const [];
+      return const SystemVoiceCatalog();
     } catch (error) {
       debugPrint('System voice enumeration failed; keeping the default entry: $error');
-      return const [];
+      return const SystemVoiceCatalog();
     }
   }
 
@@ -119,8 +187,10 @@ class SystemTtsClient {
     final epoch = _epoch;
     await stopping;
     if (_disposed || epoch != _epoch || _owner != this) throw const SystemSpeechCancelled();
-    await initialize();
+    final selection = decodeIdentifier(voiceId);
+    await initialize(engine: selection.engine);
     if (_disposed || epoch != _epoch || _owner != this) throw const SystemSpeechCancelled();
+    if (selection.voice != null) currentVoiceName = selection.voice!;
     final id = '${identityHashCode(this)}-${++_serial}';
     _request = id; _done = onDone; _range = onRange; _error = onError;
     _textLength = spokenText.length;
@@ -132,7 +202,8 @@ class SystemTtsClient {
           'id': id,
           'text': spokenText,
           'rate': rate,
-          if (voiceId != null) 'voice': voiceId,
+          if (selection.voice != null) 'voice': selection.voice,
+          if (selection.engine != null) 'engine': selection.engine,
         }),
         started.future.timeout(const Duration(seconds: 30)),
       ], eagerError: true);

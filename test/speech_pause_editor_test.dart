@@ -89,4 +89,21 @@ void main() {
     expect(find.byKey(const ValueKey('pause-reset-global')), findsNothing);
     expect(applied, isEmpty); expect(tester.takeException(), isNull);
   });
+
+  testWidgets('reset restores real default pauses as a draft and Apply commits them', (tester) async {
+    final initial = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 650)
+      .withPause(SpeechPauseKind.dash, 900).withPause(SpeechPauseKind.paragraph, 1000);
+    final applied = <SpeechPauseSettings>[];
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(child:
+      SpeechPauseEditor(initialPauses: initial, initiallyExpanded: true, onApply: applied.add)))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pause-reset'))); await tester.pumpAndSettle();
+    expect(applied, isEmpty);
+    expect(tester.widget<Slider>(find.byKey(const ValueKey('pause-slider-comma'))).value, 0);
+    expect(tester.widget<Slider>(find.byKey(const ValueKey('pause-slider-dash'))).value, 200);
+    expect(tester.widget<Slider>(find.byKey(const ValueKey('pause-slider-paragraph'))).value, 300);
+    await tester.tap(find.byKey(const ValueKey('pause-apply'))); await tester.pumpAndSettle();
+    expect(applied.single, const SpeechPauseSettings());
+    expect(initial.millisecondsFor(SpeechPauseKind.comma), 650);
+  });
 }

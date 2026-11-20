@@ -74,7 +74,7 @@ void main() {
     final reader = TtsReader()..setVoice('${SystemTtsClient.voicePrefix}native-one')..setSystemFallbackEnabled(true);
     addTearDown(reader.dispose);
     final voices = await reader.systemVoices();
-    expect(calls.take(2).map((call) => call.method), ['initialize', 'voices']);
+    expect(calls.where((call) => call.method != 'voiceCatalog').take(2).map((call) => call.method), ['initialize', 'voices']);
     expect(voices.single.name, 'Offline voice');
     expect(reader.usesSystemVoice, isTrue);
     reader.restoreSystemFallback(true);

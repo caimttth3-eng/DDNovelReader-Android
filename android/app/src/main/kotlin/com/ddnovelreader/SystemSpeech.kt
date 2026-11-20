@@ -40,15 +40,23 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
     private var chunks = emptyList<Pair<Int, String>>()
     private var chunkIndex = 0
     private var started = false
+    private var enginePackage: String? = null
+    private var initializationGeneration = 0
+    private val catalogClosers = mutableSetOf<() -> Unit>()
+    private val catalogResults = mutableListOf<MethodChannel.Result>()
+    private var catalogRunning = false
 
     init {
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
-                "initialize" -> initialize(result)
+                "initialize" -> initialize(result, call.argument<String>("engine"))
+                "voiceCatalog" -> voiceCatalog(result)
                 "speak" -> {
                     val id = call.argument<String>("id")
                     val text = call.argument<String>("text")
+                    val requestedEngine = call.argument<String>("engine")
                     if (!ready || engine == null) result.error("not_ready", "System speech is not initialized", null)
+                    else if (requestedEngine != null && requestedEngine != enginePackage) result.error("engine_changed", "System speech engine changed", null)
                     else if (id == null || text.isNullOrBlank()) result.error("empty_text", "No speech text", null)
                     else {
                         stop()
@@ -69,9 +77,11 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
                         val voiceName = call.argument<String>("voice")
                         if (engine != null) {
                             try {
-                                val selected = if (voiceName == null) engine!!.defaultVoice
+                                val selected = if (voiceName == null) try { engine!!.defaultVoice } catch (_: RuntimeException) { null }
                                     else engine!!.voices?.firstOrNull { it.name == voiceName }
-                                if (selected == null || engine!!.setVoice(selected) != TextToSpeech.SUCCESS) {
+                                // Older engines may support speech without the Voice API.
+                                if ((voiceName != null && selected == null) ||
+                                    (selected != null && engine!!.setVoice(selected) != TextToSpeech.SUCCESS)) {
                                     requestId = null
                                     result.error("voice_unavailable", "System speech voice is unavailable", null)
                                     return@setMethodCallHandler
@@ -94,8 +104,7 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
                     val voices = if (ready) engine?.voices else null
                     voices?.forEach { voice ->
                         val lang = voice.locale.toLanguageTag().lowercase()
-                        if (!voice.isNetworkConnectionRequired &&
-                            (lang.startsWith("zh") || lang.startsWith("en") || lang.startsWith("ja") || lang.startsWith("ko"))) {
+                        run {
                             list.add(mapOf(
                                 "id" to voice.name,
                                 "name" to voice.name,
@@ -126,15 +135,129 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
         }
     }
 
-    private fun initialize(result: MethodChannel.Result) {
+    private fun systemDefaultEngine(): String? = try {
+        Settings.Secure.getString(appContext.contentResolver, "tts_default_synth") ?: engine?.defaultEngine
+    } catch (error: RuntimeException) { engine?.defaultEngine }
+
+    private fun currentVoiceName(): String = try {
+        engine?.voice?.name ?: engine?.defaultVoice?.name ?: ""
+    } catch (_: RuntimeException) { "" }
+
+    private fun installedEngines(): List<Pair<String, String>> {
+        val manager = appContext.packageManager
+        return manager.queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0)
+            .filter { it.serviceInfo != null && it.serviceInfo.enabled && it.serviceInfo.applicationInfo.enabled }
+            .map { Pair(it.serviceInfo.packageName, it.loadLabel(manager).toString().ifBlank { it.serviceInfo.packageName }) }
+            .distinctBy { it.first }.sortedBy { it.second }
+    }
+
+    private fun voiceCatalog(result: MethodChannel.Result) {
         if (closed) { result.error("closed", "System speech is closed", null); return }
-        if (ready) { result.success(engine?.defaultEngine); return }
+        if (catalogRunning) { catalogResults.add(result); return }
+        val packages = try { installedEngines() } catch (error: RuntimeException) {
+            result.error("engine_list_failed", "Cannot list installed speech engines", null); return
+        }
+        catalogResults.add(result)
+        catalogRunning = true
+        val entries = packages.map { (id, name) -> mutableMapOf<String, Any>(
+            "id" to id, "name" to name, "available" to false,
+            "defaultVoiceId" to "", "defaultVoiceName" to "", "voices" to emptyList<Map<String, Any>>()) }
+        val probes = mutableSetOf<TextToSpeech>()
+        val timers = mutableSetOf<Runnable>()
+        var next = 0
+        var active = 0
+        var finished = false
+        lateinit var finish: () -> Unit
+        lateinit var launch: () -> Unit
+        finish = {
+            if (!finished) {
+                finished = true
+                for (timer in timers) main.removeCallbacks(timer)
+                for (probe in probes) try { probe.shutdown() } catch (_: RuntimeException) { }
+                probes.clear()
+                catalogClosers.remove(finish)
+                val snapshot = mapOf("defaultEngine" to (systemDefaultEngine() ?: ""), "engines" to entries)
+                val waiting = catalogResults.toList(); catalogResults.clear(); catalogRunning = false
+                for (item in waiting) item.success(snapshot)
+            }
+        }
+        launch = {
+            while (!finished && active < 2 && next < entries.size) {
+                val entry = entries[next++]
+                val packageName = entry["id"] as String
+                active++
+                var probe: TextToSpeech? = null
+                var completed = false
+                lateinit var timeout: Runnable
+                fun complete(status: Int) {
+                    if (!completed && !finished) {
+                        completed = true
+                        main.removeCallbacks(timeout)
+                        timers.remove(timeout)
+                        if (status == TextToSpeech.SUCCESS) {
+                            entry["available"] = true
+                            try {
+                                val defaultVoice = probe?.defaultVoice ?: probe?.voice
+                                entry["defaultVoiceId"] = defaultVoice?.name ?: ""
+                                entry["defaultVoiceName"] = defaultVoice?.name ?: ""
+                                val voices = (probe?.voices ?: emptySet()).toMutableSet()
+                                if (defaultVoice != null) voices.add(defaultVoice)
+                                entry["voices"] = voices.sortedBy { it.name }.map { voice -> mapOf(
+                                    "id" to voice.name, "name" to voice.name,
+                                    "lang" to voice.locale.toLanguageTag(),
+                                    "quality" to if (voice.quality >= Voice.QUALITY_HIGH) "enhanced" else "default",
+                                    "isDefault" to (voice.name == defaultVoice?.name),
+                                    "requiresNetwork" to voice.isNetworkConnectionRequired)
+                                }
+                            } catch (_: RuntimeException) { /* Keep the selectable engine even without Voice API support. */ }
+                        }
+                        probe?.let { probes.remove(it); try { it.shutdown() } catch (_: RuntimeException) { } }
+                        active--
+                        if (next == entries.size && active == 0) finish() else launch()
+                    }
+                }
+                timeout = Runnable { complete(TextToSpeech.ERROR) }
+                timers.add(timeout)
+                main.postDelayed(timeout, 5000)
+                try {
+                    probe = TextToSpeech(appContext, { status -> main.post { complete(status) } }, packageName)
+                    probe?.let { probes.add(it) }
+                } catch (_: RuntimeException) { complete(TextToSpeech.ERROR) }
+            }
+        }
+        catalogClosers.add(finish)
+        val deadline = Runnable { finish() }
+        timers.add(deadline)
+        main.postDelayed(deadline, 12000)
+        if (entries.isEmpty()) finish() else launch()
+    }
+
+    private fun initialize(result: MethodChannel.Result, requestedEngine: String?) {
+        if (closed) { result.error("closed", "System speech is closed", null); return }
+        val target = requestedEngine ?: systemDefaultEngine()
+        if (requestedEngine != null) {
+            val installed = try { installedEngines().any { it.first == requestedEngine } }
+                catch (_: RuntimeException) { false }
+            if (!installed) { result.error("engine_unavailable", "Requested speech engine is not installed", null); return }
+        }
+        if (ready && target == enginePackage) {
+            result.success(mapOf("engine" to enginePackage, "voiceName" to currentVoiceName())); return
+        }
+        if (engine != null && target != enginePackage) {
+            initializationGeneration++
+            stop()
+            engine?.shutdown(); engine = null; ready = false
+            for (pending in initializers) pending.error("engine_changed", "System speech engine changed", null)
+            initializers.clear()
+        }
         initializers.add(result)
         if (engine != null) return
+        enginePackage = target
+        val generation = ++initializationGeneration
         try {
-            engine = TextToSpeech(appContext) { status ->
+            engine = TextToSpeech(appContext, { status ->
             main.post {
-                if (closed) return@post
+                if (closed || generation != initializationGeneration) return@post
                 ready = status == TextToSpeech.SUCCESS
                 if (ready) {
                     engine?.setAudioAttributes(AudioAttributes.Builder()
@@ -145,12 +268,20 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
                 val pending = initializers.toList()
                 initializers.clear()
                 for (item in pending) {
-                    if (ready) item.success(engine?.defaultEngine)
+                    if (ready) item.success(mapOf("engine" to enginePackage, "voiceName" to currentVoiceName()))
                     else item.error("no_engine", "No usable system text-to-speech engine", null)
                 }
                 if (!ready) { engine?.shutdown(); engine = null }
             }
-            }
+            }, target)
+            main.postDelayed({
+                if (!closed && generation == initializationGeneration && !ready) {
+                    initializationGeneration++
+                    engine?.shutdown(); engine = null
+                    val pending = initializers.toList(); initializers.clear()
+                    for (item in pending) item.error("engine_timeout", "System speech initialization timed out", null)
+                }
+            }, 12000)
         } catch (error: RuntimeException) {
             ready = false
             engine?.shutdown(); engine = null
@@ -211,6 +342,8 @@ class SystemSpeech(context: Context, messenger: BinaryMessenger) {
 
     fun close() {
         closed = true
+        initializationGeneration++
+        for (finish in catalogClosers.toList()) finish()
         stop()
         engine?.shutdown(); engine = null
         for (result in initializers) result.error("closed", "System speech is closed", null)

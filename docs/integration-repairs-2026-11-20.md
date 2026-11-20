@@ -200,3 +200,13 @@
 - 此前 6 份 `integration-repair-*` 中间日志的具体工具拒绝没有因此解除，未重试删除；11 份历史 staging 仍按历史批量整理规则待协调。剩余这两组 **17 文件、3,964,538 字节**的完整路径沿用上表对应两组；不把它们称为本轮已清退。
 
 最终日志在实例 `temp/cache139-tests-final.log`、`cache139-analyze-final.log`、`cache139-rate-confirmation.log`、`cache139-delivery.log`；最新 SDK 接收审计为 `sdk-deliverapk-before.json` / `sdk-deliverapk-after.json`。本轮项目 Git 提交按用户明确授权推送至本人 master，并以该完整 master 替换旧 PR；不再提取另一份贡献源码，不强制推送或改写历史。iOS、真机焦点/来电、真实网盘和旧桌面端仍未验收。
+
+## 1.3.10（44）系统引擎选择和音源面板
+
+用户后续要求直接列出系统音色、切换引擎、以具体音色名替换通用离线入口、重置系统停顿，并将非当前在线语言组默认收起。本轮采用独立原生 TTS 实例枚举已安装服务，合并并发请求、限制探测数量和时限；列表不再排除普通音质、需联网及其他语言音色。选择携带引擎/音色身份，保留旧记录兼容和按书设置路径；枚举不切换播放引擎。在线组按保存的选择初始化，手动展开/收起在枚举完成时保持。停顿重置先改草稿，应用后清除系统和旧全局覆盖；回归确认在线分句、请求及缓存参数不变。
+
+完整套件 **510 通过、8 可选探测跳过**；最终 Analyze exit 0、无 error，180 warning/info。新增模型在 lint 整理后另行 4 项通过。初轮失败属于旧断言仍寻找通用离线文案或假定所有在线组展开，另修正自动系统兜底时按原在线选择展开分组；最终全套通过。原生 Kotlin 实际编译通过，本地离线 Gradle 构建为 3 分 8 秒、421 任务（40 执行、381 已最新）。固定签名、独立验签、SDK 全树前后审计和 LocalApk 接收成功，包 **19,880,465 字节**，SHA-256 `8b653d2acfbb89dc9481418cdb1e12c229fc499bb0893295a04cbc1e4f2006b5`，证书及依赖锁身份沿用前版。
+
+本轮按总根/项目 AGENTS 沿用唯一源码、便携固定工具、Prepare lease、SDK 四份包身份和 16B 缓存只读护栏；签名凭据只由既有本地脚本消费，未展示或外发。LocalApk 清退旧 1.3.9 完整包 5 文件、19,761,536 字节，及匹配签名 staging 6 文件、19,892,714 字节，cleanupPending 为空。Finalize 清退自有测试输出 13 文件、108,126,144 字节，Prepare lease 内精确退役 `voice140-target-initial.log`、`voice140-target-second.log`、`voice140-analyze-initial.log`、`voice140-tests-final.log`、`voice140-tests-confirmed.log`、`voice140-analyze-final.log` 六份已替代日志、266,818 字节。当前符号 4,008,656 字节和增量输出保留；前述 17 份历史待办没有重试清理。
+
+最终证据在本实例 temp 的 `voice140-tests-passed.log`、`voice140-model-confirmed.log`、`voice140-analyze-confirmed.log`、`voice140-delivery.log`；最新 SDK 审计由本轮入口更新。完整包位置及限制见 [1.3.10 交付说明](releases/v1.3.10.md)。未生成截图、安装设备、在线构建或远端发布 APK/Release；不同厂商 TTS 引擎实际输出和 iOS 仍未验收。网络路由及远程 SHA 复核确认本人原 master 为 `791ed37`，原作者仍为 `514661e`；沿用用户授权的本人 master 和开放 PR #6 路径。

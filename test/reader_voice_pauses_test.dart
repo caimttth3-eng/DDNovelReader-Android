@@ -67,6 +67,20 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<void> expandOnlineVoice(WidgetTester tester, String id) async {
+    if (find.byKey(ValueKey('cache-voice-$id')).evaluate().isNotEmpty) return;
+    final language = edgeVoices.firstWhere((voice) => voice.id == id).langCode;
+    final family = language == 'zh-CN' ? 'zh-Hans' : language == 'zh-TW' ? 'zh-Hant' : language.split('-').first;
+    final labels = {'zh-Hans': AppLang.zhHans.nativeName, 'zh-Hant': AppLang.zhHant.nativeName,
+      'en': AppLang.en.nativeName, 'ja': AppLang.ja.nativeName, 'ko': AppLang.ko.nativeName};
+    final heading = find.descendant(of: find.byKey(ValueKey('voice-group-online-$family')), matching: find.text(labels[family]!));
+    final scrollable = find.descendant(of: find.byType(BottomSheet).last, matching: find.byType(Scrollable)).last;
+    tester.state<ScrollableState>(scrollable).position.jumpTo(0);
+    await tester.pumpAndSettle();
+    await scrollSheetTo(tester, heading);
+    await tester.tap(heading); await tester.pumpAndSettle();
+  }
+
   Future<void> editComma(WidgetTester tester, String seconds) async {
     final value = find.byKey(const ValueKey('pause-comma'));
     await scrollSheetTo(tester, value);
@@ -115,6 +129,7 @@ void main() {
     expect(voicePause, findsOneWidget);
     expect(find.byKey(const ValueKey('pause-customized-$targetVoice')), findsNothing);
     for (final voice in edgeVoices) {
+      await expandOnlineVoice(tester, voice.id);
       final cache = find.byKey(ValueKey('cache-voice-${voice.id}'));
       await scrollSheetTo(tester, cache, delta: voice == edgeVoices.first ? -150 : 150);
       expect(cache, findsOneWidget);
@@ -175,9 +190,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     final tile = find.byKey(const ValueKey('pause-voice-$native'));
     await scrollSheetTo(tester, tile);
-    expect(find.text('Default test voice'), findsNothing);
-    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value, isTrue);
-    await tester.tap(find.byType(SwitchListTile)); await tester.pumpAndSettle();
+    expect(find.byType(SwitchListTile), findsNothing);
     await scrollSheetTo(tester, find.text('Default test voice'));
     expect(find.text('Default test voice'), findsOneWidget);
     await scrollSheetTo(tester, tile, delta: -150);
@@ -190,6 +203,7 @@ void main() {
     await pause(tester);
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     final online = find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural'));
+    await expandOnlineVoice(tester, TtsReader.defaultVoice);
     await scrollSheetTo(tester, online);
     await tester.tap(find.ancestor(of: online, matching: find.byType(ListTile)).first); await tester.pumpAndSettle();
     expect(speech.voice, TtsReader.defaultVoice); expect(speech.speechRate, 2);
@@ -217,6 +231,7 @@ void main() {
     await pause(tester);
     await tester.tap(find.byKey(const ValueKey('reading-voice')));
     await tester.pump(); await tester.pump(const Duration(milliseconds: 350));
+    await expandOnlineVoice(tester, 'zh-CN-XiaoxiaoNeural');
     expect(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural')), findsOneWidget);
     await tester.tap(find.text('云希（男·阳光）')); await tester.pumpAndSettle();
     expect(speech.voice, 'zh-CN-YunxiNeural');
@@ -314,6 +329,7 @@ void main() {
     await pause(tester);
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
     final cache = find.byKey(const ValueKey('cache-voice-$voice'));
+    await expandOnlineVoice(tester, voice);
     await scrollSheetTo(tester, cache); await tester.tap(cache);
     for (var frame = 0; frame < 120 && find.byKey(const ValueKey('cache-binding')).evaluate().isEmpty; frame++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
@@ -332,6 +348,102 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     await tester.runAsync(() => task.store.sizeBytes());
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('resetting system pauses clears overrides and leaves online speech unchanged', (tester) async {
+    await configureView(tester);
+    final storage = AppStorage(), speech = _VoiceSpeech();
+    final settings = ReadingSettings()..voice = TtsReader.defaultVoice
+      ..firstLineIndent = false..mergeNonSentenceBreaks = false;
+    settings.speechPauses = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 900);
+    settings.setVoiceSpeechPauses(TtsReader.systemVoice,
+      const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 1200));
+    await storage.saveSettings(settings.toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('reset-system', '甲乙，丙丁。'),
+      storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip(T('read'))); await tester.pumpAndSettle(); await pause(tester);
+    final original = speech.starts.single;
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    final pauseButton = find.byKey(const ValueKey('pause-voice-${TtsReader.systemVoice}'));
+    await scrollSheetTo(tester, pauseButton); await tester.tap(pauseButton); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pause-reset'))); await tester.pumpAndSettle();
+    expect((await storage.loadReadingSettings('reset-system')).speechPausesForVoice(TtsReader.systemVoice)
+      .millisecondsFor(SpeechPauseKind.comma), 1200, reason: 'Reset is still a draft until Apply');
+    await tester.tap(find.byKey(const ValueKey('pause-apply'))); await tester.pumpAndSettle();
+    final saved = ReadingSettings.fromJson(await storage.loadSettings());
+    expect(saved.speechPauses, const SpeechPauseSettings());
+    expect(saved.hasVoiceSpeechPauses(TtsReader.systemVoice), isFalse);
+    expect(saved.effectiveSpeechPauses, const SpeechPauseSettings());
+    expect(saved.voice, TtsReader.defaultVoice); expect(speech.voice, TtsReader.defaultVoice);
+    expect(preparations, hasLength(1)); expect(speech.starts, hasLength(1));
+    expect(speech.starts.single.sentences, original.sentences); expect(speech.starts.single.pauses, original.pauses);
+    expect(find.byKey(const ValueKey('pause-customized-${TtsReader.systemVoice}')), findsNothing);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('online groups preserve manual folding while the system catalog loads', (tester) async {
+    await configureView(tester);
+    final gate = Completer<Map<String, dynamic>>();
+    addTearDown(() { if (!gate.isCompleted) gate.complete({'engines': []}); });
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+      if (call.method == 'voiceCatalog') return gate.future;
+      return null;
+    });
+    final storage = AppStorage(), speech = _VoiceSpeech();
+    await storage.saveSettings((ReadingSettings()..voice = TtsReader.defaultVoice).toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('folded-voices', '甲乙。'), storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip(T('read'))); await tester.pumpAndSettle(); await pause(tester);
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural')), findsOneWidget);
+    expect(find.byKey(const ValueKey('cache-voice-en-US-AriaNeural')), findsNothing);
+    final chinese = find.descendant(of: find.byKey(const ValueKey('voice-group-online-zh-Hans')),
+      matching: find.text(AppLang.zhHans.nativeName));
+    await tester.tap(chinese); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural')), findsNothing);
+    await expandOnlineVoice(tester, 'en-US-AriaNeural');
+    expect(find.byKey(const ValueKey('cache-voice-en-US-AriaNeural')), findsOneWidget);
+    gate.complete({'defaultEngine': '', 'engines': [{'id': '', 'name': '', 'voices': []}]});
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural')), findsNothing);
+    expect(find.byKey(const ValueKey('cache-voice-en-US-AriaNeural')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  });
+
+  testWidgets('installed providers show all voices and select a concrete engine without the offline placeholder', (tester) async {
+    await configureView(tester);
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async => call.method == 'voiceCatalog' ? {
+      'defaultEngine': 'engine.a', 'engines': [
+        {'id': 'engine.a', 'name': '引擎甲', 'defaultVoiceId': 'ordinary', 'defaultVoiceName': '普通甲', 'voices': [
+          {'id': 'ordinary', 'name': '普通甲', 'lang': 'zh-CN', 'quality': 'default'},
+          {'id': 'selected', 'name': '当前甲', 'lang': 'zh-CN', 'quality': 'enhanced'},
+          {'id': 'french', 'name': '法语音色', 'lang': 'fr-FR', 'quality': 'default', 'requiresNetwork': true},
+        ]},
+        {'id': 'engine.b', 'name': '引擎乙', 'defaultVoiceId': '', 'defaultVoiceName': '默认乙', 'voices': []},
+      ]} : null);
+    final voiceA = '${SystemTtsClient.voicePrefix}${SystemTtsClient.engineVoiceIdentifier('engine.a', 'selected')}';
+    final voiceB = '${SystemTtsClient.voicePrefix}${SystemTtsClient.engineVoiceIdentifier('engine.b', '')}';
+    final storage = AppStorage(), speech = _VoiceSpeech();
+    await storage.saveSettings((ReadingSettings()..voice = voiceA..speechRate = 2.8).toJson());
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book('engine-menu', '甲乙。'), storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip(T('read'))); await tester.pumpAndSettle(); await pause(tester);
+    await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('cache-voice-zh-CN-XiaoxiaoNeural')), findsNothing);
+    expect(find.text(T('systemTtsName')), findsNothing);
+    expect(find.text(T('systemTtsDescription')), findsNothing);
+    expect(find.byType(SwitchListTile), findsNothing);
+    await scrollSheetTo(tester, find.text('当前甲')); expect(find.text('当前甲'), findsOneWidget);
+    await scrollSheetTo(tester, find.text('普通甲')); expect(find.text('普通甲'), findsOneWidget);
+    await scrollSheetTo(tester, find.text('法语音色')); expect(find.text(T('systemVoiceNeedsNetwork')), findsOneWidget);
+    final engineB = find.byKey(const ValueKey('system-engine-engine.b'));
+    await scrollSheetTo(tester, engineB);
+    expect(find.descendant(of: engineB, matching: find.text('默认乙')), findsOneWidget);
+    await tester.tap(engineB); await tester.pumpAndSettle();
+    expect(speech.voice, voiceB); expect(speech.usesSystemVoice, isTrue);
+    expect((await storage.loadReadingSettings('engine-menu')).voice, voiceB);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
 
   testWidgets('system fallback reparses its own pause policy and keeps the current word anchor', (tester) async {

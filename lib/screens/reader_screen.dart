@@ -157,6 +157,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   (Size, double)? _preparedViewportKey;
   bool _leavingReader = false;
   Map<String, String> _systemVoiceNames = const {};
+  String _systemDefaultVoiceName = '';
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   bool _resumeAfterInterruption = false;
   Future<void> _interruptionPause = Future<void>.value();
@@ -3614,7 +3615,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         ]))));
     if (selected == null || !mounted) return;
     final desired = ReadingSettings.fromJson(_settings.toJson());
-    desired.setVoiceSpeechPauses(voice, selected);
+    if (selected == const SpeechPauseSettings()) {
+      desired.speechPauses = const SpeechPauseSettings();
+      desired.clearVoiceSpeechPauses(voice);
+    } else {
+      desired.setVoiceSpeechPauses(voice, selected);
+    }
     await _applySpeechConfiguration(desired);
   }
 
@@ -3902,18 +3908,27 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (sheet.mounted) update(() {});
     });
 
-  /// 音源选择：在线 Edge 音色优先，其后是本地离线系统音色。
+  /// 音源选择：在线 Edge 音色优先，其后列出已安装的系统引擎及音色。
   /// 同类语言放一起：简体中文 / 繁体中文 / 英语 / 日语 / 韩语。
   Future<void> _openVoiceSelector() async {
     if (_applyingSpeechPauses) return;
-    final systemVoices = _tts.systemVoices().then((voices) {
-      if (mounted && !_leavingReader) setState(() => _systemVoiceNames = {for (final voice in voices) voice.id: voice.name});
-      return voices;
+    final systemVoices = _tts.systemVoiceCatalog().then((catalog) {
+      if (mounted && !_leavingReader) setState(() {
+        _systemVoiceNames = {for (final voice in catalog.voices) voice.identifier: voice.name,
+          for (final engine in catalog.engines)
+            if (engine.id.isNotEmpty) SystemTtsClient.engineVoiceIdentifier(engine.id, ''):
+              engine.defaultVoiceName.isNotEmpty ? engine.defaultVoiceName : T('systemDefaultVoice', {'name': engine.name})};
+        final defaults = catalog.engines.where((engine) => engine.id == catalog.defaultEngine);
+        if (defaults.isNotEmpty) _systemDefaultVoiceName = defaults.first.defaultVoiceName;
+      });
+      return catalog;
     });
-    var enhancedOnly = true;
+    final selectedOnline = edgeVoices.where((voice) => voice.id == _settings.voice);
+    final expanded = {for (final family in _voiceFamilyOrder)
+      family: selectedOnline.isNotEmpty && _voiceFamily(selectedOnline.first.langCode) == family};
     final selected = await showModalBottomSheet<String>(context: context, isScrollControlled: true,
       constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .85),
-      builder: (ctx) => FutureBuilder<List<SystemVoice>>(future: systemVoices,
+      builder: (ctx) => FutureBuilder<SystemVoiceCatalog>(future: systemVoices,
         builder: (ctx, snapshot) => StatefulBuilder(builder: (sheet, update) {
         final voices = sortedEdgeVoices();
         final active = _settings.speechPauseVoice;
@@ -3929,9 +3944,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         for (final family in _voiceFamilyOrder) {
           final group = voices.where((v) => _voiceFamily(v.langCode) == family).toList();
           if (group.isEmpty) continue;
-          addHeader(_familyLabel(family));
+          final tiles = <Widget>[];
           for (final v in group) {
-            items.add(ListTile(dense: true,
+            tiles.add(ListTile(dense: true,
               leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
                 color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
               trailing: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -3939,45 +3954,56 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
                   icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
               ]), onTap: () => Navigator.pop(ctx, v.id)));
           }
+          items.add(ExpansionTile(key: ValueKey('voice-group-online-$family'),
+            initiallyExpanded: expanded[family]!,
+            onExpansionChanged: (value) => expanded[family] = value,
+            title: Text(_familyLabel(family)), children: tiles));
         }
 
-        // 本地语音（离线）在后：只保留简繁中文 / 英语 / 日语 / 韩语。
+        // Show every installed provider/voice, including ordinary quality and
+        // providers which require a connection. Browsing never switches playback.
         items.add(const Divider());
         addHeader(T('voiceSectionLocal'));
         if (snapshot.connectionState != ConnectionState.done) items.add(ListTile(title: Text(T('loading'))));
         if (snapshot.hasError) items.add(ListTile(title: Text(T('systemTtsUnavailable'))));
-        items.add(ListTile(
-          leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
-          title: Text(T('systemTtsName')),
-          subtitle: Text(T('systemTtsDescription'), maxLines: 2, overflow: TextOverflow.ellipsis),
-          trailing: _voicePauseButton(TtsReader.systemVoice, update, sheet),
-          onTap: () => Navigator.pop(ctx, TtsReader.systemVoice)));
-        items.add(SwitchListTile(dense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-          title: Text(T('voiceOnlyEnhanced'), style: const TextStyle(fontSize: 13)),
-          value: enhancedOnly, onChanged: (v) { enhancedOnly = v; update(() {}); }));
-        for (final family in _voiceFamilyOrder) {
-          final group = (snapshot.data ?? const <SystemVoice>[]).where((v) => _voiceFamily(v.lang) == family &&
-              (!enhancedOnly || v.quality != 'default')).toList()
-            ..sort((a, b) {
-              final qa = a.quality == 'default' ? 1 : 0;
-              final qb = b.quality == 'default' ? 1 : 0;
-              if (qa != qb) return qa - qb;
-              return a.name.compareTo(b.name);
-            });
-          if (group.isEmpty) continue;
-          addHeader(_familyLabel(family));
-          for (final v in group) {
-            final id = '${SystemTtsClient.voicePrefix}${v.id}';
+        final catalog = snapshot.data ?? const SystemVoiceCatalog();
+        final engines = catalog.engines.isNotEmpty ? catalog.engines
+          : const [SystemTtsEngine(id: '', name: '')];
+        ({String? engine, String? voice}) selection = (engine: null, voice: null);
+        if (SystemTtsClient.isSystemVoiceId(active)) {
+          try { selection = SystemTtsClient.decodeIdentifier(SystemTtsClient.identifierFrom(active)); }
+          on FormatException { /* Show available alternatives for an invalid saved selection. */ }
+        }
+        for (final engine in engines) {
+          if (engine.name.isNotEmpty) addHeader(engine.name);
+          final belongs = SystemTtsClient.isSystemVoiceId(active) &&
+            (selection.engine == engine.id || selection.engine == null && engine.id == catalog.defaultEngine);
+          final selectedVoice = belongs ? engine.voices.where((v) => v.id == selection.voice) : const <SystemVoice>[];
+          final currentVoice = selectedVoice.isNotEmpty ? selectedVoice.first : null;
+          final fallbackId = engine.id.isEmpty ? TtsReader.systemVoice
+            : '${SystemTtsClient.voicePrefix}${SystemTtsClient.engineVoiceIdentifier(engine.id, '')}';
+          final rowId = belongs && (selection.voice == null || currentVoice != null) ? active : fallbackId;
+          final rowName = currentVoice?.name ?? (engine.defaultVoiceName.isNotEmpty ? engine.defaultVoiceName
+            : engine.name.isNotEmpty ? T('systemDefaultVoice', {'name': engine.name}) : _voiceLabel(TtsReader.systemVoice));
+          items.add(ListTile(key: ValueKey('system-engine-${engine.id}'),
+            leading: Icon(rowId == active ? Icons.radio_button_checked : Icons.radio_button_off),
+            title: Text(rowName), trailing: _voicePauseButton(rowId, update, sheet),
+            onTap: () => Navigator.pop(ctx, rowId)));
+          for (final v in engine.voices) {
+            if (v.id == (currentVoice?.id ?? engine.defaultVoiceId)) continue;
+            final id = '${SystemTtsClient.voicePrefix}${v.identifier}';
             items.add(ListTile(dense: true,
               leading: Icon(id == active ? Icons.radio_button_checked : Icons.radio_button_off,
                 color: const Color(0xFF6498B5)),
               title: Text(v.name),
-              subtitle: Text(_qualityLabel(v.quality)),
+              subtitle: v.requiresNetwork ? Text(T('systemVoiceNeedsNetwork')) : null,
               trailing: _voicePauseButton(id, update, sheet),
               onTap: () => Navigator.pop(ctx, id)));
           }
         }
+        items.add(ListTile(key: const ValueKey('system-voice-settings'),
+          leading: const Icon(Icons.settings_outlined), title: Text(T('voiceManageSettings')),
+          onTap: () => _tts.openSystemVoiceSettings()));
         return SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
           Padding(padding: const EdgeInsets.all(16), child: Text(T('voiceTitle'),
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
@@ -4561,18 +4587,17 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         _ => family,
       };
 
-  static String _qualityLabel(String quality) => switch (quality) {
-        'premium' => T('voiceQualityPremium'),
-        'enhanced' => T('voiceQualityEnhanced'),
-        _ => T('voiceQualityDefault'),
-      };
-
   /// 音色显示名：中文界面显示中文友好名，其他界面显示英文名
   String _voiceLabel(String id) {
-    if (id == TtsReader.systemVoice) return T('systemTtsName');
+    if (id == TtsReader.systemVoice) return _systemDefaultVoiceName.isNotEmpty
+      ? _systemDefaultVoiceName : _tts.currentSystemVoiceName.isNotEmpty ? _tts.currentSystemVoiceName : T('systemVoiceUnknown');
     if (SystemTtsClient.isSystemVoiceId(id)) {
       final vid = SystemTtsClient.identifierFrom(id);
-      return _systemVoiceNames[vid] ?? T('systemTtsName');
+      if (_systemVoiceNames[vid] != null) return _systemVoiceNames[vid]!;
+      try {
+        final voice = SystemTtsClient.decodeIdentifier(vid);
+        return voice.voice ?? voice.engine ?? T('systemVoiceUnknown');
+      } on FormatException { return T('systemVoiceUnknown'); }
     }
     for (final v in edgeVoices) {
       if (v.id == id) {
@@ -4586,7 +4611,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   }
 
   String _shortVoiceLabel(String id) {
-    if (id == TtsReader.systemVoice) return T('shortSystemVoice');
     final label = _voiceLabel(id);
     if (SystemTtsClient.isSystemVoiceId(id)) return label;
     return label.split(RegExp(r'[（(]')).first.trim();

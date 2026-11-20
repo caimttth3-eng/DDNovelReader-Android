@@ -45,6 +45,11 @@ class _SpeechPauseEditorState extends State<SpeechPauseEditor> {
       onTap: () => setState(() => _expanded = !_expanded)),
     if (_expanded) ...[
       Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(T('pauseDescription'))),
+      Align(alignment: Alignment.centerRight, child: TextButton.icon(
+        key: const ValueKey('pause-reset'),
+        onPressed: _draft == const SpeechPauseSettings() ? null
+          : () => setState(() => _draft = const SpeechPauseSettings()),
+        icon: const Icon(Icons.restore), label: Text(T('resetPauseSettings')))),
       for (final kind in SpeechPauseKind.values) Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(children: [
           SizedBox(width: 48, child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
