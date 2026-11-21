@@ -10,7 +10,7 @@
 
 ## 🎉 iOS 版正式上线
 
-**v1.3.0 起支持 iPhone / iPad，v1.3.1 完善系统音色选择**，与安卓共用同一套阅读、朗读与同步能力。
+**v1.3.0 起支持 iPhone / iPad，v1.3.3 修复缓存命中与离线高亮**，与安卓共用同一套阅读、朗读与同步能力。
 
 > iOS 版以**未签名 IPA** 形式发布（不走 App Store），需要用签名工具自签安装。
 > 这是苹果的限制，不是安装包损坏；按下面的教程操作即可。
@@ -19,7 +19,7 @@
 
 前往 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载：
 
-- iOS：`DDNovelReader_v1.3.1_unsigned.ipa`（约 9MB）
+- iOS：`DDNovelReader_v1.3.3_unsigned.ipa`（约 9MB）
 - Android：三个架构 APK（见下方「下载」）
 
 ### 系统要求
@@ -69,7 +69,7 @@
 ## 下载
 
 - **Android**：本仓库 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载 APK（三架构）
-- **iOS**：同页下载 `DDNovelReader_v1.3.1_unsigned.ipa`，按上面的教程自签
+- **iOS**：同页下载 `DDNovelReader_v1.3.3_unsigned.ipa`，按上面的教程自签
 - **Windows / macOS / Linux**：前往 [桌面版发布页](https://github.com/caimttth3-eng/DDNovelReader) 下载（Windows 绿色免安装 exe / macOS DMG / Linux 单文件）
 
 > 桌面版功能更全：本地离线语音 + Edge 神经语音、整本语音缓存、书签划线笔记、全文搜索、多主题、定时播放。
