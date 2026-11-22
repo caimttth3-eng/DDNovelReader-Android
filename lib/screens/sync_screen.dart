@@ -137,6 +137,105 @@ class _SyncScreenState extends State<SyncScreen> {
     }
   }
 
+  /// 预览文本：按按钮之前先说清楚这次会动几条
+  String _previewText(SyncReport r) {
+    final parts = <String>[];
+    if (r.mode == 'push') {
+      parts.add(T('syncWillPush', {'n': '${r.pushed}'}));
+      if (r.deleted > 0) parts.add(T('syncWillDelete', {'n': '${r.deleted}'}));
+    } else {
+      parts.add(T('syncWillPull', {'n': '${r.pulled}'}));
+      if (r.imported > 0) parts.add(T('syncWillImport', {'n': '${r.imported}'}));
+      if (r.removed > 0) parts.add(T('syncWillRemove', {'n': '${r.removed}'}));
+    }
+    return parts.join('；');
+  }
+
+  /// 「保存到云端」/「从云端读取」：先跑一次只读预览，确认后才真正同步
+  Future<void> _runMode(String mode) async {
+    if (_busy) return;
+    if (_serverCtl.text.trim().isEmpty) {
+      setState(() => _status = T('syncNeedServer'));
+      return;
+    }
+    await _persist();
+    setState(() {
+      _busy = true;
+      _status = T('syncChecking');
+    });
+    SyncReport preview;
+    try {
+      preview = await _engine.sync(mode: mode, dryRun: true);
+    } catch (e) {
+      preview = SyncReport()..error = T('syncCheckFailed', {'err': '$e'});
+    }
+    if (!mounted) return;
+    if (!preview.ok) {
+      setState(() {
+        _busy = false;
+        _status = preview.error.isEmpty
+            ? T('syncCheckFailed', {'err': ''})
+            : preview.error;
+      });
+      return;
+    }
+    final total = preview.pushed +
+        preview.pulled +
+        preview.imported +
+        preview.removed +
+        preview.deleted;
+    if (total == 0) {
+      setState(() {
+        _busy = false;
+        _status = T('syncNoChange');
+      });
+      return;
+    }
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _paper,
+        title: Text(T('syncData'),
+            style: const TextStyle(fontSize: 15, color: _ink)),
+        content: Text(_previewText(preview),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF5D3A1A))),
+        actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(T('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: _ink),
+            child: Text(T('syncContinue')),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (go != true) {
+      setState(() {
+        _busy = false;
+        _status = T('syncCancelled');
+      });
+      return;
+    }
+    setState(() => _status = T('syncRunning'));
+    final report = await _engine.sync(mode: mode);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _status = report.summary;
+      _lastTime = report.ok
+          ? DateTime.now().millisecondsSinceEpoch / 1000.0
+          : _lastTime;
+    });
+    if (report.ok) {
+      widget.onSynced?.call();
+    }
+  }
+
   Widget _field({
     required String label,
     required TextEditingController ctl,
@@ -276,6 +375,12 @@ class _SyncScreenState extends State<SyncScreen> {
                   ),
                 ),
               const SizedBox(height: 4),
+              Text(
+                T('syncHint'),
+                style: const TextStyle(
+                    fontSize: 11, height: 1.35, color: Color(0xFF8A7360)),
+              ),
+              const SizedBox(height: 6),
               Row(
                 children: [
                   TextButton(
@@ -293,14 +398,33 @@ class _SyncScreenState extends State<SyncScreen> {
                     onPressed: _busy ? null : () => _run(true),
                     child: Text(T('syncTest')),
                   ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: _busy ? null : () => _run(false),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _ink,
-                      foregroundColor: Colors.white,
+                ],
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _busy ? null : () => _runMode('push'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _ink,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: Text(T('syncPush')),
                     ),
-                    child: Text(_busy ? T('syncRunning') : T('syncRun')),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : () => _runMode('pull'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _ink,
+                        side: const BorderSide(color: Color(0xFF5D3A1A)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: Text(T('syncPull')),
+                    ),
                   ),
                 ],
               ),

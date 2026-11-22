@@ -20,6 +20,8 @@ class WebDavEntry {
   final bool isDir;
   final int size;
   final double mtime;
+  /// 服务器返回的 ETag（拿去做 If-Match 条件写，避免覆盖别人刚改的记录）
+  final String etag;
 
   const WebDavEntry({
     required this.name,
@@ -27,6 +29,7 @@ class WebDavEntry {
     required this.isDir,
     this.size = 0,
     this.mtime = 0,
+    this.etag = '',
   });
 }
 
@@ -215,6 +218,8 @@ class WebDavClient {
         r'\s*([0-9]+)?\s*</(?:[A-Za-z0-9_.-]+:)?getcontentlength>');
     final lmRe = RegExp(r'<(?:[A-Za-z0-9_.-]+:)?getlastmodified[^>]*>'
         r'\s*([^<]*)\s*</(?:[A-Za-z0-9_.-]+:)?getlastmodified>');
+    final etRe = RegExp(r'<(?:[A-Za-z0-9_.-]+:)?getetag[^>]*>'
+        r'\s*([^<]*)\s*</(?:[A-Za-z0-9_.-]+:)?getetag>');
 
     for (final m in respRe.allMatches(xml)) {
       final chunk = m.group(1) ?? '';
@@ -249,7 +254,11 @@ class WebDavClient {
       if (lmm != null) {
         mtime = parseHttpDate(lmm.group(1) ?? '');
       }
-      out.add(WebDavEntry(name: name, rel: rel, isDir: isDir, size: size, mtime: mtime));
+      final etm = etRe.firstMatch(chunk);
+      final etag = etm == null ? '' : (etm.group(1) ?? '').trim();
+      out.add(WebDavEntry(
+          name: name, rel: rel, isDir: isDir, size: size, mtime: mtime,
+          etag: etag));
     }
     return out;
   }
@@ -295,9 +304,18 @@ class WebDavClient {
 
   /// 写文件；优先 .part + MOVE，避免中途失败留下半截 JSON。
   /// 书源文件传 `contentType: 'application/octet-stream'` 且 `atomic: false`（大文件不必走 MOVE）。
+  /// [etag] 非空时走单请求条件写（If-Match）：远端已被别人改过，服务器回 412/409，
+  /// 调用方据此重读再合并，绝不整条盖掉对端的新数据。
   Future<bool> put(String rel, List<int> data,
       {bool atomic = true,
+      String? etag,
       String contentType = 'application/json; charset=utf-8'}) async {
+    if (etag != null && etag.trim().isNotEmpty) {
+      await _request('PUT', rel, body: data,
+          headers: {'Content-Type': contentType, 'If-Match': etag.trim()},
+          allow: {200, 201, 204});
+      return true;
+    }
     if (!atomic) {
       await _request('PUT', rel, body: data,
           headers: {'Content-Type': contentType}, allow: {200, 201, 204});

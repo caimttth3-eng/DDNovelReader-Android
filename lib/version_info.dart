@@ -6,12 +6,17 @@
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.3.3';
-  static const String build = '14';
+  static const String version = '1.3.4';
+  static const String build = '15';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.4：同步改成按项合并，不再整条覆盖。读到第几页和书签各比各自的时间，'
+        '另一边刚读到的新位置不会被这一边的旧位置盖掉；上传前会核对云端这本有没有'
+        '被别人改过，改过就重读再合并，两边改动都留下。数据同步页拆成'
+        '「保存到云端」和「从云端读取」两个按钮，按按钮前先写明这次会动几条，确认后才动；'
+        '阅读页也拆成上传、下载两个按钮。删除照样两边同步。',
     'v1.3.3：整本缓存与朗读体验修复。缓存面板立即弹出不再卡顿；Edge 语速上限恢复 3.0，'
         '3.0x 整本缓存可直接命中；重进/升级后按磁盘文件校验并续传补全；'
         '本地系统语音新增逐词高亮兜底。',

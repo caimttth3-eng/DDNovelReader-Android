@@ -56,14 +56,14 @@ void main() {
     expect(s[SyncEngine.cfgVerifyTls], true);
   });
 
-  testWidgets('服务器为空时点立即同步给出提示，不发请求', (tester) async {
+  testWidgets('服务器为空时点保存到云端给出提示，不发请求', (tester) async {
     final storage = AppStorage();
     await tester.pumpWidget(MaterialApp(
       home: SyncScreen(storage: storage, annotations: AnnotationStore()),
     ));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('立即同步'));
+    await tester.tap(find.text('保存到云端'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('请先填写服务器地址'), findsOneWidget);

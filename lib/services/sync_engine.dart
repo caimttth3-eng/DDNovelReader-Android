@@ -33,13 +33,31 @@ class SyncReport {
   final List<String> lines = [];
   String error = '';
 
+  /// 上传前的冲突计数（远端在我们读取之后又被别人改过 → 重读重合并重写）
+  int conflicts = 0;
+  /// both / push / pull
+  String mode = 'both';
+  /// 是否为预览（只统计将要做的事，不写任何数据）
+  bool dryRun = false;
+
   String get summary {
     if (!ok) return error;
-    final b = StringBuffer('同步完成：上传 $pushed 本，拉取 $pulled 本，跳过 $skipped 本');
-    if (imported > 0) b.write('，新增 $imported 本');
-    if (removed > 0) b.write('，删除 $removed 本');
-    if (deleted > 0) b.write('，上传删除事件 $deleted 个');
+    final b = StringBuffer();
+    if (mode == 'push') {
+      b.write('保存完成：上传 $pushed 本');
+      if (deleted > 0) b.write('，删除事件 $deleted 个');
+    } else if (mode == 'pull') {
+      b.write('读取完成：更新 $pulled 本');
+      if (imported > 0) b.write('，新增 $imported 本');
+      if (removed > 0) b.write('，移除 $removed 本');
+    } else {
+      b.write('同步完成：上传 $pushed 本，拉取 $pulled 本，跳过 $skipped 本');
+      if (imported > 0) b.write('，新增 $imported 本');
+      if (removed > 0) b.write('，删除 $removed 本');
+      if (deleted > 0) b.write('，上传删除事件 $deleted 个');
+    }
     if (sourceUploaded > 0) b.write('，补传书源 $sourceUploaded 个');
+    if (conflicts > 0) b.write('，冲突重试 $conflicts 次');
     if (remoteOnly.isNotEmpty) {
       b.write('；远端有 ${remoteOnly.length} 本本机未导入（无源文件）');
     }
@@ -329,8 +347,10 @@ class SyncEngine {
     }
   }
 
-  Future<Map<String, Map<String, dynamic>>> readRemoteBooks(WebDavClient cli) async {
+  Future<(Map<String, Map<String, dynamic>>, Map<String, String>)> readRemoteBooks(
+      WebDavClient cli) async {
     final out = <String, Map<String, dynamic>>{};
+    final etags = <String, String>{};
     final entries = await cli.propfind(_booksDir);
     for (final e in entries) {
       if (e.isDir || !e.name.toLowerCase().endsWith('.json')) continue;
@@ -345,9 +365,11 @@ class SyncEngine {
       }
       final ck = (rec['content_key'] as String? ?? '').trim();
       if (ck.isEmpty) continue;
+      rec['_etag'] = e.etag;
       out[ck] = rec;
+      if (e.etag.isNotEmpty) etags[ck] = e.etag;
     }
-    return out;
+    return (out, etags);
   }
 
   // ---------------------------------------------------------------- 合并
@@ -391,6 +413,100 @@ class SyncEngine {
       return (DateTime.tryParse(d)?.millisecondsSinceEpoch ?? 0) / 1000.0;
     }
     return 0;
+  }
+
+  /// 本机这条记录有没有值得写回远端的东西（只判断"本机有没有对端没有的"，
+  /// 不比"谁更新"——谁更新在 [mergeRecord] 里按字段判）。
+  static bool pushNeeded(Map<String, dynamic> lrec, Map<String, dynamic>? rrec) {
+    if (rrec == null || rrec['deleted'] == true) return true;
+    final lPat = _num(lrec['progress_at']) ?? 0.0;
+    final rPat = _num(rrec['progress_at']) ?? _num(rrec['updated_at']) ?? 0.0;
+    final lBat = _num(lrec['bookmarks_at']) ?? 0.0;
+    final rBat = _num(rrec['bookmarks_at']) ?? _num(rrec['updated_at']) ?? 0.0;
+    if (lPat > rPat + timeTol) return true;
+    if (lBat > rBat + timeTol) return true;
+    final lid = <String>{};
+    for (final b in (lrec['bookmarks'] is List ? lrec['bookmarks'] as List : const [])) {
+      if (b is Map) {
+        final id = (b['id'] ?? '').toString();
+        if (id.isNotEmpty) lid.add(id);
+      }
+    }
+    final rid = <String>{};
+    for (final b in (rrec['bookmarks'] is List ? rrec['bookmarks'] as List : const [])) {
+      if (b is Map) {
+        final id = (b['id'] ?? '').toString();
+        if (id.isNotEmpty) rid.add(id);
+      }
+    }
+    if (lid.difference(rid).isNotEmpty) return true;
+    return (rrec['content_key'] as String? ?? '').trim().isEmpty;
+  }
+
+  /// 以远端记录为基底做**字段级合并**，返回要写回远端的完整记录。
+  ///
+  /// - 进度：只有本机 progress_at 更新（超出容差）才替换远端进度；远端是墓碑（复活）则用本机
+  /// - 书签：两边并集（按 id 取较新），bookmarks_at 取两端最大，任何一边都不丢
+  /// - 元信息（书名/作者/格式/字数/章数/书源）：只在远端缺失时补，**永不覆盖**对端
+  /// - 删除状态由墓碑逻辑单独处理，这里只处理未删除的记录
+  static Map<String, dynamic> mergeRecord(
+    Map<String, dynamic> lrec,
+    Map<String, dynamic> rrec,
+    String deviceName,
+  ) {
+    final base = Map<String, dynamic>.from(rrec);
+    final wasTomb = base['deleted'] == true;
+    base.remove('deleted');
+    base.remove('deleted_at');
+    base.remove('_etag');
+
+    final lPat = _num(lrec['progress_at']) ?? 0.0;
+    final rPat = _num(base['progress_at']) ?? _num(base['updated_at']) ?? 0.0;
+    final lp = lrec['progress'];
+    if ((wasTomb || lPat > rPat + timeTol) && lp is Map) {
+      base['progress'] = Map<String, dynamic>.from(lp.cast<String, dynamic>());
+      base['progress_at'] = _round(lPat);
+    } else if (lPat > 0 && (_num(base['progress_at']) ?? 0) <= 0) {
+      base['progress_at'] = _round(lPat);
+    }
+
+    final lBms = <Map<String, dynamic>>[];
+    for (final b in (lrec['bookmarks'] is List ? lrec['bookmarks'] as List : const [])) {
+      if (b is Map) lBms.add(b.cast<String, dynamic>());
+    }
+    final rBms = <Map<String, dynamic>>[];
+    for (final b in (base['bookmarks'] is List ? base['bookmarks'] as List : const [])) {
+      if (b is Map) rBms.add(b.cast<String, dynamic>());
+    }
+    final (merged, _) = mergeBookmarks(lBms, rBms);
+    if (merged.isNotEmpty) base['bookmarks'] = merged;
+
+    final lBat = _num(lrec['bookmarks_at']) ?? 0.0;
+    final rBat = _num(base['bookmarks_at']) ?? 0.0;
+    if (wasTomb || lBat > rBat + timeTol) {
+      base['bookmarks_at'] = _round(lBat);
+    }
+
+    for (final f in const [
+      'content_key', 'content_key_version', 'title', 'author', 'format',
+      'total_chars', 'chapter_count', 'source',
+    ]) {
+      final bv = base[f];
+      final empty = bv == null ||
+          (bv is String && bv.trim().isEmpty) ||
+          (bv is num && bv == 0);
+      if (empty && lrec[f] != null) base[f] = lrec[f];
+    }
+
+    base['schema'] = schemaVersion;
+    final pAt = _num(base['progress_at']) ?? 0.0;
+    final bAt = _num(base['bookmarks_at']) ?? 0.0;
+    base['progress_at'] = _round(pAt);
+    base['bookmarks_at'] = _round(bAt);
+    base['updated_at'] = _round(pAt > bAt ? pAt : bAt);
+    base['synced_at'] = _round(DateTime.now().millisecondsSinceEpoch / 1000.0);
+    base['device'] = deviceName;
+    return base;
   }
 
   /// 把远端记录合到本地书（进度/书签各按自己的时间新者胜），返回是否改动。
@@ -437,8 +553,15 @@ class SyncEngine {
 
   // ---------------------------------------------------------------- 主流程
 
-  Future<SyncReport> sync() async {
-    final report = SyncReport();
+  /// 跑一次同步。
+  ///
+  /// [mode] both = 双向（自动同步用）；push = 只把本机改动保存到云端；
+  /// pull = 只把云端更新读回本机。
+  /// [dryRun] = true 时一个字节都不写，只统计"将要做的事"（界面预览用）。
+  Future<SyncReport> sync({String mode = 'both', bool dryRun = false}) async {
+    final report = SyncReport()
+      ..mode = mode
+      ..dryRun = dryRun;
     final s = await settings();
     if (!configured(s)) {
       report.error = '未配置 WebDAV 服务器地址';
@@ -450,11 +573,13 @@ class SyncEngine {
     }
     _running = true;
     try {
+      final doPull = mode == 'both' || mode == 'pull';
+      final doPush = mode == 'both' || mode == 'push';
       final cli = client(s);
-      await prepareRemote(cli);
+      if (!dryRun) await prepareRemote(cli);
       final (deviceId, deviceName) = await ensureDevice(s);
       var local = await localRecords(s, deviceName);
-      final remote = await readRemoteBooks(cli);
+      final (remote, remoteEtags) = await readRemoteBooks(cli);
       final metaById = {for (final m in await storage.loadBooks()) m.id: m};
       var deletions = await storage.loadDeletions();
       // 删除过的所有 key（含老书兜底用的 book id），用于挡住"删掉的旧记录被当远端独有书导回"
@@ -471,7 +596,7 @@ class SyncEngine {
       // 1) 远端更新 → 拉到本地；远端删除 → 本机也删；远端独有的书尝试下载书源并入书架
       var localUpdated = 0;
       var imported = 0;
-      for (final entry in remote.entries) {
+      for (final entry in (doPull ? remote.entries : const <MapEntry<String, Map<String, dynamic>>>[])) {
         final key = entry.key;
         final rec = entry.value;
 
@@ -491,17 +616,25 @@ class SyncEngine {
               report.skipped++;
               continue;
             }
-            await storage.removeBook(item.key, deletedAt: tomb);
+            if (dryRun) {
+              report.lines.add('✕ 将删除 ${item.value['title'] ?? rec['title'] ?? key}（对端删除）');
+            } else {
+              await storage.removeBook(item.key, deletedAt: tomb);
+              report.removedIds.add(item.key);
+              report.lines.add('✕ 已删除 ${item.value['title'] ?? rec['title'] ?? key}（对端删除）');
+            }
             report.removed++;
-            report.removedIds.add(item.key);
             localUpdated++;
             local.remove(key);
-            report.lines.add('✕ 已删除 ${item.value['title'] ?? rec['title'] ?? key}（对端删除）');
+          } else if (dryRun) {
+            report.lines.add('✕ 将记下删除 ${rec['title'] ?? key}（对端删除）');
           }
           // 远端已删且本机也没有：记下墓碑，避免以后又把这本书拉回来
-          await storage.markDeleted(key, (rec['title'] as String?) ?? '', deletedAt: tomb);
+          if (!dryRun) {
+            await storage.markDeleted(key, (rec['title'] as String?) ?? '', deletedAt: tomb);
+            await _dropRemoteSource(cli, key, rec);
+          }
           deletions[key] = {'deleted_at': tomb, 'title': rec['title'] ?? ''};
-          await _dropRemoteSource(cli, key, rec);
           continue;
         }
 
@@ -520,6 +653,16 @@ class SyncEngine {
         final item = local[key];
         if (item == null) {
           final title = (rec['title'] as String? ?? '').trim();
+          if (dryRun) {
+            if (_sourceExistsInRecord(rec)) {
+              imported++;
+              report.imported++;
+              report.lines.add('↓ 将新增 ${title.isEmpty ? key : title}');
+            } else {
+              report.remoteOnly.add(title.isEmpty ? key : title);
+            }
+            continue;
+          }
           if (await _importRemote(cli, key, rec)) {
             imported++;
             report.imported++;
@@ -535,7 +678,11 @@ class SyncEngine {
         final lBat = _num(item.value['bookmarks_at']) ?? 0.0;
         final rBat = _num(rec['bookmarks_at']) ?? _num(rec['updated_at']) ?? 0.0;
         if (rPat > lPat + timeTol || rBat > lBat + timeTol) {
-          if (await applyRemote(item.key, rec)) {
+          if (dryRun) {
+            localUpdated++;
+            report.pulled++;
+            report.lines.add('↓ 将更新 ${item.value['title'] ?? key}（远端更新）');
+          } else if (await applyRemote(item.key, rec)) {
             localUpdated++;
             report.pulled++;
             report.lines.add('↓ ${item.value['title'] ?? key}（远端更新）');
@@ -547,42 +694,78 @@ class SyncEngine {
         }
       }
 
-      if (localUpdated > 0 || imported > 0) {
+      if (!dryRun && (localUpdated > 0 || imported > 0)) {
         local = await localRecords(s, deviceName);
         deletions = await storage.loadDeletions();
       }
 
-      // 2) 本地更新 → 推到远端（进度/书签任一字段更新就推整条）
-      for (final entry in local.entries) {
-        final key = entry.key;
-        final rec = entry.value.value;
-        final rrec = remote[key];
-        if (rrec != null && rrec['deleted'] != true) {
-          final lPat = _num(rec['progress_at']) ?? 0.0;
-          final rPat = _num(rrec['progress_at']) ?? _num(rrec['updated_at']) ?? 0.0;
-          final lBat = _num(rec['bookmarks_at']) ?? 0.0;
-          final rBat = _num(rrec['bookmarks_at']) ?? _num(rrec['updated_at']) ?? 0.0;
-          if (lPat <= rPat + timeTol && lBat <= rBat + timeTol) continue;
+      // 2) 本地更新 → 远端：字段级合并后写回，绝不整条覆盖对端的新数据
+      if (doPush) {
+        for (final entry in local.entries) {
+          final key = entry.key;
+          final bid = entry.value.key;
+          final rec = entry.value.value;
+          final rrec = remote[key];
+          if (rrec != null && rrec['deleted'] == true) {
+            // 远端墓碑：与拉取阶段同一条规则 —— 本机这本书在删除之后又被读过/加过书签/
+            // 重新导入过（活动时间不早于删除），就判为"用户又用起来了"，推活记录把它复活。
+            final rDel = _num(rrec['deleted_at']) ?? _num(rrec['updated_at']) ?? 0.0;
+            var act = _num(rec['progress_at']) ?? 0.0;
+            final bat = _num(rec['bookmarks_at']) ?? 0.0;
+            if (bat > act) act = bat;
+            final meta = metaById[bid];
+            if (meta != null) {
+              final a = meta.addedAt.millisecondsSinceEpoch / 1000.0;
+              if (a > act) act = a;
+            }
+            if (!(act >= rDel - timeTol)) continue;
+          }
+          if (!pushNeeded(rec, rrec)) continue;
+          if (dryRun) {
+            report.pushed++;
+            report.lines.add('↑ 将保存 ${rec['title'] ?? key}');
+            continue;
+          }
+          final path = _bookPath(key);
+          var merged = mergeRecord(rec, rrec ?? <String, dynamic>{}, deviceName);
+          try {
+            await cli.put(path, utf8.encode(jsonEncode(merged)),
+                etag: remoteEtags[key]);
+          } on WebDavException catch (e) {
+            if (e.status != 409 && e.status != 412) rethrow;
+            // 对端在我们读取之后刚改过这条记录：重读 → 重新合并 → 再写一次
+            report.conflicts++;
+            Map<String, dynamic> fresh = <String, dynamic>{};
+            final raw = await cli.get(path);
+            if (raw != null && raw.isNotEmpty) {
+              try {
+                fresh = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>;
+              } catch (_) {
+                fresh = <String, dynamic>{};
+              }
+            }
+            merged = mergeRecord(rec, fresh, deviceName);
+            await cli.put(path, utf8.encode(jsonEncode(merged)));
+          }
+          report.pushed++;
+          report.lines.add('↑ ${rec['title'] ?? key}');
         }
-        await cli.put(_bookPath(key), utf8.encode(jsonEncode(rec)));
-        report.pushed++;
-        report.lines.add('↑ ${rec['title'] ?? key}');
       }
 
       // 2.2) 本地删除 → 远端墓碑
       final nowS = DateTime.now().millisecondsSinceEpoch / 1000.0;
-      for (final e in deletions.entries.toList()) {
+      for (final e in (doPush ? deletions.entries.toList() : const <MapEntry<String, dynamic>>[])) {
         final key = e.key;
         final dent = e.value is Map ? (e.value as Map).cast<String, dynamic>() : <String, dynamic>{};
         if (local.containsKey(key)) {
           // 书还在本地（刚重新导入）= 撤销墓碑，不再推删除
-          await storage.clearDeletion(key);
+          if (!dryRun) await storage.clearDeletion(key);
           continue;
         }
         final dT = _num(dent['deleted_at']) ?? 0.0;
         if (dT <= 0) continue;
         if (nowS - dT > tombstoneTtl) {
-          await storage.clearDeletion(key);
+          if (!dryRun) await storage.clearDeletion(key);
           continue;
         }
         final rrec = remote[key];
@@ -595,10 +778,16 @@ class SyncEngine {
             continue;
           }
         }
-        await cli.put(_bookPath(key), utf8.encode(jsonEncode(tombstoneRecord(key, dent, deviceName))));
-        report.deleted++;
-        report.lines.add('↑ 删除事件 ${dent['title'] ?? key}');
-        await _dropRemoteSource(cli, key, rrec ?? <String, dynamic>{});
+        if (dryRun) {
+          report.deleted++;
+          report.lines.add('↑ 将上传删除事件 ${dent['title'] ?? key}');
+        } else {
+          await cli.put(_bookPath(key),
+              utf8.encode(jsonEncode(tombstoneRecord(key, dent, deviceName))));
+          report.deleted++;
+          report.lines.add('↑ 删除事件 ${dent['title'] ?? key}');
+          await _dropRemoteSource(cli, key, rrec ?? <String, dynamic>{});
+        }
 
         // 老书当初用 book id 当 key 上传过一条记录：本机删书时一并把那条孤儿记录也推成墓碑，
         // 否则桌面端会一直留着「只存在于远端」的这本旧书。
@@ -607,10 +796,14 @@ class SyncEngine {
           final idRec = remote[idKey];
           if (idRec != null && idRec['deleted'] != true &&
               (_num(idRec['updated_at']) ?? 0.0) <= dT + timeTol) {
-            await cli.put(_bookPath(idKey),
-                utf8.encode(jsonEncode(tombstoneRecord(idKey, dent, deviceName))));
-            report.lines.add('↑ 删除事件（旧记录）$idKey');
-            await _dropRemoteSource(cli, idKey, idRec);
+            if (dryRun) {
+              report.lines.add('↑ 将上传删除事件（旧记录）$idKey');
+            } else {
+              await cli.put(_bookPath(idKey),
+                  utf8.encode(jsonEncode(tombstoneRecord(idKey, dent, deviceName))));
+              report.lines.add('↑ 删除事件（旧记录）$idKey');
+              await _dropRemoteSource(cli, idKey, idRec);
+            }
           }
         }
       }
@@ -618,64 +811,70 @@ class SyncEngine {
       // 2.5) 清理历史遗留：旧版安卓 contentKey 为空时用 book id 当 key 上传，
       // 回填 ck2 后再按新 key 推一次，远端那条旧记录就成了孤儿（表现为「远端未导入」）。
       // 只删“key 正是本机 book id”的文件，不会碰到别的设备/书。
-      for (final entry in local.entries) {
-        final idKey = entry.value.key;
-        if (entry.key == idKey) continue; // 本机仍没回填，保留旧记录
-        if (!remote.containsKey(idKey)) continue;
-        try {
-          await cli.delete(_bookPath(idKey));
-          report.lines.add('清理旧记录 $idKey');
-        } on WebDavException {
-          // 删不掉不影响本次同步结果
+      if (doPush && !dryRun) {
+        for (final entry in local.entries) {
+          final idKey = entry.value.key;
+          if (entry.key == idKey) continue; // 本机仍没回填，保留旧记录
+          if (!remote.containsKey(idKey)) continue;
+          try {
+            await cli.delete(_bookPath(idKey));
+            report.lines.add('清理旧记录 $idKey');
+          } on WebDavException {
+            // 删不掉不影响本次同步结果
+          }
         }
       }
 
       // 2.6) 书源文件：只补远端缺的（本机独有的书，桌面靠它落地）
-      final haveSources = <String>{};
-      try {
-        for (final e in await cli.propfind(_sourcesDir)) {
-          if (!e.isDir) haveSources.add(e.name.toLowerCase());
-        }
-      } on WebDavException {
-        await cli.mkdirs(_sourcesDir);
-      }
-      final booksNow = await storage.loadBooks();
-      for (final meta in booksNow) {
-        final key = meta.contentKey.trim().isNotEmpty ? meta.contentKey.trim() : meta.id;
-        final ext = _extOf(meta.format);
-        final name = '$key$ext'.toLowerCase();
-        if (haveSources.contains(name)) continue;
-        final bytes = await _readSourceFile(meta.filePath);
-        if (bytes == null) continue;
+      if (doPush && !dryRun) {
+        final haveSources = <String>{};
         try {
-          await cli.put('$_sourcesDir/$key$ext', bytes,
-              atomic: false, contentType: 'application/octet-stream');
-          report.sourceUploaded++;
-          haveSources.add(name);
-        } on WebDavException catch (e) {
-          report.lines.add('上传书源失败「${meta.title}」：${e.message}');
+          for (final e in await cli.propfind(_sourcesDir)) {
+            if (!e.isDir) haveSources.add(e.name.toLowerCase());
+          }
+        } on WebDavException {
+          await cli.mkdirs(_sourcesDir);
+        }
+        final booksNow = await storage.loadBooks();
+        for (final meta in booksNow) {
+          final key = meta.contentKey.trim().isNotEmpty ? meta.contentKey.trim() : meta.id;
+          final ext = _extOf(meta.format);
+          final name = '$key$ext'.toLowerCase();
+          if (haveSources.contains(name)) continue;
+          final bytes = await _readSourceFile(meta.filePath);
+          if (bytes == null) continue;
+          try {
+            await cli.put('$_sourcesDir/$key$ext', bytes,
+                atomic: false, contentType: 'application/octet-stream');
+            report.sourceUploaded++;
+            haveSources.add(name);
+          } on WebDavException catch (e) {
+            report.lines.add('上传书源失败「${meta.title}」：${e.message}');
+          }
         }
       }
 
       // 3) 设备登记
-      try {
-        await cli.put(
-          '$_devicesDir/$deviceId.json',
-          utf8.encode(jsonEncode({
-            'schema': schemaVersion,
-            'device_id': deviceId,
-            'device_name': deviceName,
-            'last_sync': _round(DateTime.now().millisecondsSinceEpoch / 1000.0),
-            'book_count': local.length,
-            'platform': 'Android',
-          })),
-        );
-      } on WebDavException {
-        // 设备登记失败不影响主流程
-      }
+      if (!dryRun) {
+        try {
+          await cli.put(
+            '$_devicesDir/$deviceId.json',
+            utf8.encode(jsonEncode({
+              'schema': schemaVersion,
+              'device_id': deviceId,
+              'device_name': deviceName,
+              'last_sync': _round(DateTime.now().millisecondsSinceEpoch / 1000.0),
+              'book_count': local.length,
+              'platform': 'Android',
+            })),
+          );
+        } on WebDavException {
+          // 设备登记失败不影响主流程
+        }
 
-      s[cfgLastTime] = _round(DateTime.now().millisecondsSinceEpoch / 1000.0);
-      await saveSettings(s);
+        s[cfgLastTime] = _round(DateTime.now().millisecondsSinceEpoch / 1000.0);
+        await saveSettings(s);
+      }
       report.ok = true;
       return report;
     } on WebDavException catch (e) {
@@ -687,6 +886,14 @@ class SyncEngine {
     } finally {
       _running = false;
     }
+  }
+
+  /// 远端记录是否带可下载的书源（预览时用来判断"这本能不能落地"）
+  static bool _sourceExistsInRecord(Map<String, dynamic> rec) {
+    final src = rec['source'];
+    if (src is! Map) return false;
+    final size = (src['size'] as num?)?.toInt() ?? 0;
+    return size > 0 && size <= maxSourceBytes;
   }
 
   // ---------------------------------------------------------------- 反向拉取

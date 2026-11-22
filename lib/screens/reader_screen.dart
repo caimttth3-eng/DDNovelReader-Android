@@ -774,8 +774,9 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     await widget.onProgressChanged?.call(p);
   }
 
-  /// 阅读页一键同步：与书架「数据同步」同一引擎，成功后提示结果
-  Future<void> _syncNow() async {
+  /// 阅读页同步（v1.3.4 拆两个方向）：push = 保存到云端，pull = 从云端读取。
+  /// 与书架「数据同步」同一引擎，成功后提示结果。
+  Future<void> _syncNow({String mode = 'both'}) async {
     if (_syncing) return;
     final engine =
         SyncEngine(storage: widget.storage, annotations: AnnotationStore());
@@ -785,7 +786,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       return;
     }
     setState(() => _syncing = true);
-    final report = await engine.sync();
+    final report = await engine.sync(mode: mode);
     if (!mounted) return;
     setState(() => _syncing = false);
     _showToast(report.ok ? report.summary : (report.error ?? T('syncFailed')));
@@ -4015,10 +4016,14 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
             const Spacer(),
             IconButton(tooltip: T('read'), icon: const ReaderIcon(ReaderSymbol.headphones, color: Colors.white70),
               onPressed: _ttsLoading ? null : () => _play(requestNotificationPermission: true)),
-            IconButton(key: const ValueKey('reader-sync'), tooltip: T('syncNow'),
-              icon: Icon(Icons.sync, size: 22,
+            IconButton(key: const ValueKey('reader-sync-push'), tooltip: T('syncPush'),
+              icon: Icon(Icons.cloud_upload_outlined, size: 22,
                 color: _syncing ? const Color(0xFF9BC5DD) : Colors.white70),
-              onPressed: _syncing ? null : _syncNow),
+              onPressed: _syncing ? null : () => _syncNow(mode: 'push')),
+            IconButton(key: const ValueKey('reader-sync-pull'), tooltip: T('syncPull'),
+              icon: Icon(Icons.cloud_download_outlined, size: 22,
+                color: _syncing ? const Color(0xFF9BC5DD) : Colors.white70),
+              onPressed: _syncing ? null : () => _syncNow(mode: 'pull')),
             IconButton(key: const ValueKey('night-mode'), tooltip: T(_isNight ? 'dayMode' : 'nightMode'),
               icon: ReaderIcon(_isNight ? ReaderSymbol.sun : ReaderSymbol.moon, color: Colors.white70), onPressed: _toggleNight),
             IconButton(key: const ValueKey('reader-menu'), tooltip: T('readerMenu'),
