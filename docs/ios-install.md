@@ -1,4 +1,4 @@
-﻿# iOS 安装教程（自签）
+# iOS 安装教程（自签）
 
 多多朗读 iOS 版以 **未签名 IPA** 发布。苹果要求 App 必须签名才能安装，所以需要用电脑上的签名工具，用你自己的 Apple ID 签一次。
 
@@ -23,7 +23,7 @@
 
 ## 二、准备
 
-1. **下载 IPA**：仓库 Releases → `DDNovelReader_v1.3.0_unsigned.ipa`
+1. **下载 IPA**：仓库 Releases → `DDNovelReader_v1.3.4_unsigned.ipa`
 2. **电脑装 Apple 驱动**（二选一）：
    - 微软商店搜索安装 **iTunes**
    - 或安装 **Apple Devices**（微软商店）
@@ -37,7 +37,7 @@
 ## 三、Sideloadly 安装（推荐）
 
 1. 打开 Sideloadly
-2. 把 `DDNovelReader_v1.3.0_unsigned.ipa` 拖进窗口（或点 IPA 图标选择文件）
+2. 把 `DDNovelReader_v1.3.4_unsigned.ipa` 拖进窗口（或点 IPA 图标选择文件）
 3. `Apple ID` 填你的 Apple ID 邮箱
 4. 点 **Start**
 5. 弹出密码框：输入 Apple ID 密码
@@ -115,7 +115,7 @@
 
 **Q：书架里的书打不开，提示解析失败？**
 - 重新导入一次那本书（文件 → 选择 txt/epub）
-- 最新版已修复「重签后书籍路径失效」问题，请使用 v1.3.0 最新 IPA
+- 最新版已修复「重签后书籍路径失效」问题，请使用当前最新版 IPA（v1.3.4）
 
 **Q：朗读提示语音播放失败？**
 - 在线音源需联网；想完全离线：音源选择里选「系统语音」
@@ -144,3 +144,4 @@ iOS 系统不允许第三方 App 监听音量键，这是平台限制。可用�
 - 只从本项目 **Releases** 下载 IPA，不要用来路不明的安装包
 - 不要把自己的 Apple ID 密码发给任何人
 - 本项目不会收集你的 Apple ID 或签名信息
+
