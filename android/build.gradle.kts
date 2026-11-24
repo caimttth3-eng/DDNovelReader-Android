@@ -6,7 +6,8 @@ allprojects {
 }
 
 val newBuildDir: Directory =
-    rootProject.layout.buildDirectory
+    System.getenv("DDNOVEL_BUILD_DIR")?.let { rootProject.layout.projectDirectory.dir(it) }
+        ?: rootProject.layout.buildDirectory
         .dir("../../build")
         .get()
 rootProject.layout.buildDirectory.value(newBuildDir)

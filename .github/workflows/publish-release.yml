@@ -1,0 +1,51 @@
+name: Disabled historical v1.2.26 publisher (local releases only)
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  release:
+    # Keep the original recipe as history; never publish an old APK on merge.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      group: publish-verified-v1.2.26
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: DDNovelReader-gestures-apk
+          run-id: 43622578197
+          github-token: ${{ github.token }}
+          path: verified-apk
+      - name: Verify and publish the existing online APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/publish_verified_release.py
+      - name: Finish published input staging
+        continue-on-error: true
+        run: |
+          python3 -B - <<'PY'
+          from pathlib import Path
+          root = Path.cwd().resolve()
+          for name in ('app-release.apk', 'SHA256SUMS.txt', 'SIGNING_STATUS.txt', 'signing-certificate.sha256'):
+              path = Path('verified-apk') / name
+              try:
+                  if path.is_file() and not any(p.is_symlink() for p in (path, *path.parents)) and path.resolve().is_relative_to(root):
+                      size = path.stat().st_size
+                      path.unlink()
+                      print(f'Removed published input: {path} ({size} bytes)')
+              except OSError as error:
+                  print(f'Cleanup deferred: {path} ({type(error).__name__})')
+          # No cleanup on failed publish; unknown files and previews stay intact.
+          PY

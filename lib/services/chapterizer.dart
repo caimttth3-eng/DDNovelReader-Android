@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 /// 章节切分：移植 Windows 版 novelreader/chapterizer.py 的 split_chapters。
 ///
 /// 为什么必须逐规则照搬而不是自己写一套更聪明的：两端共用音频缓存，
@@ -258,7 +258,7 @@ List<(String, String)> _splitByInner(String text, List<_InnerHead> heads) {
   heads.sort((a, b) => a.off.compareTo(b.off));
   final chapters = <(String, String)>[];
   final intro = _strip(_stripOuterResid(text.substring(0, heads[0].off)));
-  if (intro.isNotEmpty) chapters.add(('简介', intro));
+  if (intro.isNotEmpty) chapters.add(('', intro));
   for (var k = 0; k < heads.length; k++) {
     final start = heads[k].off + heads[k].title.length;
     final end = k + 1 < heads.length ? heads[k + 1].off : text.length;
@@ -357,7 +357,7 @@ List<(String, String)> _chaptersFromHeads(List<String> lines, List<(int, String)
   final chapters = <(String, String)>[];
   final intro =
       _strip(lines.sublist(0, heads[0].$1).join('\n'));
-  if (intro.isNotEmpty) chapters.add(('简介', intro));
+  if (intro.isNotEmpty) chapters.add(('', intro));
   for (var k = 0; k < heads.length; k++) {
     var start = heads[k].$1 + 1;
     if (start < lines.length && _sepLine.hasMatch(_strip(lines[start]))) {
@@ -397,12 +397,13 @@ String _addLinebreaks(String text) {
       cur = '';
     }
   }
+  cur += parts.last;
   if (cur.isNotEmpty) lines.add(_strip(cur));
   return lines.join('\n');
 }
 
 /// 尝试按章节标题切分；无法可靠切分返回 null
-List<(String, String)>? splitChapters(String text) {
+List<(String, String)>? splitChapters(String text, {bool preserveLayout = false}) {
   final lines = text.split('\n');
 
   final inner = _detectInnerHeads(lines);
@@ -410,7 +411,7 @@ List<(String, String)>? splitChapters(String text) {
   if (_innerContinuous(inner) && inner.length >= heads0.length) {
     final chapters = _splitByInner(text, inner);
     if (chapters.length >= 2) {
-      return [for (final c in chapters) (c.$1, _addLinebreaks(c.$2))];
+      return [for (final c in chapters) (c.$1, preserveLayout ? c.$2 : _addLinebreaks(c.$2))];
     }
   }
 
@@ -456,14 +457,14 @@ List<(String, String)>? splitChapters(String text) {
       if (gaps[gaps.length ~/ 2] <= 5) return null;
     }
   }
-  return [for (final c in chapters) (c.$1, _addLinebreaks(c.$2))];
+  return [for (final c in chapters) (c.$1, preserveLayout ? c.$2 : _addLinebreaks(c.$2))];
 }
 
-/// 无标题书：按自然段落聚合成约 [paraTarget] 字一节
-List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000}) {
+/// 无标题书：按自然段落聚合成约 [paraTarget] 字的技术块，不生成标题。
+List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000, bool preserveLayout = false}) {
   var paras = text
       .split(RegExp(r'\n\s*\n'))
-      .map(_strip)
+      .map((p) => preserveLayout ? p.replaceAll(RegExp(r'^\n+|\n+$'), '').trimRight() : _strip(p))
       .where((p) => p.isNotEmpty)
       .toList();
   if (paras.isEmpty) {
@@ -473,21 +474,22 @@ List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000}) {
   final cur = <String>[];
   var curLen = 0;
   for (final p in paras) {
-    if (cur.isNotEmpty && curLen + p.length > paraTarget) {
-      chapters.add(('第 ${chapters.length + 1} 节', cur.join('\n\n')));
+    final length = _strip(p).length;
+    if (cur.isNotEmpty && curLen + length > paraTarget) {
+      chapters.add(('', cur.join('\n\n')));
       cur
         ..clear()
         ..add(p);
-      curLen = p.length;
+      curLen = length;
     } else {
       cur.add(p);
-      curLen += p.length;
+      curLen += length;
     }
   }
   if (cur.isNotEmpty) {
-    chapters.add(('第 ${chapters.length + 1} 节', cur.join('\n\n')));
+    chapters.add(('', cur.join('\n\n')));
   }
-  if (chapters.isEmpty) return [('正文', _strip(text))];
+  if (chapters.isEmpty) return [('', _strip(text))];
   return chapters;
 }
 
@@ -513,6 +515,34 @@ String normalizeBody(String text) {
   }
   final lines = text.split('\n').map(_rstrip).where((l) => _strip(l).isNotEmpty).toList();
   return lines.join('\n');
+}
+
+/// Original UTF16 boundaries to desktop-normalized Unicode scalar offsets.
+/// Display keeps its physical lines/indentation; caches and sync share this map.
+String canonicalChapterBody(String text, {required bool detectedHeading}) =>
+  normalizeBody(detectedHeading ? _addLinebreaks(text) : text);
+
+List<int> canonicalSourceOffsets(String original, {String? normalizedText}) {
+  final normalized = normalizedText ?? normalizeBody(original);
+  final whitespace = RegExp(r'\s');
+  final positions = <int>[];
+  var scalar = 0;
+  for (final rune in normalized.runes) {
+    if (!whitespace.hasMatch(String.fromCharCode(rune))) positions.add(scalar);
+    scalar++;
+  }
+  final result = List<int>.filled(original.length + 1, scalar);
+  var anchor = 0, raw = 0, gap = 0;
+  for (final rune in original.runes) {
+    final white = whitespace.hasMatch(String.fromCharCode(rune));
+    final next = anchor < positions.length ? positions[anchor] : scalar;
+    final previous = anchor == 0 ? 0 : positions[anchor - 1] + 1;
+    final at = white ? (previous + gap).clamp(0, next) : next;
+    final width = rune > 0xffff ? 2 : 1;
+    for (var i = 0; i < width; i++) { result[raw++] = at; }
+    if (white) { gap++; } else { anchor++; gap = 0; }
+  }
+  return result;
 }
 
 /// 分章诊断（对拍/排障用）：行首标题的「行号:标题」列表
@@ -594,4 +624,3 @@ List<DetectedChapterTitle> detectChapterTitles(String text) {
   result.sort((a, b) => a.offset.compareTo(b.offset));
   return result;
 }
-

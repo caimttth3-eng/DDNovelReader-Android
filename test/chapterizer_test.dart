@@ -53,9 +53,9 @@ void main() {
       final text = '初入江湖\n------------\n正文一。\n\n锋芒毕露\n------------\n正文二。';
       final chapters = makeChapters(text);
       // PC 端 _looks_like_title 不认这种"短标题+分隔线"，两侧统一走 fallback，
-      // 只有 1 节；跨端标题/偏移必须一致，故以此为准
+      // 只有 1 个技术块；块边界和正文保持兼容，不生成标题。
       expect(chapters.length, 1);
-      expect(chapters[0].$1, '第 1 节');
+      expect(chapters[0].$1, isEmpty);
     });
 
     test('无章节标题的长文本：与 PC 一致按单段 fallback', () {
@@ -63,14 +63,26 @@ void main() {
       final chapters = makeChapters(longBody);
       // 全文无换行 → 单个自然段，PC fallback_split 同样只产出 1 节
       expect(chapters.length, 1);
-      expect(chapters[0].$1, contains('第 1 节'));
+      expect(chapters[0].$1, isEmpty);
     });
 
     test('简短文本单章（fallback 兜底）', () {
       final chapters = makeChapters('只有一小段正文，不成章节。');
       expect(chapters.length, 1);
-      final title = chapters[0].$1;
-      expect(title.contains('正文') || title.contains('第 1 节'), isTrue);
+      expect(chapters[0].$1, isEmpty);
+    });
+
+    test('fallback retains technical boundaries and bodies without invented labels', () {
+      final blocks = fallbackSplit('甲甲甲\n\n乙乙乙\n\n丙丙丙', paraTarget: 6, preserveLayout: true);
+      expect(blocks, [('', '甲甲甲\n\n乙乙乙'), ('', '丙丙丙')]);
+      expect(fallbackSplit(''), [('', '')]);
+    });
+
+    test('content before detected chapters has no fabricated introduction title', () {
+      final chapters = splitChapters('原文开场。\n\n第一章 清晨\n正文甲。\n\n第二章 夜晚\n正文乙。');
+      expect(chapters, isNotNull);
+      expect(chapters!.first, ('', '原文开场。'));
+      expect(chapters.skip(1).map((part) => part.$1), ['第一章 清晨', '第二章 夜晚']);
     });
   });
 }

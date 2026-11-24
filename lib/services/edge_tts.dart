@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 /// Edge TTS：调用微软 Edge 神经语音在线合成中文音频（MP3）。
 /// 基于 edge-tts 7.2.8 协议逐项移植（已联网调研并核对 twn39/edgetts-dart 实现）。
 ///
@@ -40,6 +40,12 @@ class EdgeSynthCancelToken {
   void cancel() { cancelled = true; _abort?.call(); }
   void check() { if (cancelled) throw const EdgeTtsException('cancelled'); }
 }
+
+typedef OnlineSpeechSynthesizer = Future<Uint8List> Function(String text,
+    {required String voice,
+    required String rate,
+    required void Function(List<SpeechWord>) onWords,
+    required EdgeSynthCancelToken cancelToken});
 
 /// 可用音色（分语言）。zhName=中文界面显示名；enName=其他语言界面显示名。
 class EdgeVoice {
@@ -470,10 +476,12 @@ Map<String, String> _wssHeaders() {
 }
 
 /// 同步时钟偏差：GET voiceList 拿 Date 头
-Future<void> _syncClock() async {
+Future<void> _syncClock(EdgeSynthCancelToken token) async {
   try {
     final client = HttpClient();
+    token._abort = () => client.close(force: true);
     try {
+      token.check();
       final req = await client
           .getUrl(Uri.parse(_voiceList))
           .timeout(const Duration(seconds: 10));
@@ -483,15 +491,17 @@ Future<void> _syncClock() async {
       req.headers.set('Cookie', 'muid=${_generateMuid()};');
       final res = await req.close().timeout(const Duration(seconds: 10));
       final date = res.headers.value(HttpHeaders.dateHeader);
-      await res.drain<void>();
+      await res.drain<void>().timeout(const Duration(seconds: 10));
+      token.check();
       if (date != null) {
         final server = HttpDate.parse(date).millisecondsSinceEpoch / 1000.0;
         _clockSkew = server - DateTime.now().toUtc().millisecondsSinceEpoch / 1000.0;
       }
     } finally {
-      client.close();
+      client.close(force: true);
+      token._abort = null;
     }
-  } catch (_) {}
+  } catch (_) { token.check(); }
 }
 
 /// Edge TTS rate 百分比字符串：0.5→-75%, 1.0→+0%, 1.5→+50%
@@ -519,7 +529,7 @@ Future<Uint8List> edgeSynth(String text,
     } on EdgeTtsException catch (error) {
       if (token.cancelled) rethrow;
       if (error.status == 403) {
-        if (attempt == 0) { await _syncClock(); continue; }
+        if (attempt == 0) { await _syncClock(token); continue; }
         rethrow;
       }
       final retryable = error.kind == 'connection' ||

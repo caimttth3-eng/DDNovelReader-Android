@@ -1,4 +1,4 @@
-﻿<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <!-- Edge TTS 在线合成需要联网 -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Declare notifications explicitly so Android 13+ can grant the app's
+         notification permission and expose its normal notification settings. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="多多朗读"
@@ -58,6 +60,9 @@
     <queries>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.tts.engine.CHECK_TTS_DATA" />
         </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>

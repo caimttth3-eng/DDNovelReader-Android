@@ -1,6 +1,6 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -11,52 +11,156 @@ import '../models/book.dart';
 import 'chapterizer.dart';
 import 'content_key.dart';
 import 'text_decoder.dart';
+import 'text_cleaner.dart';
 import 'tts_text.dart';
+
+typedef _BookParseRequest = ({String id, String filePath, String title,
+  BookFormat format, DateTime addedAt, TextCleaner cleaner, bool desktopText});
+typedef _BookParseKey = ({String id, String filePath, String title,
+  BookFormat format, DateTime addedAt, int size, DateTime modified, DateTime changed});
+
+class _PendingBookParse {
+  int latestCall;
+  late final Future<Book> future;
+  _PendingBookParse(this.latestCall);
+}
+
+// Keep the worker closure outside BookParser.parse's scope: only this small
+// request crosses isolates, never an accidental caller/UI object graph.
+Future<Book> _parseBookInBackground(_BookParseRequest request) => Isolate.run(
+  () => BookParser(cleaner: request.cleaner)._parseFile(
+    id: request.id, filePath: request.filePath, title: request.title,
+    format: request.format, addedAt: request.addedAt, desktopText: request.desktopText),
+  debugName: 'book-parser',
+);
+
+class BookTocEntry {
+  final String title;
+  final int chapterIndex;
+  final int paragraphIndex;
+  final int displayOffset;
+  const BookTocEntry({required this.title, required this.chapterIndex,
+    required this.paragraphIndex, this.displayOffset = 0});
+}
 
 /// 书籍解析器：支持 TXT / EPUB / PDF / DOCX，并自动分章。
 class BookParser {
-  BookParser();
-
-  /// 阅读页会缓存格式化后的整本书；上限用来避免长期驻留超大书。
+  // A predictable upper bound rather than retaining an arbitrarily large
+  // novel after the reader is closed. This is not an exact heap-byte estimate.
   static const maxCachedDisplayCharacters = 4000000;
+  final TextCleaner _cleaner;
+  final bool _cacheEnabled;
+  final bool _desktopText;
+  static (_BookParseKey, Book)? _cached;
+  // Only active caller requests live here; completed books are bounded to one.
+  static final Map<_BookParseKey, _PendingBookParse> _pending = {};
+  static int _latestCall = 0;
 
-  static bool fitsMemoryCache(Book book) =>
-      book.totalDisplayLength <= maxCachedDisplayCharacters;
+  static bool fitsMemoryCache(Book book) => book.totalDisplayLength <= maxCachedDisplayCharacters;
 
-  static void clearMemoryCache() {}
+  BookParser({TextCleaner? cleaner}) : _cleaner = cleaner ?? const TextCleaner(),
+    _cacheEnabled = cleaner == null, _desktopText = cleaner == null;
 
-  /// 目录索引：默认一章一条（我们的分章已经把标题切成章），
-  /// autoExtractToc=false 时退化为每 5000 字一条的兜底目录。
+  static void clearMemoryCache() {
+    ++_latestCall;
+    _cached = null;
+    _pending.clear();
+  }
+
+  static Future<_BookParseKey> _cacheKey(_BookParseRequest request) async {
+    final stat = await File(request.filePath).stat();
+    if (stat.type != FileSystemEntityType.file) {
+      throw FileSystemException('Book file is unavailable', request.filePath);
+    }
+    return (id: request.id, filePath: request.filePath, title: request.title,
+      format: request.format, addedAt: request.addedAt, size: stat.size,
+      modified: stat.modified, changed: stat.changed);
+  }
+
+  /// A view over stable source coordinates. It deliberately does not regroup
+  /// chapters or remove headings, preserving progress, annotations and audio.
   static List<BookTocEntry> extractToc(Book source, {bool autoExtractToc = true}) {
-    final entries = <BookTocEntry>[];
-    if (!autoExtractToc) {
-      final whitespace = RegExp(r'\s');
-      var count = 0, next = 0;
-      for (var c = 0; c < source.chapters.length; c++) {
-        final paragraphs = source.chapters[c].paragraphs;
-        for (var p = 0; p < paragraphs.length; p++) {
-          final text = paragraphs[p].display;
-          for (var offset = 0; offset < text.length; offset++) {
-            if (whitespace.hasMatch(text[offset])) continue;
-            if (count >= next) {
-              entries.add(BookTocEntry(
-                  title: '第 ${entries.length + 1} 节',
-                  chapterIndex: c,
-                  paragraphIndex: p,
-                  displayOffset: offset));
-              next = count + 5000;
-            }
-            count++;
+    final whitespace = RegExp(r'\s');
+    // Navigation-only labels quote original text; never invent visible headings.
+    String excerpt(String text, int offset) {
+      final label = StringBuffer();
+      var count = 0;
+      var previousSpace = true;
+      for (var i = offset; i < text.length && count < 24;) {
+        final first = text.codeUnitAt(i++);
+        var rune = first;
+        if (first >= 0xD800 && first <= 0xDBFF && i < text.length) {
+          final second = text.codeUnitAt(i);
+          if (second >= 0xDC00 && second <= 0xDFFF) {
+            rune = 0x10000 + ((first - 0xD800) << 10) + second - 0xDC00; i++;
           }
         }
+        final character = String.fromCharCode(rune);
+        final space = whitespace.hasMatch(character);
+        if (space && previousSpace) continue;
+        label.write(space ? ' ' : character); count++; previousSpace = space;
       }
-      return entries;
+      return label.toString().trimRight();
     }
+    List<BookTocEntry> fallbackIndex() {
+    final fallback = <BookTocEntry>[];
+    var count = 0, next = 0;
     for (var c = 0; c < source.chapters.length; c++) {
-      final ch = source.chapters[c];
-      if (ch.paragraphs.isEmpty) continue;
-      entries.add(BookTocEntry(
-          title: ch.title, chapterIndex: c, paragraphIndex: 0));
+      final paragraphs = source.chapters[c].paragraphs;
+      for (var p = 0; p < paragraphs.length; p++) {
+        final text = paragraphs[p].display;
+        for (var offset = 0; offset < text.length; offset++) {
+          final code = text.codeUnitAt(offset);
+          if (whitespace.hasMatch(text[offset]) || (code >= 0xDC00 && code <= 0xDFFF)) continue;
+          if (count >= next) {
+            fallback.add(BookTocEntry(title: excerpt(text, offset), chapterIndex: c,
+              paragraphIndex: p, displayOffset: offset));
+            next = count + 5000;
+          }
+          count++;
+        }
+      }
+    }
+    return fallback;
+    }
+    if (!autoExtractToc) return fallbackIndex();
+    final entries = <BookTocEntry>[];
+    for (var c = 0; c < source.chapters.length; c++) {
+      final chapter = source.chapters[c];
+      final joined = chapter.paragraphs.map((p) => p.display).join('\n');
+      final detected = detectChapterTitles(joined);
+      final existing = chapter.title.trim().isNotEmpty &&
+        (detectChapterTitles(chapter.title).isNotEmpty || source.format == BookFormat.epub);
+      if (existing && chapter.paragraphs.isNotEmpty) {
+        entries.add(BookTocEntry(title: chapter.title, chapterIndex: c, paragraphIndex: 0));
+      }
+      var p = 0, base = 0;
+      for (final heading in detected) {
+        while (p < chapter.paragraphs.length - 1 && base + chapter.paragraphs[p].display.length < heading.offset) {
+          base += chapter.paragraphs[p].display.length + 1; p++;
+        }
+        final offset = (heading.offset - base).clamp(0, chapter.paragraphs[p].display.length);
+        if (entries.isNotEmpty && entries.last.chapterIndex == c && entries.last.paragraphIndex == p &&
+          entries.last.title == heading.title && (entries.last.displayOffset == offset ||
+            (entries.last.displayOffset == 0 && chapter.paragraphs[p].display.substring(0, offset).trim().isEmpty))) continue;
+        entries.add(BookTocEntry(title: heading.title, chapterIndex: c, paragraphIndex: p, displayOffset: offset));
+      }
+    }
+    if (entries.isEmpty) return fallbackIndex();
+    BookTocEntry? firstContent;
+    for (var c = 0; c < source.chapters.length && firstContent == null; c++) {
+      for (var p = 0; p < source.chapters[c].paragraphs.length; p++) {
+        final match = RegExp(r'\S').firstMatch(source.chapters[c].paragraphs[p].display);
+        if (match != null) { firstContent = BookTocEntry(title: excerpt(source.chapters[c].paragraphs[p].display, match.start),
+          chapterIndex: c, paragraphIndex: p, displayOffset: match.start); break; }
+      }
+    }
+    if (firstContent != null) {
+      final first = entries.first, start = firstContent;
+      if (first.chapterIndex != start.chapterIndex || first.paragraphIndex != start.paragraphIndex || first.displayOffset > start.displayOffset) {
+        entries.insert(0, BookTocEntry(title: start.title, chapterIndex: start.chapterIndex,
+          paragraphIndex: start.paragraphIndex, displayOffset: start.displayOffset));
+      }
     }
     return entries;
   }
@@ -74,14 +178,66 @@ class BookParser {
     required BookFormat format,
     required DateTime addedAt,
   }) async {
+    final call = _cacheEnabled ? ++_latestCall : -1;
+    final request = (id: id, filePath: filePath, title: title,
+      format: format, addedAt: addedAt, cleaner: _cleaner, desktopText: _desktopText);
     try {
-      // 解析结果按「路径+大小+修改时间」缓存一份：同一本书再次打开不必重读重分章
-      final stat = await File(filePath).stat();
-      final cacheKey = '$filePath|${stat.size}|${stat.modified.millisecondsSinceEpoch}|$id';
-      final cached = _parsedCache[cacheKey];
-      if (cached != null) return cached;
+      // File decoding, archive/XML extraction, chapter scans and sentence
+      // cleaning all run in the worker, including continuations after I/O.
+      // Book is a plain Dart graph; Isolate.run transfers its result on exit.
+      if (!_cacheEnabled) return await _parseBookInBackground(request);
+      final key = await _cacheKey(request);
+      final cached = _cached;
+      if (cached != null && cached.$1 == key) return cached.$2;
+      final existing = _pending[key];
+      if (existing != null) {
+        if (call > existing.latestCall) existing.latestCall = call;
+        return await existing.future;
+      }
+      final pending = _PendingBookParse(call);
+      _pending[key] = pending;
+      pending.future = () async {
+        try {
+          final book = await _parseBookInBackground(request);
+          if (book.parseOk && pending.latestCall == _latestCall &&
+              identical(_pending[key], pending)) {
+            if (!fitsMemoryCache(book)) {
+              _cached = null;
+              return book;
+            }
+            // An editor/replacement may have changed the file during parsing.
+            // The caller can use its result, but the next open must reparse.
+            try {
+              if (await _cacheKey(request) == key && pending.latestCall == _latestCall &&
+                  identical(_pending[key], pending)) _cached = (key, book);
+            } on FileSystemException {
+              // Successfully read bytes remain usable even if the source was
+              // removed before this final validation. Never retain that book.
+            }
+          }
+          return book;
+        } finally {
+          if (identical(_pending[key], pending)) _pending.remove(key);
+        }
+      }();
+      return await pending.future;
+    } catch (e) {
+      return Book.failed(id: id, title: title, filePath: filePath,
+        format: format, addedAt: addedAt, error: e.toString());
+    }
+  }
+
+  Future<Book> _parseFile({
+    required String id,
+    required String filePath,
+    required String title,
+    required BookFormat format,
+    required DateTime addedAt,
+    required bool desktopText,
+  }) async {
+    try {
       final raw = await _readRawText(filePath, format);
-      final chapters = _autoChapter(raw);
+      final chapters = _autoChapter(raw, desktopText: desktopText);
       final book = Book(
         id: id,
         title: title,
@@ -90,15 +246,7 @@ class BookParser {
         chapters: chapters,
         addedAt: addedAt,
       );
-      // content_key 与音频缓存目录一级键同一值，跨端（PC/安卓）可命中
-      final result = book.withContentKey(
-        computeContentKey(title, book.chapters.length, bookFullText(book)),
-      );
-      _parsedCache[cacheKey] = result;
-      if (_parsedCache.length > 2) {
-        _parsedCache.remove(_parsedCache.keys.first);
-      }
-      return result;
+      return book.withContentKey(computeContentKey(title, chapters.length, bookFullText(book)));
     } catch (e) {
       return Book.failed(
         id: id,
@@ -110,10 +258,6 @@ class BookParser {
       );
     }
   }
-
-  /// 最近解析过的书籍（最多 2 本），避免重复打开同一本书时重新分章
-  static final Map<String, Book> _parsedCache = {};
-
 
   /// 读取各格式原始文本
   Future<String> _readRawText(String path, BookFormat format) async {
@@ -134,8 +278,6 @@ class BookParser {
     return _decodeTxt(bytes);
   }
 
-  /// txt 解码统一走 text_decoder（与 PC _decode 同口径：BOM → 严格 UTF-8 →
-  /// GB18030 / Big5 质量打分择优 → 宽松 UTF-8 兜底）
   String _decodeTxt(List<int> bytes) => decodeTextBytes(bytes);
 
   Future<String> _readEpub(String path) async {
@@ -375,108 +517,147 @@ class BookParser {
 
   /// 自动分章：优先用智能分章引擎（支持「第X卷/第X章/Chapter N/序章/楔子」及分隔线、
   /// 书名前缀等三重检测，简介单独成章）；无可靠标题时按自然段落聚合成约 5000 字小节。
-  List<Chapter> _autoChapter(String raw) {
+  List<Chapter> _autoChapter(String raw, {required bool desktopText}) {
     final chapters = <Chapter>[];
-    for (final (title, body) in makeChapters(raw)) {
-      final ch = _buildChapter(title, body);
-      if (ch != null) chapters.add(ch);
+    final detected = splitChapters(raw, preserveLayout: true);
+    final parts = detected ?? fallbackSplit(raw, preserveLayout: true);
+    for (final (title, body) in parts) {
+      if (desktopText) {
+        final chapter = _buildChapter(title, body, detectedHeading: detected != null);
+        if (chapter != null) chapters.add(chapter);
+        continue;
+      }
+      final paras = _toParagraphs(body);
+      if (paras.isEmpty) continue;
+      chapters.add(Chapter(title: title, paragraphs: paras));
     }
     if (chapters.isEmpty) {
-      final ch = _buildChapter('正文', raw.trim());
-      if (ch != null) chapters.add(ch);
+      if (desktopText) {
+        final chapter = _buildChapter('', raw.trim(), detectedHeading: false);
+        if (chapter != null) chapters.add(chapter);
+      } else {
+        chapters.add(Chapter(title: '', paragraphs: _toParagraphs(raw.trim())));
+      }
     }
     return chapters;
   }
 
-  /// 构建整章：清洗与切句必须按**整章原始正文**做（与 PC 端 ch.tts_content() 同口径）。
-  ///
-  /// 两个必须对齐的点：
-  /// 1) 喂给清洗的是 body 原文（保留行结构），不能是"段落折成空格后的拼接"——
-  ///    PC 的 _strip_decor_lines 是行级过滤（`------` 整行丢弃、行尾装饰截断），
-  ///    折平行结构会让它失效，两端 tts 文本与偏移随之不同。
-  /// 2) 切句按整章做：段落间 '\n' 在清洗时被删，段末无句末标点时句子会跨段合并。
-  ///    这里把章级句子按「起点所在块」归属，显示区间在该块内裁剪。
-  Chapter? _buildChapter(String title, String body) {
-    final text = body;
+  Chapter? _buildChapter(String title, String text, {required bool detectedHeading}) {
     if (text.trim().isEmpty) return null;
-
-    // 段落块（按空行切；normalizeBody 已把空行折成单换行，通常整章一块）
     final blocks = <(int, int)>[];
-    var pos = 0;
-    for (final m in RegExp(r'\n\s*\n').allMatches(text)) {
-      blocks.add((pos, m.start));
-      pos = m.end;
+    var position = 0;
+    for (final match in RegExp(r'\n\s*\n').allMatches(text)) {
+      blocks.add((position, match.start));
+      position = match.end;
     }
-    blocks.add((pos, text.length));
+    blocks.add((position, text.length));
     final kept = <(int, int)>[];
     final displays = <String>[];
-    for (final b in blocks) {
-      final seg = text.substring(b.$1, b.$2);
-      if (seg.trim().isEmpty) continue;
-      kept.add(b);
-      // 块内换行折成空格（渲染单位）；'\n'→' ' 一对一，块内偏移不变
-      displays.add(seg.replaceAll('\n', ' ').trim());
+    for (final block in blocks) {
+      final segment = text.substring(block.$1, block.$2);
+      if (segment.trim().isEmpty) continue;
+      kept.add(block);
+      displays.add(segment.trimRight());
     }
     if (kept.isEmpty) return null;
-
-    final clean = preprocessForTts(text);
-    final ranges = splitSentenceRanges(clean.clean);
-    final byPara = List.generate(kept.length, (_) => <Sentence>[]);
-
-    var pIdx = 0;
-    for (final (s, e) in ranges) {
-      final tts = clean.clean.substring(s, e);
-      if (tts.trim().isEmpty) continue;
-      final u16s = s < clean.cmap.length ? clean.cmap[s] : text.length;
-      final u16e = (e > s && e - 1 < clean.cmap.length)
-          ? clean.cmap[e - 1] + 1
-          : text.length;
-
-      while (pIdx + 1 < kept.length && u16s >= kept[pIdx + 1].$1) {
-        pIdx++;
+    final rawDisplay = displays.join('\n');
+    final canonical = canonicalChapterBody(text, detectedHeading: detectedHeading);
+    final coordinates = canonicalSourceOffsets(rawDisplay, normalizedText: canonical);
+    final scalarMap = utf16ToCodePointMap(canonical);
+    int rawOffset(int normalizedOffset) {
+      final target = scalarMap[normalizedOffset.clamp(0, canonical.length)];
+      var low = 0, high = coordinates.length - 1;
+      while (low < high) {
+        final middle = (low + high) ~/ 2;
+        if (coordinates[middle] < target) { low = middle + 1; } else { high = middle; }
       }
-      final ps = kept[pIdx].$1;
-      final pe = kept[pIdx].$2;
-      final ds = (u16s - ps).clamp(0, displays[pIdx].length);
-      final de = (min(u16e, pe) - ps).clamp(ds, displays[pIdx].length);
-      byPara[pIdx].add(Sentence(
-        displays[pIdx].substring(ds, de),
-        tts,
-        displayStart: ds,
-        displayEnd: de,
-      ));
+      return low;
     }
-
+    final starts = <int>[];
+    var base = 0;
+    for (final display in displays) { starts.add(base); base += display.length + 1; }
+    final clean = preprocessForTts(canonical);
+    final byParagraph = List.generate(kept.length, (_) => <Sentence>[]);
+    var paragraph = 0;
+    for (final (start, end) in splitSentenceRanges(clean.clean)) {
+      final tts = clean.clean.substring(start, end);
+      if (tts.trim().isEmpty) continue;
+      final sourceStart = rawOffset(clean.cmap[start]);
+      final sourceEnd = rawOffset(clean.cmap[end - 1] + 1);
+      while (paragraph + 1 < kept.length && sourceStart >= starts[paragraph + 1]) {
+        paragraph++;
+      }
+      final base = starts[paragraph];
+      final ds = (sourceStart - base).clamp(0, displays[paragraph].length);
+      final de = (min(sourceEnd, base + displays[paragraph].length) - base).clamp(ds, displays[paragraph].length);
+      byParagraph[paragraph].add(Sentence(displays[paragraph].substring(ds, de), tts,
+        displayStart: ds, displayEnd: de));
+    }
     final paragraphs = <Paragraph>[];
     for (var i = 0; i < kept.length; i++) {
-      final seg = byPara[i];
-      final segStarts = <int>[];
-      var acc = 0;
-      for (final s in seg) {
-        segStarts.add(acc);
-        acc += s.tts.length;
+      final starts = <int>[];
+      var offset = 0;
+      for (final sentence in byParagraph[i]) {
+        starts.add(offset);
+        offset += sentence.tts.length;
       }
-      paragraphs.add(Paragraph(
-        display: displays[i],
-        tts: seg.map((s) => s.tts).join(),
-        sentences: seg,
-        sentenceStartTts: segStarts,
+      paragraphs.add(Paragraph(display: displays[i], tts: byParagraph[i].map((s) => s.tts).join(),
+        sentences: byParagraph[i], sentenceStartTts: starts));
+    }
+    return Chapter(title: title, paragraphs: paragraphs, sourceCoordinates: coordinates);
+  }
+
+  List<Paragraph> _toParagraphs(String body) {
+    final blocks = body
+        .split(RegExp(r'\n\s*\n'))
+        .map((b) => b.trimRight())
+        .where((b) => b.trim().isNotEmpty)
+        .toList();
+    if (blocks.isEmpty) return const [];
+    return blocks.map((b) => _buildParagraph(b)).toList();
+  }
+
+  /// 构建段落：切句 + 双文本
+  Paragraph _buildParagraph(String display) {
+    final cleaned = _cleaner.clean(display);
+    // 在 tts 文本上按句子结束符切句
+    final tts = cleaned.tts;
+    final sentenceSplitRe = RegExp(r'[^。！？!?；;\n]+[。！？!?；;]?');
+    final sentences = <Sentence>[];
+    final starts = <int>[];
+    var idx = 0;
+    for (final m in sentenceSplitRe.allMatches(tts)) {
+      final seg = m.group(0)!;
+      if (seg.trim().isEmpty) continue;
+      starts.add(idx);
+      // 显示层取整段对应（简化：同段落内句子级别 display 用相同子串近似）
+      final dStart = cleaned.displayOffsetOfTts(idx);
+      var dEnd = cleaned.displayOffsetOfTts(idx + seg.length);
+      // 若 tts 长度不足，回退到段末
+      if (idx + seg.length > tts.length) dEnd = cleaned.display.length;
+      final dSeg = cleaned.display.substring(
+        dStart.clamp(0, cleaned.display.length),
+        dEnd.clamp(dStart, cleaned.display.length),
+      );
+      sentences.add(Sentence(dSeg, seg,
+          displayStart: dStart.clamp(0, cleaned.display.length),
+          displayEnd: dEnd.clamp(dStart, cleaned.display.length)));
+      idx += seg.length;
+    }
+    if (sentences.isEmpty && tts.trim().isNotEmpty) {
+      starts.add(0);
+      sentences.add(Sentence(
+        cleaned.display.trim(),
+        tts.trim(),
+        displayStart: 0,
+        displayEnd: cleaned.display.length,
       ));
     }
-    return Chapter(title: title, paragraphs: paragraphs);
+    return Paragraph(
+      display: display,
+      tts: tts,
+      sentences: sentences,
+      sentenceStartTts: starts,
+    );
   }
-}
-
-// ---------- 目录索引（PR2 引入，阅读页目录与自动目录共用） ----------
-
-class BookTocEntry {
-  final String title;
-  final int chapterIndex;
-  final int paragraphIndex;
-  final int displayOffset;
-  const BookTocEntry(
-      {required this.title,
-      required this.chapterIndex,
-      required this.paragraphIndex,
-      this.displayOffset = 0});
 }

@@ -43,6 +43,7 @@ class AboutScreen extends StatelessWidget {
     required String actionText,
     required VoidCallback onTap,
   }) {
+    final colors = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -50,7 +51,7 @@ class AboutScreen extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
         child: Row(
           children: [
-            Icon(icon, size: 20, color: const Color(0xFF5D3A1A)),
+            Icon(icon, size: 20, color: colors.primary),
             const SizedBox(width: 10),
             Expanded(
               child: Text.rich(
@@ -58,12 +59,12 @@ class AboutScreen extends StatelessWidget {
                   children: [
                     TextSpan(
                       text: label,
-                      style: const TextStyle(color: Colors.black87),
+                      style: TextStyle(color: colors.onSurface),
                     ),
                     TextSpan(
                       text: ' $value',
-                      style: const TextStyle(
-                        color: Color(0xFF5D3A1A),
+                      style: TextStyle(
+                        color: colors.primary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -73,9 +74,9 @@ class AboutScreen extends StatelessWidget {
             ),
             Text(
               actionText,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
-                color: Color(0xFF5D3A1A),
+                color: colors.primary,
                 decoration: TextDecoration.underline,
               ),
             ),
@@ -88,6 +89,7 @@ class AboutScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final versionText = '${VersionInfo.appName} v${VersionInfo.version}';
+    final colors = Theme.of(context).colorScheme;
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ConstrainedBox(
@@ -98,26 +100,26 @@ class AboutScreen extends StatelessWidget {
             // 标题栏
             Container(
               padding: const EdgeInsets.fromLTRB(20, 14, 8, 14),
-              decoration: const BoxDecoration(
-                color: Color(0xFF5D3A1A),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+              decoration: BoxDecoration(
+                color: colors.primaryContainer,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.menu_book, color: Colors.white),
+                  Icon(Icons.menu_book, color: colors.onPrimaryContainer),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       T('aboutTitle'),
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: colors.onPrimaryContainer,
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white),
+                    icon: Icon(Icons.close, color: colors.onPrimaryContainer),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
@@ -137,16 +139,16 @@ class AboutScreen extends StatelessWidget {
                           width: 52,
                           height: 52,
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF3E9DC),
+                            color: colors.secondaryContainer,
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Center(
+                          child: Center(
                             child: Text(
                               'DD',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF5D3A1A),
+                                color: colors.onSecondaryContainer,
                               ),
                             ),
                           ),
@@ -166,9 +168,9 @@ class AboutScreen extends StatelessWidget {
                               const SizedBox(height: 6),
                               Text(
                                 T('aboutSub', {'ver': VersionInfo.version}),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 13,
-                                  color: Colors.black54,
+                                  color: colors.onSurfaceVariant,
                                 ),
                               ),
                             ],
@@ -208,6 +210,15 @@ class AboutScreen extends StatelessWidget {
                       context: context,
                       icon: Icons.link_outlined,
                       label: T('releaseLabel'),
+                      value: 'github.com/NayGnehz/DDNovelReader-Android/releases',
+                      actionText: T('openAction'),
+                      onTap: () =>
+                          _openUrl(context, 'https://github.com/NayGnehz/DDNovelReader-Android/releases'),
+                    ),
+                    _contactRow(
+                      context: context,
+                      icon: Icons.source_outlined,
+                      label: T('upstreamLabel'),
                       value: 'github.com/caimttth3-eng/DDNovelReader-Android',
                       actionText: T('openAction'),
                       onTap: () =>
@@ -216,7 +227,7 @@ class AboutScreen extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       T('feedback'),
-                      style: const TextStyle(fontSize: 12, color: Colors.black54),
+                      style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
                     ),
                     const SizedBox(height: 16),
                     const Divider(height: 1),
@@ -226,10 +237,6 @@ class AboutScreen extends StatelessWidget {
                       child: OutlinedButton.icon(
                         icon: const Icon(Icons.system_update_alt, size: 18),
                         label: Text(T('checkUpdate')),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF5D3A1A),
-                          side: const BorderSide(color: Color(0xFFB5A58A)),
-                        ),
                         onPressed: () => Updater.checkManual(context),
                       ),
                     ),
@@ -237,10 +244,10 @@ class AboutScreen extends StatelessWidget {
                     // 更新记录（每次更新信息）
                     Text(
                       T('changelogTitle'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF5D3A1A),
+                        color: colors.onSurface,
                       ),
                     ),
                     const SizedBox(height: 6),

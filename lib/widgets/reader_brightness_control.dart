@@ -1,9 +1,14 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'package:flutter/material.dart';
 import '../i18n.dart';
+import 'reader_touch_slider.dart';
 
 class ReaderBrightnessControl extends StatelessWidget {
   static const split = 0.25;
+  /// Automatic brightness uses only the hardware-brightness part of the track.
+  /// The lower quarter remains reserved for additional reader dimming.
+  static double fromSystemBrightness(double brightness) =>
+    split + brightness.clamp(0.0, 1.0).toDouble() * (1 - split);
   final double value;
   final bool automatic;
   final ValueChanged<double> onChanged;
@@ -17,10 +22,10 @@ class ReaderBrightnessControl extends StatelessWidget {
   Widget build(BuildContext context) => Row(children: [
     Expanded(child: LayoutBuilder(builder: (context, constraints) => Stack(alignment: Alignment.center,
       children: [
-        Slider(key: sliderKey, value: value.clamp(0, 1), min: 0, max: 1,
-          allowedInteraction: SliderInteraction.tapAndSlide,
-          padding: const EdgeInsets.symmetric(horizontal: 12), onChanged: onChanged),
-        Positioned(left: 12 + (constraints.maxWidth - 24) * split - 2,
+        ReaderTouchSlider(sliderKey: sliderKey, value: value, onChanged: onChanged),
+        Positioned(left: ReaderTouchSlider.horizontalPadding +
+            (constraints.maxWidth - ReaderTouchSlider.horizontalPadding * 2) *
+              (Directionality.of(context) == TextDirection.rtl ? 1 - split : split) - 2,
           child: IgnorePointer(child: Tooltip(message: T('brightnessSplit'),
             child: Container(key: const ValueKey('brightness-split'), width: 4, height: 4,
               decoration: BoxDecoration(shape: BoxShape.circle, color: Theme.of(context).colorScheme.primary))))),

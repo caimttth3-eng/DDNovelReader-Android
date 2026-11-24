@@ -13,7 +13,7 @@ import '../version_info.dart';
 /// 弹窗提供「去下载 / 稍后 / 跳过此版本」；跳过记入设置 skip_update_version，
 /// 之后不再提示该版本。网络失败静默，不影响启动。
 class Updater {
-  static const String _repo = 'caimttth3-eng/DDNovelReader-Android';
+  static const String _repo = 'NayGnehz/DDNovelReader-Android';
   static const String _latestUrl =
       'https://api.github.com/repos/$_repo/releases/latest';
   static const String _skipKey = 'skip_update_version';
@@ -128,7 +128,7 @@ class Updater {
               Text(
                 '${T('latestVersion')}  ${info['tag']}    |    '
                 '${T('currentVersion')}  ${VersionInfo.version}',
-                style: const TextStyle(fontSize: 13, color: Colors.black54),
+                style: TextStyle(fontSize: 13, color: Theme.of(ctx).colorScheme.onSurfaceVariant),
               ),
               const SizedBox(height: 10),
               Text(

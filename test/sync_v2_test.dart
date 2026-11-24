@@ -23,10 +23,11 @@ void main() {
         chapterCount: 5,
       );
 
-  test('percent 口径：远端 0~100 → 本机 0~1，且兼容旧的 0~1 记录', () {
+  test('percent uses documented units; legacy ratios require an explicit marker', () {
     expect(SyncEngine.percentFromRemote(42.0), closeTo(0.42, 1e-9));
     expect(SyncEngine.percentFromRemote(100.0), closeTo(1.0, 1e-9));
-    expect(SyncEngine.percentFromRemote(0.42), closeTo(0.42, 1e-9)); // 旧记录不再放大
+    expect(SyncEngine.percentFromRemote(0.42), closeTo(0.0042, 1e-9));
+    expect(SyncEngine.percentFromRemote(0.42, unit: 'ratio'), closeTo(0.42, 1e-9));
     expect(SyncEngine.percentFromRemote(0), 0);
     expect(SyncEngine.percentFromRemote(null), 0);
   });
@@ -98,6 +99,7 @@ void main() {
 
     // 远端更旧 → 不动
     final older = {
+      'schema': 2,
       'progress': {'chapter_idx': 2, 'char_offset': 0, 'percent': 20.0},
       'progress_at': 1700000000.0,
       'updated_at': 1700000000.0,
@@ -108,6 +110,7 @@ void main() {
 
     // 远端更新 → 采用，percent 折成本机口径
     final newer = {
+      'schema': 2,
       'progress': {'chapter_idx': 4, 'char_offset': 9, 'percent': 55.0},
       'progress_at': 1700000400.0,
       'updated_at': 1700000400.0,
@@ -133,6 +136,7 @@ void main() {
     ));
     final eng = SyncEngine(storage: storage, annotations: AnnotationStore());
     final rec = {
+      'schema': 2,
       'progress': {'chapter_idx': 1, 'char_offset': 0, 'percent': 20.0},
       'progress_at': 1700000500.0,
       'bookmarks': [

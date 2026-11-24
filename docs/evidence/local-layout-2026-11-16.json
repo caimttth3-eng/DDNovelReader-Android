@@ -1,0 +1,92 @@
+{
+  "date": "2026-11-16",
+  "projectId": "ddnovelreader",
+  "instanceId": "main",
+  "operation": "Receive existing successful complete APK without rebuilding or signing",
+  "moved": {
+    "from": "_cache/projects/ddnovelreader/main/build/v1.2.27",
+    "to": "_releases/ddnovelreader/v1.2.27",
+    "files": [
+      "DDNovelReader-v1.2.27-arm64-v8a.apk",
+      "build-info.json",
+      "SHA256SUMS.txt",
+      "signature-verification.txt",
+      "MaterialSymbols-LICENSE.txt"
+    ],
+    "fileCount": 5,
+    "bytes": 19362947,
+    "allCopiesHashComparedBeforeSourceRemoval": true,
+    "originalBuildManifestBytesPreserved": true
+  },
+  "current": {
+    "version": "1.2.27",
+    "versionCode": 32,
+    "state": "successful complete test build, not phone-validated",
+    "sourceCommit": "74aec9732cef7cf029d75652779fdca5765ee9ec",
+    "workflowRun": 43810378191,
+    "apkBytes": 19350477,
+    "apkSha256": "a789f95b760e5ba2ec5cccb4333137b524d808ad7baccfd940e38e6d419d6e1a",
+    "certificateSha256": "088b9569c7e74b31dd9840b335e4755f1af5a51667d0c51ade9c5b83e0f57db1",
+    "entry": "DDNovelReader/scripts/LocalApk.ps1 -Action Path",
+    "verification": [
+      "Real receive command completed with fixed shared JDK/apksigner certificate verification",
+      "PowerShell parser passed",
+      "TEMP/TMP/PATH existence and values restored after receive",
+      "Latest selection returned v1.2.27 and independently rechecked APK size/SHA-256",
+      "No rebuild, re-signing, device action or remote publication"
+    ]
+  },
+  "deletedCache": {
+    "base": "_cache/projects/ddnovelreader/main",
+    "files": [
+      {"path": "build/v1.2.26/apk-size-report.json", "bytes": 3551},
+      {"path": "build/v1.2.26/debug-symbols/app.android-arm64.symbols", "bytes": 3824176},
+      {"path": "temp/rate-audit-20261116/float-report.txt", "bytes": 314},
+      {"path": "temp/rate-audit-20261116/RateFloatAudit.java", "bytes": 757},
+      {"path": "build/v1.2.27/apk-artifact.zip", "bytes": 9356325},
+      {"path": "build/v1.2.27/build-analysis.zip", "bytes": 1130976},
+      {"path": "build/v1.2.27/verify-candidate.py", "bytes": 2369},
+      {"path": "build/v1.2.27/package-badging.txt", "bytes": 5272}
+    ],
+    "fileCount": 8,
+    "bytes": 14323740,
+    "checks": "Canonical paths inside own instance; no reparse points; no project registry entries or prepare locks; exclusive project local APK lock; expected file count/bytes and no open-file handles; current release hash checked first"
+  },
+  "retainedCache": [
+    {"path": "build/v1.2.27/apk-size-report.json", "role": "Current APK size analysis"},
+    {"path": "build/v1.2.27/app.android-arm64.symbols", "role": "Current ARM64 symbolication"},
+    {"path": "temp/local-apk.lock", "role": "Zero-byte persistent exclusive-open coordination file"}
+  ],
+  "dataMetadataOnly": {
+    "referenceJpgCount": 7,
+    "referenceJpgBytes": 1447624,
+    "signingFileCount": 2,
+    "signingBytes": 8319,
+    "totalFiles": 9,
+    "totalBytes": 1455943,
+    "buildSdkOrSyntheticDataFound": false,
+    "contentReadOrHashed": false,
+    "dataMovedOrDeleted": false
+  },
+  "deletedSupersededRelease": {
+    "path": "_releases/ddnovelreader/v1.2.26",
+    "fileCount": 6,
+    "bytes": 19367572,
+    "oldApkSha256Verified": "be64fb084a3af05184f023b219abc6a75d6f652605a7f736d10e9f3c057d5aec",
+    "userAuthorization": "允许删除这个旧版本目录",
+    "checks": "Exact canonical directory and 6-file inventory; no reparse points or open-file handles; exclusive project lock; newest APK selected and checksum checked before and after removal",
+    "deleted": true
+  },
+  "cleanupTotals": {
+    "fileCount": 14,
+    "bytes": 33691312
+  },
+  "resolvedException": {
+    "path": "_releases/ddnovelreader/v1.2.26",
+    "files": 6,
+    "bytes": 19367572,
+    "reason": "Automatic approval rejected deletion of this specific old release and requires explicit user authorization",
+    "resolution": "User explicitly authorized this exact old directory; subsequent deletion succeeded",
+    "deleted": true
+  }
+}

@@ -29,38 +29,33 @@ class SyncReport {
   final List<String> removedIds = [];
   /// 补传到 v1/sources 的源文件个数
   int sourceUploaded = 0;
+  int deletionUpdates = 0;
+  int conflicts = 0;
+  String mode = 'both';
+  bool dryRun = false;
+  bool get hasChanges => pushed + pulled + imported + removed +
+      deleted + sourceUploaded + deletionUpdates > 0;
+  int ambiguousProgress = 0;
   final List<String> remoteOnly = [];
   final List<String> lines = [];
   String error = '';
 
-  /// 上传前的冲突计数（远端在我们读取之后又被别人改过 → 重读重合并重写）
-  int conflicts = 0;
-  /// both / push / pull
-  String mode = 'both';
-  /// 是否为预览（只统计将要做的事，不写任何数据）
-  bool dryRun = false;
-
   String get summary {
     if (!ok) return error;
-    final b = StringBuffer();
-    if (mode == 'push') {
-      b.write('保存完成：上传 $pushed 本');
-      if (deleted > 0) b.write('，删除事件 $deleted 个');
-    } else if (mode == 'pull') {
-      b.write('读取完成：更新 $pulled 本');
-      if (imported > 0) b.write('，新增 $imported 本');
-      if (removed > 0) b.write('，移除 $removed 本');
-    } else {
-      b.write('同步完成：上传 $pushed 本，拉取 $pulled 本，跳过 $skipped 本');
-      if (imported > 0) b.write('，新增 $imported 本');
-      if (removed > 0) b.write('，删除 $removed 本');
-      if (deleted > 0) b.write('，上传删除事件 $deleted 个');
-    }
+    final action = dryRun ? '预计' : '完成';
+    final b = StringBuffer(mode == 'push' ? '保存$action：上传 $pushed 本'
+        : mode == 'pull' ? '读取$action：更新 $pulled 本'
+        : '同步$action：上传 $pushed 本，拉取 $pulled 本，跳过 $skipped 本');
+    if (imported > 0) b.write('，新增 $imported 本');
+    if (removed > 0) b.write('，删除 $removed 本');
+    if (deleted > 0) b.write('，上传删除事件 $deleted 个');
     if (sourceUploaded > 0) b.write('，补传书源 $sourceUploaded 个');
+    if (deletionUpdates > 0) b.write('，记录删除信息 $deletionUpdates 项');
     if (conflicts > 0) b.write('，冲突重试 $conflicts 次');
     if (remoteOnly.isNotEmpty) {
       b.write('；远端有 ${remoteOnly.length} 本本机未导入（无源文件）');
     }
+    if (ambiguousProgress > 0) b.write('；$ambiguousProgress 本旧版进度百分比单位未知，保留原值并按字符位置恢复');
     return b.toString();
   }
 }
@@ -78,7 +73,7 @@ class SyncReport {
 ///
 /// 冲突策略（与 PC sync_engine.py 逐条一致）：
 ///   - 进度：比 `progress_at`，新者胜（差值 > 0.5 秒才算更新；只看谁最后改，不看章节前后）
-///   - 书签：按 id 取并集，同 id 取 created_at 较新的一份，任何一边都不会丢
+///   - 书签：按 id/version 并集，bookmark_deletions 过滤旧版本；旧桌面端可能不应用删除
 ///   - 删除：墓碑记录（deleted / deleted_at），对端删除时间更新则本机也删；
 ///     删除之后本机又重新导入/读过 → 视为复活，不会被对端墓碑再删一次
 class SyncEngine {
@@ -108,7 +103,7 @@ class SyncEngine {
   /// 书源落地目录；生产走应用私有目录，测试可注入临时目录
   final String? sourceDirOverride;
 
-  bool _running = false;
+  static Object? _coordinator;
 
   SyncEngine({
     required this.storage,
@@ -120,22 +115,32 @@ class SyncEngine {
 
   Future<Map<String, dynamic>> settings() => storage.loadSettings();
 
-  Future<void> saveSettings(Map<String, dynamic> s) => storage.saveSettings(s);
+  Future<void> saveSettings(Map<String, dynamic> s) => storage.saveSettings({
+    for (final key in [cfgServer, cfgUser, cfgPass, cfgDir, cfgDeviceId, cfgDeviceName,
+      cfgAuto, cfgVerifyTls, cfgLastTime]) if (s.containsKey(key)) key: s[key],
+  });
 
   /// 确保本机有稳定的 device_id / device_name，返回 (id, name)。
   Future<(String, String)> ensureDevice(Map<String, dynamic> s) async {
-    var id = (s[cfgDeviceId] as String? ?? '').trim();
-    if (id.isEmpty) {
-      final name = (s[cfgDeviceName] as String? ?? '').trim();
-      id = _newDeviceId(name.isEmpty ? _platformName() : name);
-      s[cfgDeviceId] = id;
+    final saved = await storage.updateSettings((current) {
+      final name = (current[cfgDeviceName] as String? ?? '').trim();
+      final id = (current[cfgDeviceId] as String? ?? '').trim();
+      return {
+        if (id.isEmpty) cfgDeviceId: _newDeviceId(name.isEmpty ? _platformName() : name),
+        if (name.isEmpty) cfgDeviceName: _platformName(),
+      };
+    });
+    return (saved[cfgDeviceId] as String, saved[cfgDeviceName] as String);
+  }
+
+  static String _configIdentity(Map<String, dynamic> s) => jsonEncode([
+    s[cfgServer], s[cfgUser], s[cfgPass], s[cfgDir], s[cfgVerifyTls],
+  ]);
+
+  Future<void> _checkConfig(Map<String, dynamic> s) async {
+    if (_configIdentity(await settings()) != _configIdentity(s)) {
+      throw WebDavException('同步配置已更改，请重新同步');
     }
-    final name = (s[cfgDeviceName] as String? ?? '').trim();
-    if (name.isEmpty) {
-      s[cfgDeviceName] = _platformName();
-    }
-    await saveSettings(s);
-    return (id, (s[cfgDeviceName] as String? ?? _platformName()).trim());
   }
 
   static String _platformName() => 'Android';
@@ -163,24 +168,42 @@ class SyncEngine {
   /// 每本书一条记录；与 PC `_record()` 的字段名逐一对齐。
   Future<Map<String, MapEntry<String, Map<String, dynamic>>>> localRecords(
     Map<String, dynamic> s,
-    String deviceName,
+    String deviceName, {bool readOnly = false}
   ) async {
-    final books = await storage.loadBooks();
+    if (!readOnly) await storage.consolidateBooks();
+    final books = readOnly ? await storage.loadBooksSnapshot() : await storage.loadBooks();
     final out = <String, MapEntry<String, Map<String, dynamic>>>{};
     for (final meta in books) {
       final key = meta.contentKey.trim().isNotEmpty ? meta.contentKey.trim() : meta.id;
-      final progress = await storage.loadProgress(meta.id);
-      final bms = await annotations.loadRawBookmarks(meta.id);
+      var progress = readOnly ? await storage.loadProgressSnapshot(meta.id) : await storage.loadProgress(meta.id);
+      var bms = readOnly ? await annotations.loadRawBookmarksSnapshot(meta.id) : await annotations.loadRawBookmarks(meta.id);
+      final bmDeletions = readOnly ? await annotations.loadBookmarkDeletionsSnapshot(meta.id) : await annotations.loadBookmarkDeletions(meta.id);
+      var bAt = readOnly ? await annotations.loadBookmarksAtSnapshot(meta.id) : await annotations.loadBookmarksAt(meta.id);
+      if (readOnly) {
+        for (final id in meta.aliases.toSet()..remove(meta.id)) {
+          final candidate = await storage.loadProgressSnapshot(id);
+          if (candidate != null && (progress == null || candidate.updatedAt > progress.updatedAt)) progress = candidate;
+          final deleted = await annotations.loadBookmarkDeletionsSnapshot(id);
+          for (final entry in deleted.entries) {
+            if (entry.value > (bmDeletions[entry.key] ?? -1)) bmDeletions[entry.key] = entry.value;
+          }
+          bms = AnnotationStore.mergeRawBookmarks(bms, await annotations.loadRawBookmarksSnapshot(id), bmDeletions);
+          final clock = await annotations.loadBookmarksAtSnapshot(id);
+          if (clock > bAt) bAt = clock;
+        }
+        bms = AnnotationStore.mergeRawBookmarks(bms, [], bmDeletions);
+      }
       // 进度与书签各带自己的版本时间：只改书签不会把进度"变新"，
       // 只改进度也不会让对端误判书签更新。
       final pAt = progress?.updatedAt ?? 0.0;
-      var bAt = 0.0;
       for (final bm in bms) {
         final t = _createdAt(bm);
         if (t > bAt) bAt = t;
       }
-      final upd = pAt > bAt ? pAt : bAt;
-      out[key] = MapEntry(meta.id, {
+      for (final version in bmDeletions.values) { if (version > bAt) bAt = version; }
+      final activity = meta.activityAt;
+      final upd = [pAt, bAt, activity].reduce((a, b) => a > b ? a : b);
+      final record = <String, dynamic>{
         'schema': schemaVersion,
         'content_key': key,
         'content_key_version': ckVersion,
@@ -196,15 +219,21 @@ class SyncEngine {
             : {
                 ...progress.toPcJson(),
                 // 远端（与 PC 同口径）的 percent 是 0~100，本机是 0~1，出站要换算
-                'percent': _percentToRemote(progress.percent),
+                'percent': progress.ambiguousPercent ?? _percentToRemote(progress.percent),
+                'percent_unit': progress.ambiguousPercent == null ? 'percent' : 'unknown',
               },
         'progress_at': _round(pAt),
         'bookmarks': bms,
+        'bookmark_deletions': bmDeletions,
         'bookmarks_at': _round(bAt),
+        'metadata_at': _round(activity),
         'updated_at': _round(upd),
         'device': deviceName,
         'synced_at': _round(DateTime.now().millisecondsSinceEpoch / 1000.0),
-      });
+      };
+      final previous = out[key];
+      out[key] = MapEntry(previous?.key ?? meta.id,
+        previous == null ? record : mergeRecord(record, previous.value, deviceName));
     }
     return out;
   }
@@ -215,7 +244,7 @@ class SyncEngine {
     Map<String, dynamic> entry,
     String deviceName,
   ) {
-    final t = _num(entry['deleted_at']) ?? DateTime.now().millisecondsSinceEpoch / 1000.0;
+    final t = _num(entry['deleted_at']) ?? 0.0;
     return {
       'schema': schemaVersion,
       'content_key': key,
@@ -229,6 +258,7 @@ class SyncEngine {
       'progress': <String, dynamic>{},
       'progress_at': 0,
       'bookmarks': <Map<String, dynamic>>[],
+      'bookmark_deletions': <String, double>{},
       'bookmarks_at': 0,
       'deleted': true,
       'deleted_at': _round(t),
@@ -239,26 +269,39 @@ class SyncEngine {
   }
 
   static double? _num(dynamic v) {
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v);
+    if (v is num && v.isFinite) return v.toDouble();
+    if (v is String) { final d = double.tryParse(v); return d != null && d.isFinite ? d : null; }
     return null;
   }
 
   /// 本机 percent(0~1) → 远端 percent(0~100)
-  static double _percentToRemote(double v) => v <= 1.0 ? v * 100.0 : v;
+  static double _percentToRemote(double v) => v.clamp(0.0, 1.0) * 100.0;
 
-  /// 远端 percent(0~100) → 本机 percent(0~1)；兼容旧安卓/PC 已经写成 0~1 的记录
-  static double percentFromRemote(dynamic v) {
+  /// Schema 2 uses percent, never a value-based ratio heuristic.
+  static double percentFromRemote(dynamic v, {String unit = 'percent'}) {
     final d = _num(v) ?? 0.0;
-    return d > 1.0 ? (d / 100.0).clamp(0.0, 1.0) : d.clamp(0.0, 1.0);
+    if (unit != 'percent' && unit != 'ratio') throw FormatException('Ambiguous progress percent unit');
+    return (unit == 'ratio' ? d : d / 100.0).clamp(0.0, 1.0);
+  }
+
+  static BookProgress _remoteProgress(String id, Map<String, dynamic> rec, {double fallbackPercent = 0}) {
+    final raw = Map<String, dynamic>.from(rec['progress'] as Map);
+    final parsed = BookProgress.fromPcJson(id, raw);
+    final unit = raw['percent_unit'] ?? rec['percent_unit'] ??
+        (rec['schema'] == schemaVersion ? 'percent' : null);
+    final ambiguous = unit != 'percent' && unit != 'ratio' || raw['percent_ambiguous'] == true;
+    return BookProgress.fromJson({
+      ...parsed.toJson(),
+      'updatedAt': _num(rec['progress_at']) ?? _num(rec['updated_at']) ?? 0.0,
+      'percent': ambiguous ? fallbackPercent : percentFromRemote(raw['percent'], unit: unit as String),
+      if (ambiguous) 'ambiguousPercent': _num(raw['percent']) ?? 0.0,
+    });
   }
 
   /// 一本书在本地最后一次"内容变化"的时间（进度 / 书签 / 加入书架）
   static double bookActivity(BookMeta meta, BookProgress? progress, List<Map<String, dynamic>> bms) {
     var t = progress?.updatedAt ?? 0.0;
-    t = t > meta.addedAt.millisecondsSinceEpoch / 1000.0
-        ? t
-        : meta.addedAt.millisecondsSinceEpoch / 1000.0;
+    if (meta.activityAt > t) t = meta.activityAt;
     for (final bm in bms) {
       final c = _createdAt(bm);
       if (c > t) t = c;
@@ -347,29 +390,43 @@ class SyncEngine {
     }
   }
 
-  Future<(Map<String, Map<String, dynamic>>, Map<String, String>)> readRemoteBooks(
-      WebDavClient cli) async {
+  Map<String, dynamic> _decodeRemoteRecord(String key, List<int> raw) {
+    Map<String, dynamic> rec;
+    try { rec = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>; }
+    catch (_) { throw WebDavException('远端书籍记录无效，已停止同步'); }
+    final ck = (rec['content_key'] as String? ?? '').trim();
+    if (ck.isEmpty || ck != key || ck.contains(RegExp(r'[/\\]')) || ck == '.' || ck == '..') {
+      throw WebDavException('远端书籍标识无效，已停止同步');
+    }
+    return rec;
+  }
+
+  Future<Map<String, dynamic>?> _readRemoteRecord(WebDavClient cli, String key,
+      Map<String, String> etags) async {
+    final response = await cli.getWithMetadata(_bookPath(key));
+    if (response.status == 404) { etags.remove(key); return null; }
+    if (response.body.isEmpty) throw WebDavException('远端书籍记录无法读取，已停止同步');
+    final record = _decodeRemoteRecord(key, response.body);
+    etags[key] = response.etag;
+    return record;
+  }
+
+  Future<Map<String, Map<String, dynamic>>> readRemoteBooks(WebDavClient cli,
+      {Map<String, String>? etags}) async {
     final out = <String, Map<String, dynamic>>{};
-    final etags = <String, String>{};
+    final validators = etags ?? <String, String>{};
     final entries = await cli.propfind(_booksDir);
     for (final e in entries) {
       if (e.isDir || !e.name.toLowerCase().endsWith('.json')) continue;
       final key = e.name.substring(0, e.name.length - 5);
-      final raw = await cli.get(e.rel.isEmpty ? _bookPath(key) : e.rel);
-      if (raw == null || raw.isEmpty) continue;
-      Map<String, dynamic> rec;
-      try {
-        rec = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>;
-      } catch (_) {
-        continue; // 远端文件不是合法 JSON，跳过
+      if (key.isEmpty || key.contains(RegExp(r'[/\\]')) || key == '.' || key == '..' || out.containsKey(key) ||
+          e.rel.isNotEmpty && e.rel != _bookPath(key)) {
+        throw WebDavException('远端书籍标识无效或重复，已停止同步');
       }
-      final ck = (rec['content_key'] as String? ?? '').trim();
-      if (ck.isEmpty) continue;
-      rec['_etag'] = e.etag;
-      out[ck] = rec;
-      if (e.etag.isNotEmpty) etags[ck] = e.etag;
+      final rec = await _readRemoteRecord(cli, key, validators);
+      if (rec != null) out[key] = rec;
     }
-    return (out, etags);
+    return out;
   }
 
   // ---------------------------------------------------------------- 合并
@@ -377,161 +434,204 @@ class SyncEngine {
   /// 书签按 id 取并集；同 id 取 created_at 较新的一份。返回 (并集, 是否变化)
   static (List<Map<String, dynamic>>, bool) mergeBookmarks(
     List<Map<String, dynamic>> local,
-    List<Map<String, dynamic>> remote,
-  ) {
-    final merged = <String, Map<String, dynamic>>{};
-    var changed = false;
-    for (final bm in local) {
-      final id = (bm['id'] ?? '').toString();
-      if (id.isEmpty) continue;
-      merged[id] = bm;
-    }
-    for (final bm in remote) {
-      final id = (bm['id'] ?? '').toString();
-      if (id.isEmpty) continue;
-      final cur = merged[id];
-      if (cur == null) {
-        merged[id] = bm;
-        changed = true;
-        continue;
-      }
-      if (_createdAt(bm) > _createdAt(cur)) {
-        merged[id] = bm;
-        changed = true;
-      }
-    }
-    final list = merged.values.toList()
-      ..sort((a, b) => _createdAt(a).compareTo(_createdAt(b)));
-    return (list, changed);
+    List<Map<String, dynamic>> remote, {
+    Map<String, double> deletions = const {},
+  }) {
+    final list = AnnotationStore.mergeRawBookmarks(local, remote, deletions);
+    final original = AnnotationStore.mergeRawBookmarks(local, [], const {});
+    return (list, jsonEncode(list) != jsonEncode(original));
   }
 
   static double _createdAt(Map<String, dynamic> bm) {
-    final c = bm['created_at'];
-    if (c is num) return c.toDouble();
-    final d = bm['createdAt'];
-    if (d is String) {
-      return (DateTime.tryParse(d)?.millisecondsSinceEpoch ?? 0) / 1000.0;
-    }
-    return 0;
+    return AnnotationStore.bookmarkVersion(bm);
   }
 
-  /// 本机这条记录有没有值得写回远端的东西（只判断"本机有没有对端没有的"，
-  /// 不比"谁更新"——谁更新在 [mergeRecord] 里按字段判）。
-  static bool pushNeeded(Map<String, dynamic> lrec, Map<String, dynamic>? rrec) {
-    if (rrec == null || rrec['deleted'] == true) return true;
-    final lPat = _num(lrec['progress_at']) ?? 0.0;
-    final rPat = _num(rrec['progress_at']) ?? _num(rrec['updated_at']) ?? 0.0;
-    final lBat = _num(lrec['bookmarks_at']) ?? 0.0;
-    final rBat = _num(rrec['bookmarks_at']) ?? _num(rrec['updated_at']) ?? 0.0;
-    if (lPat > rPat + timeTol) return true;
-    if (lBat > rBat + timeTol) return true;
-    final lid = <String>{};
-    for (final b in (lrec['bookmarks'] is List ? lrec['bookmarks'] as List : const [])) {
-      if (b is Map) {
-        final id = (b['id'] ?? '').toString();
-        if (id.isNotEmpty) lid.add(id);
+  static String _stableJson(Object? value) {
+    Object? ordered(Object? item) {
+      if (item is Map) {
+        final keys = item.keys.map((key) => key.toString()).toList()..sort();
+        return {for (final key in keys) key: ordered(item[key])};
       }
+      if (item is List) return item.map(ordered).toList();
+      if (item is num && item.isFinite && item.abs() <= 9007199254740991 && item == item.truncateToDouble()) return item.toInt();
+      return item;
     }
-    final rid = <String>{};
-    for (final b in (rrec['bookmarks'] is List ? rrec['bookmarks'] as List : const [])) {
-      if (b is Map) {
-        final id = (b['id'] ?? '').toString();
-        if (id.isNotEmpty) rid.add(id);
-      }
-    }
-    if (lid.difference(rid).isNotEmpty) return true;
-    return (rrec['content_key'] as String? ?? '').trim().isEmpty;
+    return jsonEncode(ordered(value));
   }
 
-  /// 以远端记录为基底做**字段级合并**，返回要写回远端的完整记录。
-  ///
-  /// - 进度：只有本机 progress_at 更新（超出容差）才替换远端进度；远端是墓碑（复活）则用本机
-  /// - 书签：两边并集（按 id 取较新），bookmarks_at 取两端最大，任何一边都不丢
-  /// - 元信息（书名/作者/格式/字数/章数/书源）：只在远端缺失时补，**永不覆盖**对端
-  /// - 删除状态由墓碑逻辑单独处理，这里只处理未删除的记录
-  static Map<String, dynamic> mergeRecord(
-    Map<String, dynamic> lrec,
-    Map<String, dynamic> rrec,
-    String deviceName,
-  ) {
-    final base = Map<String, dynamic>.from(rrec);
-    final wasTomb = base['deleted'] == true;
-    base.remove('deleted');
-    base.remove('deleted_at');
-    base.remove('_etag');
+  static bool _sameBookmarkState(Map<String, dynamic> a, Map<String, dynamic> b) {
+    Object normalized(Map<String, dynamic> rec) {
+      final list = (rec['bookmarks'] as List? ?? const []).whereType<Map>()
+          .map((bm) => Map<String, dynamic>.from(bm)..remove('bookId')).toList()
+        ..sort((a, b) => a['id'].toString().compareTo(b['id'].toString()));
+      return [list, AnnotationStore.deletionVersions(rec['bookmark_deletions'])];
+    }
+    return _stableJson(normalized(a)) == _stableJson(normalized(b));
+  }
 
-    final lPat = _num(lrec['progress_at']) ?? 0.0;
-    final rPat = _num(base['progress_at']) ?? _num(base['updated_at']) ?? 0.0;
-    final lp = lrec['progress'];
-    if ((wasTomb || lPat > rPat + timeTol) && lp is Map) {
-      base['progress'] = Map<String, dynamic>.from(lp.cast<String, dynamic>());
+  static double _recordActivity(Map<String, dynamic> rec) => <double>[
+    for (final field in ['progress_at', 'bookmarks_at', 'metadata_at', 'updated_at']) _num(rec[field]) ?? 0,
+  ].reduce((a, b) => a > b ? a : b);
+
+  static double _deletionTime(Map<String, dynamic> rec) =>
+      _num(rec['deleted_at']) ?? _num(rec['updated_at']) ?? 0;
+
+  static Object _recordState(Map<String, dynamic> rec) {
+    final state = Map<String, dynamic>.from(rec)
+      ..remove('device')..remove('synced_at')..remove('_etag');
+    final progress = state['progress'];
+    if (progress is Map && progress.isNotEmpty) {
+      state['progress'] = Map<String, dynamic>.from(progress)
+        ..putIfAbsent('percent_unit', () => rec['percent_unit'] ??
+          (rec['schema'] == schemaVersion ? 'percent' : 'unknown'));
+      state['progress_at'] ??= _num(rec['updated_at']) ?? 0;
+    }
+    state['bookmark_deletions'] = AnnotationStore.deletionVersions(state['bookmark_deletions']);
+    state['bookmarks'] = AnnotationStore.mergeRawBookmarks(
+      (state['bookmarks'] is List ? state['bookmarks'] as List : const []).whereType<Map>().map((bm) =>
+        Map<String, dynamic>.from(bm)..remove('bookId')).toList(), [],
+      state['bookmark_deletions'] as Map<String, double>);
+    state['bookmarks_at'] ??= 0.0;
+    state['metadata_at'] ??= 0.0;
+    for (final field in ['legacy_key', 'author']) {
+      if (state[field] == '') state.remove(field);
+    }
+    return _stableJson(state);
+  }
+
+  /// Merge independent versions without applying any remote value locally.
+  /// A later deletion wins on every rebase; a real later live event can revive.
+  static Map<String, dynamic> mergeRecord(Map<String, dynamic> local,
+      Map<String, dynamic> remote, String deviceName) {
+    final localDead = local['deleted'] == true, remoteDead = remote['deleted'] == true;
+    if (localDead || remoteDead) {
+      final tomb = localDead && (!remoteDead || _deletionTime(local) > _deletionTime(remote)) ? local : remote;
+      final live = localDead ? remote : local;
+      if (localDead && remoteDead || _deletionTime(tomb) >= _recordActivity(live)) {
+        return <String, dynamic>{...remote, ...tomb, 'deleted': true,
+          'deleted_at': _round(_deletionTime(tomb)), 'updated_at': _round(_deletionTime(tomb)),
+          'device': deviceName, 'synced_at': _round(DateTime.now().millisecondsSinceEpoch / 1000.0)}
+          ..remove('_etag');
+      }
+    }
+    final incoming = localDead ? <String, dynamic>{} : local;
+    final base = Map<String, dynamic>.from(remote)
+      ..remove('deleted')..remove('deleted_at')..remove('_etag');
+    // Preserve extension fields from the remote record. Known fields below
+    // have their own clocks; neither aggregate time nor upload time owns them.
+    final lp = incoming['progress'], rp = base['progress'];
+    final lPat = _num(incoming['progress_at']) ?? _num(incoming['updated_at']) ?? 0;
+    final rPat = _num(base['progress_at']) ?? _num(base['updated_at']) ?? 0;
+    if (lp is Map && lp.isNotEmpty && (rp is! Map || rp.isEmpty || lPat > rPat + timeTol)) {
+      base['progress'] = Map<String, dynamic>.from(lp);
+      (base['progress'] as Map).putIfAbsent('percent_unit', () => incoming['percent_unit'] ??
+        (incoming['schema'] == schemaVersion ? 'percent' : 'unknown'));
       base['progress_at'] = _round(lPat);
-    } else if (lPat > 0 && (_num(base['progress_at']) ?? 0) <= 0) {
-      base['progress_at'] = _round(lPat);
+    } else if (rp is Map && rp.isNotEmpty) {
+      base['progress'] = Map<String, dynamic>.from(rp)
+        ..putIfAbsent('percent_unit', () => remote['percent_unit'] ??
+          (remote['schema'] == schemaVersion ? 'percent' : 'unknown'));
+      base['progress_at'] = _round(rPat);
     }
-
-    final lBms = <Map<String, dynamic>>[];
-    for (final b in (lrec['bookmarks'] is List ? lrec['bookmarks'] as List : const [])) {
-      if (b is Map) lBms.add(b.cast<String, dynamic>());
+    final deletions = AnnotationStore.deletionVersions(base['bookmark_deletions']);
+    for (final entry in AnnotationStore.deletionVersions(incoming['bookmark_deletions']).entries) {
+      if (entry.value > (deletions[entry.key] ?? -1)) deletions[entry.key] = entry.value;
     }
-    final rBms = <Map<String, dynamic>>[];
-    for (final b in (base['bookmarks'] is List ? base['bookmarks'] as List : const [])) {
-      if (b is Map) rBms.add(b.cast<String, dynamic>());
+    List<Map<String, dynamic>> bookmarks(Object? value) => value is List
+      ? value.whereType<Map>().map((bm) => Map<String, dynamic>.from(bm)..remove('bookId')).toList() : [];
+    final merged = AnnotationStore.mergeRawBookmarks(bookmarks(base['bookmarks']), bookmarks(incoming['bookmarks']), deletions);
+    base['bookmarks'] = merged;
+    base['bookmark_deletions'] = deletions;
+    final bookmarkAt = <double>[_num(base['bookmarks_at']) ?? 0, _num(incoming['bookmarks_at']) ?? 0,
+      for (final bm in merged) _createdAt(bm), ...deletions.values].reduce((a, b) => a > b ? a : b);
+    base['bookmarks_at'] = _round(bookmarkAt);
+    final localMetadata = _num(incoming['metadata_at']) ?? 0;
+    final remoteMetadata = _num(base['metadata_at']) ?? 0;
+    for (final field in ['content_key', 'content_key_version', 'legacy_key', 'title', 'author',
+        'format', 'total_chars', 'chapter_count', 'source']) {
+      final value = incoming[field], old = base[field];
+      final empty = old == null || old is String && old.trim().isEmpty || old is num && old == 0;
+      final useful = value != null && !(value is String && value.trim().isEmpty) && !(value is num && value == 0);
+      if (useful && (empty || localMetadata > remoteMetadata)) base[field] = value;
     }
-    final (merged, _) = mergeBookmarks(lBms, rBms);
-    if (merged.isNotEmpty) base['bookmarks'] = merged;
-
-    final lBat = _num(lrec['bookmarks_at']) ?? 0.0;
-    final rBat = _num(base['bookmarks_at']) ?? 0.0;
-    if (wasTomb || lBat > rBat + timeTol) {
-      base['bookmarks_at'] = _round(lBat);
+    base['metadata_at'] = _round(localMetadata > remoteMetadata ? localMetadata : remoteMetadata);
+    for (final entry in incoming.entries) {
+      if (!const {'deleted', 'deleted_at', '_etag'}.contains(entry.key)) base.putIfAbsent(entry.key, () => entry.value);
     }
-
-    for (final f in const [
-      'content_key', 'content_key_version', 'title', 'author', 'format',
-      'total_chars', 'chapter_count', 'source',
-    ]) {
-      final bv = base[f];
-      final empty = bv == null ||
-          (bv is String && bv.trim().isEmpty) ||
-          (bv is num && bv == 0);
-      if (empty && lrec[f] != null) base[f] = lrec[f];
-    }
-
     base['schema'] = schemaVersion;
-    final pAt = _num(base['progress_at']) ?? 0.0;
-    final bAt = _num(base['bookmarks_at']) ?? 0.0;
-    base['progress_at'] = _round(pAt);
-    base['bookmarks_at'] = _round(bAt);
-    base['updated_at'] = _round(pAt > bAt ? pAt : bAt);
-    base['synced_at'] = _round(DateTime.now().millisecondsSinceEpoch / 1000.0);
+    base['progress'] ??= <String, dynamic>{};
+    base['progress_at'] ??= 0.0;
+    base['updated_at'] = _round(<double>[_recordActivity(base), _num(base['bookmarks_at']) ?? 0,
+      _num(base['metadata_at']) ?? 0].reduce((a, b) => a > b ? a : b));
     base['device'] = deviceName;
+    base['synced_at'] = _round(DateTime.now().millisecondsSinceEpoch / 1000.0);
     return base;
+  }
+
+  static bool pushNeeded(Map<String, dynamic> local, Map<String, dynamic>? remote) =>
+      remote == null || _recordState(mergeRecord(local, remote, '')) != _recordState(remote);
+
+  static bool _pullWouldChange(Map<String, dynamic> local, Map<String, dynamic> remote) {
+    final rp = remote['progress'];
+    final pAt = _num(remote['progress_at']) ?? _num(remote['updated_at']) ?? 0;
+    final metadata = _num(remote['metadata_at']) ??
+      (rp is! Map || rp.isEmpty ? _num(remote['updated_at']) ?? 0 : 0);
+    final merged = mergeRecord(remote, local, '');
+    return metadata > (_num(local['metadata_at']) ?? 0) ||
+      rp is Map && rp.isNotEmpty && pAt > (_num(local['progress_at']) ?? 0) + timeTol ||
+      !_sameBookmarkState(merged, local) ||
+      (_num(merged['bookmarks_at']) ?? 0) > (_num(local['bookmarks_at']) ?? 0);
+  }
+
+  Future<({Map<String, dynamic> record, bool written})> _publishRecord(WebDavClient cli,
+      String key, Map<String, dynamic> intent, Map<String, Map<String, dynamic>> remote,
+      Map<String, String> etags, Map<String, dynamic> settings, String deviceName, SyncReport report) async {
+    for (var attempt = 0; attempt < 4; attempt++) {
+      await _checkConfig(settings);
+      var current = remote[key];
+      if (current != null && !etags.containsKey(key)) {
+        current = await _readRemoteRecord(cli, key, etags);
+        if (current == null) { remote.remove(key); } else { remote[key] = current; }
+      }
+      final merged = mergeRecord(intent, current ?? <String, dynamic>{}, deviceName);
+      if (current != null && _recordState(merged) == _recordState(current)) return (record: current, written: false);
+      final tag = etags[key];
+      if (current != null && (tag == null || !WebDavClient.isStrongEtag(tag))) {
+        throw WebDavException('服务器未提供有效的强ETag，已停止上传以避免覆盖其他设备；仍可从云端读取');
+      }
+      try {
+        await _checkConfig(settings);
+        await cli.put(_bookPath(key), utf8.encode(jsonEncode(merged)),
+          etag: current == null ? null : tag, ifNoneMatch: current == null);
+        remote[key] = merged;
+        etags.remove(key); // A PUT consumed its validator; never reuse it.
+        return (record: merged, written: true);
+      } on WebDavException catch (error) {
+        if (error.status != 412) rethrow;
+        report.conflicts++;
+        if (attempt == 3) throw WebDavException('云端记录持续变化，已停止本轮上传，请稍后重试', 412);
+        final fresh = await _readRemoteRecord(cli, key, etags);
+        if (fresh == null) { remote.remove(key); } else { remote[key] = fresh; }
+      }
+    }
+    throw StateError('Unreachable conditional write state');
   }
 
   /// 把远端记录合到本地书（进度/书签各按自己的时间新者胜），返回是否改动。
   Future<bool> applyRemote(String bookId, Map<String, dynamic> rec) async {
-    var changed = false;
+    final progressData = rec['progress'];
+    final metadataVersion = _num(rec['metadata_at']) ??
+        (progressData is! Map || progressData.isEmpty ? _num(rec['updated_at']) ?? 0.0 : 0.0);
+    var changed = await storage.applyBookActivity(bookId, metadataVersion);
     final local = await storage.loadProgress(bookId);
     final localUpd = local?.updatedAt ?? 0.0;
     // schema 1 老记录没有 progress_at，用整体 updated_at 兜底
     final remoteUpd = _num(rec['progress_at']) ?? _num(rec['updated_at']) ?? 0.0;
     final rp = rec['progress'];
     if (rp is Map && rp.isNotEmpty && remoteUpd > localUpd + timeTol) {
-      final p = BookProgress.fromPcJson(bookId, rp.cast<String, dynamic>());
-      await storage.saveProgress(
-        BookProgress(
-          bookId: bookId,
-          chapterIndex: p.chapterIndex,
-          paragraphIndex: p.paragraphIndex,
-          offsetInParagraph: p.offsetInParagraph,
-          percent: percentFromRemote(p.percent),
-          updatedAt: remoteUpd > 0 ? remoteUpd : p.updatedAt,
-          charOffsetInChapter: p.charOffsetInChapter,
-          pcCharOffset: p.pcCharOffset,
-        ),
-      );
-      changed = true;
+      final accepted = await storage.trySaveProgress(
+        _remoteProgress(bookId, rec, fallbackPercent: local?.percent ?? 0), remote: true);
+      changed = changed || accepted;
     }
     final remoteBms = <Map<String, dynamic>>[];
     final rb = rec['bookmarks'];
@@ -540,47 +640,52 @@ class SyncEngine {
         if (x is Map) remoteBms.add(x.cast<String, dynamic>());
       }
     }
-    if (remoteBms.isNotEmpty) {
-      final localBms = await annotations.loadRawBookmarks(bookId);
-      final (merged, bmChanged) = mergeBookmarks(localBms, remoteBms);
-      if (bmChanged || localBms.isEmpty) {
-        await annotations.saveRawBookmarks(bookId, merged);
-        changed = true;
-      }
-    }
+    final bmChanged = await annotations.mergeBookmarks(bookId, remoteBms,
+      deletions: AnnotationStore.deletionVersions(rec['bookmark_deletions']),
+      updatedAt: _num(rec['bookmarks_at']) ?? 0, remote: true);
+    changed = bmChanged || changed;
     return changed;
   }
 
   // ---------------------------------------------------------------- 主流程
 
-  /// 跑一次同步。
-  ///
-  /// [mode] both = 双向（自动同步用）；push = 只把本机改动保存到云端；
-  /// pull = 只把云端更新读回本机。
-  /// [dryRun] = true 时一个字节都不写，只统计"将要做的事"（界面预览用）。
-  Future<SyncReport> sync({String mode = 'both', bool dryRun = false}) async {
-    final report = SyncReport()
-      ..mode = mode
-      ..dryRun = dryRun;
-    final s = await settings();
-    if (!configured(s)) {
-      report.error = '未配置 WebDAV 服务器地址';
-      return report;
+  Future<SyncReport> sync({String mode = 'both', bool dryRun = false,
+      Map<String, dynamic>? expectedSettings}) async {
+    final report = SyncReport()..mode = mode..dryRun = dryRun;
+    if (!const {'both', 'push', 'pull'}.contains(mode)) {
+      report.error = '不支持的同步模式'; return report;
     }
-    if (_running) {
+    final doPull = mode != 'push', doPush = mode != 'pull';
+    if (_coordinator != null) {
       report.error = '已有同步任务在进行';
       return report;
     }
-    _running = true;
+    final operation = Object();
+    _coordinator = operation;
     try {
-      final doPull = mode == 'both' || mode == 'pull';
-      final doPush = mode == 'both' || mode == 'push';
+      final s = await settings();
+      if (expectedSettings != null && _configIdentity(s) != _configIdentity(expectedSettings)) {
+        report.error = '同步配置已更改，请重新检查差异'; return report;
+      }
+      if (!configured(s)) {
+        report.error = '未配置 WebDAV 服务器地址';
+        return report;
+      }
       final cli = client(s);
-      if (!dryRun) await prepareRemote(cli);
-      final (deviceId, deviceName) = await ensureDevice(s);
-      var local = await localRecords(s, deviceName);
-      final (remote, remoteEtags) = await readRemoteBooks(cli);
-      final metaById = {for (final m in await storage.loadBooks()) m.id: m};
+      await _checkConfig(s);
+      if (doPush && !dryRun) await prepareRemote(cli);
+      final (deviceId, deviceName) = doPush && !dryRun ? await ensureDevice(s)
+        : (s[cfgDeviceId] as String? ?? '', s[cfgDeviceName] as String? ?? _platformName());
+      var local = await localRecords(s, deviceName, readOnly: dryRun || !doPull);
+      final etags = <String, String>{};
+      final remote = await readRemoteBooks(cli, etags: etags);
+      await _checkConfig(s);
+      final books = dryRun || !doPull ? await storage.loadBooksSnapshot() : await storage.loadBooks();
+      final metaById = {for (final m in books) m.id: m};
+      final keyByAlias = <String, String>{
+        for (final m in metaById.values)
+          for (final id in [m.id, ...m.aliases]) id: m.contentKey.trim().isEmpty ? m.id : m.contentKey.trim(),
+      };
       var deletions = await storage.loadDeletions();
       // 删除过的所有 key（含老书兜底用的 book id），用于挡住"删掉的旧记录被当远端独有书导回"
       final deadKeys = <String, double>{};
@@ -591,48 +696,76 @@ class SyncEngine {
         deadKeys[e.key] = t;
         final idk = (v['id_key'] as String? ?? '').trim();
         if (idk.isNotEmpty) deadKeys[idk] = t;
+        for (final id in (v['id_keys'] as List?)?.whereType<String>() ?? const <String>[]) {
+          deadKeys[id] = t;
+        }
+      }
+
+      // Read all known live aliases before deciding any logical-book deletion.
+      // PROPFIND order must not let an old alias tombstone erase a newer event.
+      final pulledKeys = <String>{};
+      final remoteLiveActivity = <String, double>{};
+      for (final entry in remote.entries) {
+        final key = keyByAlias[entry.key] ?? entry.key;
+        final item = local[key];
+        final rec = entry.value;
+        if (item == null || rec['deleted'] == true) continue;
+        await _checkConfig(s);
+        final activity = <double>[_num(rec['updated_at']) ?? 0.0, _num(rec['progress_at']) ?? 0.0,
+          _num(rec['bookmarks_at']) ?? 0.0, _num(rec['metadata_at']) ?? 0.0]
+            .reduce((a, b) => a > b ? a : b);
+        if (activity > (remoteLiveActivity[key] ?? 0)) remoteLiveActivity[key] = activity;
+        if (doPull) {
+          if (dryRun) {
+            if (_pullWouldChange(item.value, rec)) pulledKeys.add(key);
+            local[key] = MapEntry(item.key, mergeRecord(rec, item.value, deviceName)..['content_key'] = key);
+          } else if (await applyRemote(item.key, rec)) { pulledKeys.add(key); }
+        }
       }
 
       // 1) 远端更新 → 拉到本地；远端删除 → 本机也删；远端独有的书尝试下载书源并入书架
-      var localUpdated = 0;
-      var imported = 0;
-      for (final entry in (doPull ? remote.entries : const <MapEntry<String, Map<String, dynamic>>>[])) {
-        final key = entry.key;
+      final sourceEntries = dryRun ? await cli.propfind(_sourcesDir) : <WebDavEntry>[];
+      bool canImport(String key, Map<String, dynamic> rec) {
+        final source = rec['source'];
+        if (source is Map && ((_num(source['size']) ?? 0) > maxSourceBytes)) return false;
+        return sourceEntries.any((entry) => !entry.isDir && entry.size <= maxSourceBytes &&
+          ['.txt', '.epub', '.pdf', '.docx'].any((ext) => entry.name == '$key$ext'));
+      }
+      for (final entry in doPull ? remote.entries : <MapEntry<String, Map<String, dynamic>>>[]) {
+        await _checkConfig(s);
+        final key = keyByAlias[entry.key] ?? entry.key;
         final rec = entry.value;
+
+        if (rec['deleted'] != true && rec['progress'] is Map && (rec['progress'] as Map).isNotEmpty &&
+            _remoteProgress(key, rec).ambiguousPercent != null) report.ambiguousProgress++;
 
         if (rec['deleted'] == true) {
           final tomb = _num(rec['deleted_at']) ?? _num(rec['updated_at']) ?? 0.0;
           final item = local[key];
           if (item != null) {
-            final meta = metaById[item.key];
-            final prog = await storage.loadProgress(item.key);
-            final lBms = await annotations.loadRawBookmarks(item.key);
-            final activity = meta == null
-                ? (prog?.updatedAt ?? 0.0)
-                : bookActivity(meta, prog, lBms);
+            var activity = dryRun ? _recordActivity(item.value) :
+              _recordActivity((await localRecords(s, deviceName, readOnly: true))[key]?.value ?? item.value);
+            if ((remoteLiveActivity[key] ?? 0) > activity) activity = remoteLiveActivity[key]!;
             // 本地这本书在删除之后又被读过/加了书签/重新导入 = 用户又用起来了，复活。
-            // 时间相当时偏向"保留书籍"：删除不可逆，不能因为 0.5 秒误差把书删掉。
-            if (activity >= tomb - timeTol) {
+            // Imported/display addedAt never counts as a new user event.
+            if (activity > tomb) {
               report.skipped++;
               continue;
             }
-            if (dryRun) {
-              report.lines.add('✕ 将删除 ${item.value['title'] ?? rec['title'] ?? key}（对端删除）');
-            } else {
-              await storage.removeBook(item.key, deletedAt: tomb);
-              report.removedIds.add(item.key);
-              report.lines.add('✕ 已删除 ${item.value['title'] ?? rec['title'] ?? key}（对端删除）');
+            if (!dryRun) {
+              await storage.removeBook(item.key, deletedAt: tomb, remote: true);
+              if ((await storage.loadBooks()).any((book) => book.id == item.key)) continue;
             }
             report.removed++;
-            localUpdated++;
+            if (!dryRun) report.removedIds.add(item.key);
             local.remove(key);
-          } else if (dryRun) {
-            report.lines.add('✕ 将记下删除 ${rec['title'] ?? key}（对端删除）');
+            report.lines.add('✕ ${dryRun ? '预计移除' : '已删除'} ${item.value['title'] ?? rec['title'] ?? key}（对端删除）');
           }
           // 远端已删且本机也没有：记下墓碑，避免以后又把这本书拉回来
-          if (!dryRun) {
-            await storage.markDeleted(key, (rec['title'] as String?) ?? '', deletedAt: tomb);
-            await _dropRemoteSource(cli, key, rec);
+          final previousDeletion = deletions[key];
+          if (tomb > (previousDeletion is Map ? _num(previousDeletion['deleted_at']) ?? 0 : 0)) {
+            report.deletionUpdates++;
+            if (!dryRun) await storage.markDeleted(key, (rec['title'] as String?) ?? '', deletedAt: tomb);
           }
           deletions[key] = {'deleted_at': tomb, 'title': rec['title'] ?? ''};
           continue;
@@ -641,30 +774,19 @@ class SyncEngine {
         // 本机删过、且删除比远端记录更新 → 让本机的删除生效（下面会推墓碑）
         final dent = deletions[key];
         if (dent is Map &&
-            ((_num(dent['deleted_at']) ?? 0.0) > (_num(rec['updated_at']) ?? 0.0) + timeTol)) {
+            ((_num(dent['deleted_at']) ?? 0.0) >= (_num(rec['updated_at']) ?? 0.0))) {
           continue;
         }
         // 本机删过这本书的「旧 key」（当初用 book id 上传的孤儿记录）→ 不能当远端独有书导入回来
         if (deadKeys[key] != null &&
-            deadKeys[key]! > (_num(rec['updated_at']) ?? 0.0) + timeTol) {
+            deadKeys[key]! >= (_num(rec['updated_at']) ?? 0.0)) {
           continue;
         }
 
         final item = local[key];
         if (item == null) {
           final title = (rec['title'] as String? ?? '').trim();
-          if (dryRun) {
-            if (_sourceExistsInRecord(rec)) {
-              imported++;
-              report.imported++;
-              report.lines.add('↓ 将新增 ${title.isEmpty ? key : title}');
-            } else {
-              report.remoteOnly.add(title.isEmpty ? key : title);
-            }
-            continue;
-          }
-          if (await _importRemote(cli, key, rec)) {
-            imported++;
+          if (dryRun ? canImport(key, rec) : await _importRemote(cli, key, rec, checkConfig: () => _checkConfig(s))) {
             report.imported++;
             report.lines.add('↓ 新增 ${title.isEmpty ? key : title}');
           } else {
@@ -673,208 +795,150 @@ class SyncEngine {
           continue;
         }
 
-        final lPat = _num(item.value['progress_at']) ?? 0.0;
-        final rPat = _num(rec['progress_at']) ?? _num(rec['updated_at']) ?? 0.0;
-        final lBat = _num(item.value['bookmarks_at']) ?? 0.0;
-        final rBat = _num(rec['bookmarks_at']) ?? _num(rec['updated_at']) ?? 0.0;
-        if (rPat > lPat + timeTol || rBat > lBat + timeTol) {
-          if (dryRun) {
-            localUpdated++;
-            report.pulled++;
-            report.lines.add('↓ 将更新 ${item.value['title'] ?? key}（远端更新）');
-          } else if (await applyRemote(item.key, rec)) {
-            localUpdated++;
+        // Union every ID/deletion before any replacement upload. An aggregate
+        // clock cannot prove the other device has no distinct older bookmarks.
+        if (pulledKeys.remove(key) || (dryRun ? _pullWouldChange(item.value, rec) : await applyRemote(item.key, rec))) {
             report.pulled++;
             report.lines.add('↓ ${item.value['title'] ?? key}（远端更新）');
-          } else {
-            report.skipped++;
-          }
         } else {
           report.skipped++;
         }
       }
 
-      if (!dryRun && (localUpdated > 0 || imported > 0)) {
-        local = await localRecords(s, deviceName);
+      if (!dryRun) {
+        local = await localRecords(s, deviceName, readOnly: !doPull);
         deletions = await storage.loadDeletions();
       }
 
-      // 2) 本地更新 → 远端：字段级合并后写回，绝不整条覆盖对端的新数据
-      if (doPush) {
-        for (final entry in local.entries) {
-          final key = entry.key;
-          final bid = entry.value.key;
-          final rec = entry.value.value;
-          final rrec = remote[key];
-          if (rrec != null && rrec['deleted'] == true) {
-            // 远端墓碑：与拉取阶段同一条规则 —— 本机这本书在删除之后又被读过/加过书签/
-            // 重新导入过（活动时间不早于删除），就判为"用户又用起来了"，推活记录把它复活。
-            final rDel = _num(rrec['deleted_at']) ?? _num(rrec['updated_at']) ?? 0.0;
-            var act = _num(rec['progress_at']) ?? 0.0;
-            final bat = _num(rec['bookmarks_at']) ?? 0.0;
-            if (bat > act) act = bat;
-            final meta = metaById[bid];
-            if (meta != null) {
-              final a = meta.addedAt.millisecondsSinceEpoch / 1000.0;
-              if (a > act) act = a;
-            }
-            if (!(act >= rDel - timeTol)) continue;
-          }
-          if (!pushNeeded(rec, rrec)) continue;
-          if (dryRun) {
-            report.pushed++;
-            report.lines.add('↑ 将保存 ${rec['title'] ?? key}');
-            continue;
-          }
-          final path = _bookPath(key);
-          var merged = mergeRecord(rec, rrec ?? <String, dynamic>{}, deviceName);
-          try {
-            await cli.put(path, utf8.encode(jsonEncode(merged)),
-                etag: remoteEtags[key]);
-          } on WebDavException catch (e) {
-            if (e.status != 409 && e.status != 412) rethrow;
-            // 对端在我们读取之后刚改过这条记录：重读 → 重新合并 → 再写一次
-            report.conflicts++;
-            Map<String, dynamic> fresh = <String, dynamic>{};
-            final raw = await cli.get(path);
-            if (raw != null && raw.isNotEmpty) {
-              try {
-                fresh = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>;
-              } catch (_) {
-                fresh = <String, dynamic>{};
-              }
-            }
-            merged = mergeRecord(rec, fresh, deviceName);
-            await cli.put(path, utf8.encode(jsonEncode(merged)));
-          }
-          report.pushed++;
-          report.lines.add('↑ ${rec['title'] ?? key}');
+      // 2) Rebase field-level intents against the exact conditional-write version.
+      for (final entry in doPush ? local.entries : <MapEntry<String, MapEntry<String, Map<String, dynamic>>>>[]) {
+        await _checkConfig(s);
+        final key = entry.key;
+        var intent = entry.value.value;
+        // Legacy aliases represent the same book. Push can merge them into
+        // its remote intent without accepting those values on this device.
+        final aliases = remote.entries.where((other) => other.key != key && keyByAlias[other.key] == key).toList();
+        for (final alias in aliases.where((alias) => alias.value['deleted'] != true)) {
+          intent = mergeRecord(alias.value, intent, deviceName)..['content_key'] = key;
         }
+        for (final alias in aliases.where((alias) => alias.value['deleted'] == true)) {
+          intent = mergeRecord({...alias.value, 'content_key': key}, intent, deviceName);
+        }
+        if (!pushNeeded(intent, remote[key])) continue;
+        if (dryRun) {
+          final merged = mergeRecord(intent, remote[key] ?? {}, deviceName);
+          if (merged['deleted'] == true) { report.deleted++; } else { report.pushed++; }
+          continue;
+        }
+        final result = await _publishRecord(cli, key, intent, remote, etags, s, deviceName, report);
+        if (result.written) {
+          if (result.record['deleted'] == true) { report.deleted++; } else { report.pushed++; }
+          report.lines.add('↑ ${result.record['title'] ?? key}');
+        }
+        // A newer tombstone discovered on retry must not silently resurrect.
+        if (doPull && result.record['deleted'] == true) {
+          await _checkConfig(s);
+          await storage.removeBook(entry.value.key, deletedAt: _deletionTime(result.record), remote: true);
+          if (!(await storage.loadBooks()).any((book) => book.id == entry.value.key)) {
+            report.removed++; report.removedIds.add(entry.value.key);
+          }
+        } else if (doPull && await applyRemote(entry.value.key, result.record)) { report.pulled++; }
       }
 
       // 2.2) 本地删除 → 远端墓碑
       final nowS = DateTime.now().millisecondsSinceEpoch / 1000.0;
-      for (final e in (doPush ? deletions.entries.toList() : const <MapEntry<String, dynamic>>[])) {
+      for (final e in doPush ? deletions.entries.toList() : <MapEntry<String, dynamic>>[]) {
+        await _checkConfig(s);
         final key = e.key;
         final dent = e.value is Map ? (e.value as Map).cast<String, dynamic>() : <String, dynamic>{};
         if (local.containsKey(key)) {
           // 书还在本地（刚重新导入）= 撤销墓碑，不再推删除
-          if (!dryRun) await storage.clearDeletion(key);
+          if (!dryRun && doPull) await storage.clearDeletion(key);
           continue;
         }
         final dT = _num(dent['deleted_at']) ?? 0.0;
         if (dT <= 0) continue;
         if (nowS - dT > tombstoneTtl) {
-          if (!dryRun) await storage.clearDeletion(key);
+          if (!dryRun && doPull) await storage.clearDeletion(key);
           continue;
         }
-        final rrec = remote[key];
-        if (rrec != null) {
-          if (rrec['deleted'] == true) {
-            // 远端已经是墓碑：谁的删除更新就保留谁的时间
-            if (dT <= (_num(rrec['deleted_at']) ?? 0.0) + timeTol) continue;
-          } else if ((_num(rrec['updated_at']) ?? 0.0) > dT + timeTol) {
-            // 远端在本机删除之后还更新过（对端仍在读这本书）：以对端为准，不推删除
-            continue;
-          }
-        }
-        if (dryRun) {
-          report.deleted++;
-          report.lines.add('↑ 将上传删除事件 ${dent['title'] ?? key}');
-        } else {
-          await cli.put(_bookPath(key),
-              utf8.encode(jsonEncode(tombstoneRecord(key, dent, deviceName))));
-          report.deleted++;
-          report.lines.add('↑ 删除事件 ${dent['title'] ?? key}');
-          await _dropRemoteSource(cli, key, rrec ?? <String, dynamic>{});
-        }
-
-        // 老书当初用 book id 当 key 上传过一条记录：本机删书时一并把那条孤儿记录也推成墓碑，
-        // 否则桌面端会一直留着「只存在于远端」的这本旧书。
-        final idKey = (dent['id_key'] as String? ?? '').trim();
-        if (idKey.isNotEmpty && idKey != key) {
-          final idRec = remote[idKey];
-          if (idRec != null && idRec['deleted'] != true &&
-              (_num(idRec['updated_at']) ?? 0.0) <= dT + timeTol) {
-            if (dryRun) {
-              report.lines.add('↑ 将上传删除事件（旧记录）$idKey');
-            } else {
-              await cli.put(_bookPath(idKey),
-                  utf8.encode(jsonEncode(tombstoneRecord(idKey, dent, deviceName))));
-              report.lines.add('↑ 删除事件（旧记录）$idKey');
-              await _dropRemoteSource(cli, idKey, idRec);
-            }
-          }
+        final aliases = <String>{key,
+          if (dent['id_key'] is String) dent['id_key'] as String,
+          ...((dent['id_keys'] as List?)?.whereType<String>() ?? const <String>[]),
+        }..remove('');
+        for (final alias in aliases) {
+          final rrec = remote[alias];
+          if (alias != key && rrec == null) continue;
+          if (rrec != null && (rrec['deleted'] == true
+              ? dT <= (_num(rrec['deleted_at']) ?? 0.0)
+              : (_num(rrec['updated_at']) ?? 0.0) > dT)) continue;
+          final intent = tombstoneRecord(alias, dent, deviceName);
+          if (dryRun) { report.deleted++; continue; }
+          final result = await _publishRecord(cli, alias, intent, remote, etags, s, deviceName, report);
+          if (result.written && result.record['deleted'] == true) report.deleted++;
+          report.lines.add('↑ 删除事件 ${dent['title'] ?? alias}');
         }
       }
 
-      // 2.5) 清理历史遗留：旧版安卓 contentKey 为空时用 book id 当 key 上传，
-      // 回填 ck2 后再按新 key 推一次，远端那条旧记录就成了孤儿（表现为「远端未导入」）。
-      // 只删“key 正是本机 book id”的文件，不会碰到别的设备/书。
-      if (doPush && !dryRun) {
-        for (final entry in local.entries) {
-          final idKey = entry.value.key;
-          if (entry.key == idKey) continue; // 本机仍没回填，保留旧记录
-          if (!remote.containsKey(idKey)) continue;
-          try {
-            await cli.delete(_bookPath(idKey));
-            report.lines.add('清理旧记录 $idKey');
-          } on WebDavException {
-            // 删不掉不影响本次同步结果
-          }
-        }
-      }
+      // Keep source blobs and legacy aliases. Their physical deletion would
+      // require a transaction spanning the canonical record and the resource;
+      // a single If-Match cannot protect a concurrent resurrection elsewhere.
+      // Known aliases still merge above, and tombstones keep logical deletion.
 
       // 2.6) 书源文件：只补远端缺的（本机独有的书，桌面靠它落地）
-      if (doPush && !dryRun) {
-        final haveSources = <String>{};
-        try {
-          for (final e in await cli.propfind(_sourcesDir)) {
-            if (!e.isDir) haveSources.add(e.name.toLowerCase());
-          }
-        } on WebDavException {
-          await cli.mkdirs(_sourcesDir);
+      final haveSources = <String>{};
+      for (final e in doPush ? (dryRun ? sourceEntries : await cli.propfind(_sourcesDir)) : <WebDavEntry>[]) {
+        if (!e.isDir) haveSources.add(e.name.toLowerCase());
+      }
+      final booksNow = dryRun || !doPull ? books : await storage.loadBooks();
+      for (final meta in doPush ? booksNow : <BookMeta>[]) {
+        await _checkConfig(s);
+        final key = meta.contentKey.trim().isNotEmpty ? meta.contentKey.trim() : meta.id;
+        final ext = _extOf(meta.format);
+        final name = '$key$ext'.toLowerCase();
+        if (haveSources.contains(name)) continue;
+        if (remote[key]?['deleted'] == true) continue;
+        if (dryRun) {
+          final length = _fileSize(meta.filePath);
+          if (length > 0 && length <= maxSourceBytes) { report.sourceUploaded++; haveSources.add(name); }
+          continue;
         }
-        final booksNow = await storage.loadBooks();
-        for (final meta in booksNow) {
-          final key = meta.contentKey.trim().isNotEmpty ? meta.contentKey.trim() : meta.id;
-          final ext = _extOf(meta.format);
-          final name = '$key$ext'.toLowerCase();
-          if (haveSources.contains(name)) continue;
-          final bytes = await _readSourceFile(meta.filePath);
-          if (bytes == null) continue;
-          try {
-            await cli.put('$_sourcesDir/$key$ext', bytes,
-                atomic: false, contentType: 'application/octet-stream');
-            report.sourceUploaded++;
-            haveSources.add(name);
-          } on WebDavException catch (e) {
-            report.lines.add('上传书源失败「${meta.title}」：${e.message}');
-          }
+        final bytes = await _readSourceFile(meta.filePath);
+        if (bytes == null) continue;
+        try {
+          await cli.put('$_sourcesDir/$key$ext', bytes,
+              atomic: false, ifNoneMatch: true, contentType: 'application/octet-stream');
+          report.sourceUploaded++;
+          haveSources.add(name);
+        } on WebDavException catch (e) {
+          if (e.status == 412) { haveSources.add(name); continue; }
+          report.lines.add('上传书源失败「${meta.title}」：${e.message}');
         }
       }
 
       // 3) 设备登记
-      if (!dryRun) {
-        try {
-          await cli.put(
-            '$_devicesDir/$deviceId.json',
-            utf8.encode(jsonEncode({
-              'schema': schemaVersion,
-              'device_id': deviceId,
-              'device_name': deviceName,
-              'last_sync': _round(DateTime.now().millisecondsSinceEpoch / 1000.0),
-              'book_count': local.length,
-              'platform': 'Android',
-            })),
-          );
-        } on WebDavException {
-          // 设备登记失败不影响主流程
-        }
-
-        s[cfgLastTime] = _round(DateTime.now().millisecondsSinceEpoch / 1000.0);
-        await saveSettings(s);
+      if (doPush && !dryRun) try {
+        await cli.put(
+          '$_devicesDir/$deviceId.json',
+          utf8.encode(jsonEncode({
+            'schema': schemaVersion,
+            'device_id': deviceId,
+            'device_name': deviceName,
+            'last_sync': _round(DateTime.now().millisecondsSinceEpoch / 1000.0),
+            'book_count': local.length,
+            'platform': 'Android',
+          })),
+        );
+      } on WebDavException {
+        // 设备登记失败不影响主流程
       }
+
+      if (!dryRun) {
+        await storage.updateSettings((current) {
+          if (_configIdentity(current) != _configIdentity(s)) throw WebDavException('同步配置已更改，请重新同步');
+          return {cfgLastTime: _round(DateTime.now().millisecondsSinceEpoch / 1000.0)};
+        });
+      } else { await _checkConfig(s); }
       report.ok = true;
       return report;
     } on WebDavException catch (e) {
@@ -884,23 +948,16 @@ class SyncEngine {
       report.error = '同步失败：$e';
       return report;
     } finally {
-      _running = false;
+      if (identical(_coordinator, operation)) _coordinator = null;
     }
-  }
-
-  /// 远端记录是否带可下载的书源（预览时用来判断"这本能不能落地"）
-  static bool _sourceExistsInRecord(Map<String, dynamic> rec) {
-    final src = rec['source'];
-    if (src is! Map) return false;
-    final size = (src['size'] as num?)?.toInt() ?? 0;
-    return size > 0 && size <= maxSourceBytes;
   }
 
   // ---------------------------------------------------------------- 反向拉取
 
   /// 远端独有的书：下载 v1/sources 里的源文件 → 落到应用私有目录 → 解析校验 ck2
   /// → 入书架并套上远端进度与书签。任何一步不成立都只回一条日志，不产生空书。
-  Future<bool> _importRemote(WebDavClient cli, String key, Map<String, dynamic> rec) async {
+  Future<bool> _importRemote(WebDavClient cli, String key, Map<String, dynamic> rec,
+      {Future<void> Function()? checkConfig}) async {
     final src = rec['source'];
     final wantExt = (src is Map ? (src['ext'] as String? ?? '') : '').toLowerCase();
     final srcSize = src is Map ? ((src['size'] as num?)?.toInt() ?? 0) : 0;
@@ -910,7 +967,7 @@ class SyncEngine {
     }
 
     final candidates = <String>[
-      if (wantExt.isNotEmpty) wantExt,
+      if (const {'.txt', '.epub', '.pdf', '.docx'}.contains(wantExt)) wantExt,
       '.txt',
       '.epub',
       '.pdf',
@@ -928,13 +985,23 @@ class SyncEngine {
         break;
       }
     }
-    if (bytes == null || usedExt.isEmpty) {
+    if (bytes == null || usedExt.isEmpty || bytes.length > maxSourceBytes) {
       return false; // 老记录没有源文件：只计数，不入书架
     }
+    await checkConfig?.call();
 
     final dir = await _sourceDir();
-    final path = '${dir.path}/$key$usedExt';
-    await File(path).writeAsBytes(bytes, flush: true);
+    var path = '${dir.path}/$key$usedExt';
+    if (await File(path).exists()) {
+      final existing = await File(path).readAsBytes();
+      if (!_sameBytes(existing, bytes)) {
+        var suffix = 1;
+        do { path = '${dir.path}/$key.remote-${suffix++}$usedExt'; } while (await File(path).exists());
+        await File(path).writeAsBytes(bytes, flush: true);
+      }
+    } else {
+      await File(path).writeAsBytes(bytes, flush: true);
+    }
 
     final fmt = usedExt.replaceAll('.', '');
     final parsed = await _parseFor(path, fmt, title.isEmpty ? key : title);
@@ -944,6 +1011,7 @@ class SyncEngine {
       // 分章口径不一致会让 key 漂移：宁可不导入，也不要造一本对不上的书
       return false;
     }
+    await checkConfig?.call();
 
     final id = key;
     await storage.addBook(BookMeta(
@@ -955,48 +1023,17 @@ class SyncEngine {
       contentKey: key,
       totalChars: total,
       chapterCount: chapters,
-    ));
-
-    final rp = rec['progress'];
-    if (rp is Map && rp.isNotEmpty) {
-      final p = BookProgress.fromPcJson(id, rp.cast<String, dynamic>());
-      final upd = _num(rec['progress_at']) ?? _num(rec['updated_at']) ?? p.updatedAt;
-      await storage.saveProgress(BookProgress(
-        bookId: id,
-        chapterIndex: p.chapterIndex,
-        paragraphIndex: p.paragraphIndex,
-        offsetInParagraph: p.offsetInParagraph,
-        percent: percentFromRemote(p.percent),
-        updatedAt: upd,
-        charOffsetInChapter: p.charOffsetInChapter,
-        pcCharOffset: p.pcCharOffset,
-      ));
-    }
-    final rb = rec['bookmarks'];
-    if (rb is List && rb.isNotEmpty) {
-      final list = rb.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
-      await annotations.saveRawBookmarks(id, list);
-    }
+    ), remote: true, activityAt: _num(rec['metadata_at']) ?? _num(rec['updated_at']) ?? 0,
+        remoteVersion: _num(rec['updated_at']) ?? 0);
+    if (!(await storage.loadBooks()).any((book) => book.id == id || book.aliases.contains(id))) return false;
+    await applyRemote(id, rec);
     return true;
   }
 
-  /// 删除事件生效后清掉远端书源文件：省网盘空间，也避免正文残留在远端。
-  Future<void> _dropRemoteSource(WebDavClient cli, String key, Map<String, dynamic> rec) async {
-    final src = rec['source'];
-    final wantExt = (src is Map ? (src['ext'] as String? ?? '') : '').toLowerCase();
-    final candidates = <String>[
-      if (wantExt.isNotEmpty) wantExt,
-      '.txt',
-      '.epub',
-      '.pdf',
-    ];
-    for (final e in candidates) {
-      try {
-        await cli.delete('$_sourcesDir/$key$e');
-      } on WebDavException {
-        // 远端没有这个文件（404）不影响同步
-      }
-    }
+  static bool _sameBytes(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) { if (a[i] != b[i]) return false; }
+    return true;
   }
 
   Future<Directory> _sourceDir() async {
@@ -1029,14 +1066,16 @@ class SyncEngine {
   }
 
   Future<(bool, String)> testConnection() async {
-    final s = await settings();
-    if (!configured(s)) {
-      return (false, '未配置 WebDAV 服务器地址');
-    }
+    if (_coordinator != null) return (false, '已有同步任务在进行');
+    final operation = Object();
+    _coordinator = operation;
     try {
+      final s = await settings();
+      if (!configured(s)) return (false, '未配置 WebDAV 服务器地址');
       final cli = client(s);
       await prepareRemote(cli);
       final entries = await cli.propfind(_booksDir);
+      await _checkConfig(s);
       final n = entries
           .where((e) => !e.isDir && e.name.toLowerCase().endsWith('.json'))
           .length;
@@ -1045,6 +1084,8 @@ class SyncEngine {
       return (false, e.message);
     } catch (e) {
       return (false, '连接失败：$e');
+    } finally {
+      if (identical(_coordinator, operation)) _coordinator = null;
     }
   }
 }

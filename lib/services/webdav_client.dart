@@ -20,7 +20,6 @@ class WebDavEntry {
   final bool isDir;
   final int size;
   final double mtime;
-  /// 服务器返回的 ETag（拿去做 If-Match 条件写，避免覆盖别人刚改的记录）
   final String etag;
 
   const WebDavEntry({
@@ -37,8 +36,10 @@ class WebDavEntry {
 class WebDavResponse {
   final int status;
   final List<int> body;
+  /// The validator from this exact response, never from an earlier listing.
+  final String etag;
 
-  const WebDavResponse(this.status, this.body);
+  const WebDavResponse(this.status, this.body, {this.etag = ''});
 }
 
 /// 极简 WebDAV 客户端：只用 dart:io HttpClient，无第三方依赖。
@@ -116,14 +117,17 @@ class WebDavClient {
     List<int>? body,
     Map<String, String>? headers,
     Set<int> allow = const {},
+    String? targetUrl,
+    bool followRedirects = true,
   }) async {
     final http = HttpClient()..connectionTimeout = timeout;
     if (!verifyTls) {
       http.badCertificateCallback = (cert, host, port) => true;
     }
     try {
-      final req = await http.openUrl(method, Uri.parse(urlOf(rel)))
+      final req = await http.openUrl(method, Uri.parse(targetUrl ?? urlOf(rel)))
           .timeout(timeout);
+      req.followRedirects = followRedirects;
       _baseHeaders.forEach((k, v) {
         req.headers.set(k, v, preserveHeaderCase: true);
       });
@@ -148,7 +152,8 @@ class WebDavClient {
           resp.statusCode,
         );
       }
-      return WebDavResponse(resp.statusCode, bytes);
+      return WebDavResponse(resp.statusCode, bytes,
+        etag: resp.headers.value(HttpHeaders.etagHeader) ?? '');
     } on WebDavException {
       rethrow;
     } on TimeoutException {
@@ -174,6 +179,8 @@ class WebDavClient {
         return '远端路径不存在';
       case 405:
         return '服务器不支持该 WebDAV 方法';
+      case 412:
+        return '远端记录已更改，请重新读取后合并';
       case 507:
         return '远端空间不足';
       case 509:
@@ -185,7 +192,7 @@ class WebDavClient {
 
   // ---------- 目录 ----------
 
-  /// 列目录。失败（404/405）返回空列表。
+  /// A missing collection is empty; unreadable/malformed listings stop sync.
   Future<List<WebDavEntry>> propfind([String rel = '', String depth = '1']) async {
     const body = '<?xml version="1.0" encoding="utf-8"?>'
         '<D:propfind xmlns:D="DAV:"><D:prop>'
@@ -201,13 +208,22 @@ class WebDavClient {
       },
       allow: {404, 405},
     );
-    if (resp.status == 404 || resp.status == 405) return [];
-    return parsePropfind(utf8.decode(resp.body, allowMalformed: true), urlOf(''));
+    if (resp.status == 404) return [];
+    if (resp.status == 405) throw WebDavException('服务器不支持读取 WebDAV 目录，已停止同步', 405);
+    final xml = utf8.decode(resp.body);
+    if (!RegExp(r'<(?:[A-Za-z0-9_.-]+:)?multistatus\b').hasMatch(xml)) {
+      throw WebDavException('WebDAV 目录响应无效，已停止同步');
+    }
+    final requestUrl = urlOf(rel);
+    return parsePropfind(xml, urlOf(''), requestUrl: requestUrl.endsWith('/') ? requestUrl : '$requestUrl/');
   }
 
   /// 解析 PROPFIND 响应体（正则实现，命名空间前缀任意）。
-  static List<WebDavEntry> parsePropfind(String xml, String selfUrl) {
-    final basePath = Uri.parse(selfUrl).path.replaceAll(RegExp(r'/+$'), '');
+  static List<WebDavEntry> parsePropfind(String xml, String selfUrl, {String? requestUrl}) {
+    final self = Uri.parse(selfUrl);
+    // pathSegments decodes exactly once on both sides. Decoding href alone
+    // duplicates encoded roots, while decodeFull leaves escaped '%' ambiguous.
+    final base = self.pathSegments.where((segment) => segment.isNotEmpty).toList();
     final out = <WebDavEntry>[];
     final respRe = RegExp(r'<(?:[A-Za-z0-9_.-]+:)?response\b[^>]*>([\s\S]*?)'
         r'</(?:[A-Za-z0-9_.-]+:)?response>');
@@ -224,25 +240,27 @@ class WebDavClient {
     for (final m in respRe.allMatches(xml)) {
       final chunk = m.group(1) ?? '';
       final hm = hrefRe.firstMatch(chunk);
-      if (hm == null) continue;
-      var href = (hm.group(1) ?? '').trim();
-      if (href.isEmpty) continue;
-      String path;
+      if (hm == null) throw WebDavException('WebDAV 目录项缺少路径，已停止同步');
+      final href = _unescapeXml((hm.group(1) ?? '').trim());
+      if (href.isEmpty) throw WebDavException('WebDAV 目录项路径为空，已停止同步');
+      List<String> segments;
       try {
-        path = Uri.decodeFull(Uri.parse(href).path);
+        final resolved = Uri.parse(requestUrl ?? selfUrl).resolve(href);
+        if (resolved.origin != self.origin) throw const FormatException('Different WebDAV origin');
+        segments = resolved.pathSegments.where((part) => part.isNotEmpty).toList();
+        if (segments.any((part) => part.contains('/') || part == '.' || part == '..')) {
+          throw const FormatException('Invalid WebDAV path segment');
+        }
       } catch (_) {
-        path = href;
+        throw WebDavException('WebDAV 返回了无法解析的目录路径，已停止同步');
       }
-      final norm = path.replaceAll(RegExp(r'/+$'), '');
-      if (norm == basePath) continue; // 目录自身
-      final name = norm.split('/').last;
-      final sub = (path.startsWith(basePath) && basePath.isNotEmpty)
-          ? norm.substring(basePath.length)
-          : norm;
-      final rel = sub
-          .split('/')
-          .where((s) => s.isNotEmpty)
-          .join('/');
+      if (segments.length < base.length ||
+          List.generate(base.length, (i) => segments[i] == base[i]).contains(false)) {
+        throw WebDavException('WebDAV 返回了同步根目录以外的路径，已停止同步');
+      }
+      if (segments.length == base.length) continue;
+      final name = segments.last;
+      final rel = segments.skip(base.length).join('/');
       final isDir = isDirRe.hasMatch(chunk);
       int size = 0;
       final lm2 = lenRe.firstMatch(chunk);
@@ -255,13 +273,16 @@ class WebDavClient {
         mtime = parseHttpDate(lmm.group(1) ?? '');
       }
       final etm = etRe.firstMatch(chunk);
-      final etag = etm == null ? '' : (etm.group(1) ?? '').trim();
-      out.add(WebDavEntry(
-          name: name, rel: rel, isDir: isDir, size: size, mtime: mtime,
-          etag: etag));
+      final etag = etm == null ? '' : _unescapeXml((etm.group(1) ?? '').trim());
+      out.add(WebDavEntry(name: name, rel: rel, isDir: isDir, size: size,
+        mtime: mtime, etag: etag));
     }
     return out;
   }
+
+  static String _unescapeXml(String value) => value.replaceAllMapped(
+    RegExp(r'&(amp|lt|gt|quot|apos);'),
+    (match) => const {'amp': '&', 'lt': '<', 'gt': '>', 'quot': '"', 'apos': "'"}[match[1]]!);
 
   static double parseHttpDate(String s) {
     final t = s.trim();
@@ -287,14 +308,34 @@ class WebDavClient {
 
   /// 逐级创建目录（已存在跳过）。
   Future<void> mkdirs(String rel) async {
+    var root = baseUrl;
+    for (final segment in remoteDir.split('/').where((part) => part.isNotEmpty)) {
+      root += '${Uri.encodeComponent(segment)}/';
+      await _request('MKCOL', '', targetUrl: root, body: const <int>[], allow: {301, 405});
+    }
     var cur = '';
     for (final seg in rel.split('/').where((s) => s.isNotEmpty)) {
       cur = cur.isEmpty ? seg : '$cur/$seg';
-      await mkdir(cur);
+      if (!await mkdir(cur)) throw WebDavException('无法创建远端目录：$cur', 409);
     }
   }
 
   // ---------- 文件 ----------
+
+  /// Fetch the complete resource and its validator in one response. Metadata
+  /// consumers must distinguish a true 404 from a failed or partial read.
+  Future<WebDavResponse> getWithMetadata(String rel) async {
+    final response = await _request('GET', rel, allow: {404}, followRedirects: false);
+    if (response.status != 200 && response.status != 404) {
+      throw WebDavException('HTTP ${response.status} GET：未返回完整远端记录', response.status);
+    }
+    return response;
+  }
+
+  /// If-Match uses strong comparison. Missing, weak, unquoted and injected
+  /// validators cannot protect a read/merge/write transaction.
+  static bool isStrongEtag(String value) =>
+    RegExp(r'^"[\x21\x23-\x7E\x80-\xFF]*"$').stringMatch(value) == value;
 
   Future<List<int>?> get(String rel) async {
     final resp = await _request('GET', rel, allow: {404});
@@ -304,16 +345,27 @@ class WebDavClient {
 
   /// 写文件；优先 .part + MOVE，避免中途失败留下半截 JSON。
   /// 书源文件传 `contentType: 'application/octet-stream'` 且 `atomic: false`（大文件不必走 MOVE）。
-  /// [etag] 非空时走单请求条件写（If-Match）：远端已被别人改过，服务器回 412/409，
-  /// 调用方据此重读再合并，绝不整条盖掉对端的新数据。
   Future<bool> put(String rel, List<int> data,
       {bool atomic = true,
       String? etag,
+      bool ifNoneMatch = false,
       String contentType = 'application/json; charset=utf-8'}) async {
-    if (etag != null && etag.trim().isNotEmpty) {
-      await _request('PUT', rel, body: data,
-          headers: {'Content-Type': contentType, 'If-Match': etag.trim()},
-          allow: {200, 201, 204});
+    if (etag != null && ifNoneMatch) {
+      throw WebDavException('If-Match与If-None-Match不能同时使用');
+    }
+    if (etag != null && !isStrongEtag(etag)) {
+      throw WebDavException('远端缺少有效的强ETag，不能安全覆盖记录');
+    }
+    if (etag != null || ifNoneMatch) {
+      // A target precondition cannot be transferred safely to a shared .part
+      // file and unconditional MOVE. Never fall back after a failed CAS.
+      final response = await _request('PUT', rel, body: data, followRedirects: false,
+        headers: {'Content-Type': contentType,
+          if (etag != null) 'If-Match': etag,
+          if (ifNoneMatch) 'If-None-Match': '*'}, allow: {200, 201, 204});
+      if (!const {200, 201, 204}.contains(response.status)) {
+        throw WebDavException('HTTP ${response.status} PUT：条件写入未完成', response.status);
+      }
       return true;
     }
     if (!atomic) {
@@ -341,7 +393,18 @@ class WebDavClient {
     }
   }
 
-  Future<bool> delete(String rel) async {
+  Future<bool> delete(String rel, {String? etag}) async {
+    if (etag != null) {
+      if (!isStrongEtag(etag)) {
+        throw WebDavException('远端缺少有效的强ETag，不能安全删除记录');
+      }
+      final response = await _request('DELETE', rel, followRedirects: false,
+        headers: {'If-Match': etag}, allow: {200, 204, 404});
+      if (!const {200, 204, 404}.contains(response.status)) {
+        throw WebDavException('HTTP ${response.status} DELETE：条件删除未完成', response.status);
+      }
+      return true;
+    }
     try {
       await _request('DELETE', rel, allow: {200, 204, 207, 404});
       return true;

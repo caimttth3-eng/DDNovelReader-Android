@@ -1,5 +1,6 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:isolate';
+import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
 import '../models/book.dart';
 import '../models/progress.dart';
@@ -7,6 +8,7 @@ import 'app_storage.dart';
 import 'reader_header_layout.dart';
 import 'book_parser.dart';
 import 'reading_text.dart';
+import 'reader_headings.dart';
 import 'speech_breaks.dart';
 
 class ReaderPreparationRequest {
@@ -25,7 +27,12 @@ class PreparedReadingBook {
   final List<BookTocEntry> toc;
   final List<int> tocAnchors;
   final List<bool> chapterTitles;
-  const PreparedReadingBook(this.book, this.fingerprint, this.sourceMaps, this.toc, this.tocAnchors, this.chapterTitles);
+  final ReaderHeadings? headings;
+  /// Complete distinct displayed grapheme clusters for later native font-face
+  /// probing. This is an inventory, not proof of final page/glyph geometry.
+  final String? fontProbeText;
+  const PreparedReadingBook(this.book, this.fingerprint, this.sourceMaps, this.toc, this.tocAnchors, this.chapterTitles,
+    {this.headings, this.fontProbeText});
   void attachSourceMaps() => ReadingText.attachSourceMaps(book, sourceMaps);
 }
 
@@ -59,6 +66,37 @@ class ReaderPreparation {
   static (ReaderPreparationRequest, PreparedReadingBook)? _cached;
   static final List<_PendingPreparation> _pending = [];
   static int _latestCall = 0;
+
+  // Keep joiners/selectors inside meaningful clusters (e.g. emoji ZWJ sequences)
+  // intact. Only a cluster made entirely of whitespace or invisible controls
+  // is omitted; combining characters are never decomposed or normalized.
+  static final _fontProbeSeparators = RegExp(
+    r'^[\s\u0000-\u001F\u007F-\u009F\u00AD\u034F\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFE00-\uFE0F\uFEFF\u{E0100}-\u{E01EF}]+$',
+    unicode: true,
+  );
+
+  /// Enumerates the whole already-formatted book without changing its text,
+  /// source coordinates, or heading classification. No truncation is applied.
+  ///
+  /// Call in an existing preparation/snapshot worker. Supplying its existing
+  /// heading index avoids a second heading-classification pass.
+  static String collectFontProbeText(Book formatted, {ReaderHeadings? headings, bool autoExtractToc = true}) {
+    final classified = headings ?? ReaderHeadings(formatted, autoExtractToc: autoExtractToc);
+    final clusters = <String>{};
+    void add(String text) {
+      // Classify each distinct cluster once, rather than run a separator regex
+      // for every repeated character of a long book.
+      clusters.addAll(text.characters);
+    }
+    for (var chapter = 0; chapter < formatted.chapters.length; chapter++) {
+      final value = formatted.chapters[chapter];
+      if (classified.showChapterLabel(chapter)) add(value.title);
+      for (final paragraph in value.paragraphs) { add(paragraph.display); }
+    }
+    // Newline-only clusters were removed above. Spaces keep adjacent clusters
+    // from accidentally forming a different contextual/combining probe token.
+    return clusters.where((cluster) => !_fontProbeSeparators.hasMatch(cluster)).join(' ');
+  }
 
   static void clearMemoryCache() {
     ++_latestCall;
@@ -139,6 +177,8 @@ class ReaderPreparation {
       titles.add(entry.paragraphIndex == 0 && entry.displayOffset == 0 && entry.title == source.chapters[c].title &&
         !originals.first.display.trimLeft().startsWith(entry.title));
     }
-    return PreparedReadingBook(book, 'words1-${ReadingText.fingerprint(book)}', maps, toc, anchors, titles);
+    final headings = ReaderHeadings(book, autoExtractToc: request.autoExtractToc);
+    return PreparedReadingBook(book, 'words2-${ReadingText.fingerprint(book)}', maps, toc, anchors, titles,
+      headings: headings, fontProbeText: collectFontProbeText(book, headings: headings));
   }
 }

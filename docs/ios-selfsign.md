@@ -1,5 +1,7 @@
 # iOS 自签安装（无 Mac / 免费 Apple ID）
 
+> 此文为上游流程参考，不是本工作区的执行入口。本工作区在线 workflow 已停用，当前没有本地 iOS 构建/签名验收；不要依下文启动 Actions。
+
 当前只支持 **自签安装**（Sideloadly / AltStore），不走 App Store。
 适用设备：iPhone 16 Pro Max，iOS 18.7.7（TrollStore 不支持 18.x，只能 7 天重签）。
 

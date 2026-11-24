@@ -1,21 +1,14 @@
 ﻿name: iOS unsigned IPA
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [master, 'feat/**']
-    paths:
-      - 'ios/**'
-      - 'lib/**'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - '.github/workflows/ios-ipa.yml'
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: ${{ false }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:

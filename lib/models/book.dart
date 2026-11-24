@@ -1,4 +1,6 @@
-﻿/// 支持的书籍格式
+import '../services/chapterizer.dart' show canonicalSourceOffsets;
+
+/// 支持的书籍格式
 enum BookFormat { txt, epub, pdf, docx }
 
 extension BookFormatX on BookFormat {
@@ -33,7 +35,6 @@ extension BookFormatX on BookFormat {
 class Sentence {
   final String display;
   final String tts;
-
   /// 只影响朗读节奏（句末追加静音），不改动音频内容
   final int pauseAfterMilliseconds;
 
@@ -85,12 +86,17 @@ class Paragraph {
 class Chapter {
   final String title;
   final List<Paragraph> paragraphs;
+  final List<int>? _providedCoordinates;
+  static final _coordinates = Expando<List<int>>();
+  List<int> get sourceCoordinates => _providedCoordinates ?? (_coordinates[this] ??=
+    canonicalSourceOffsets(paragraphs.map((p) => p.display).join('\n')));
 
   /// 全章 display 文本总长度（用于百分比）
   int get displayLength =>
       paragraphs.fold(0, (s, p) => s + p.display.length);
 
-  const Chapter({required this.title, required this.paragraphs});
+  const Chapter({required this.title, required this.paragraphs, List<int>? sourceCoordinates}) :
+    _providedCoordinates = sourceCoordinates;
 }
 
 /// 书籍
@@ -178,10 +184,17 @@ class Book {
     final c = chapterIdx.clamp(0, chapters.length - 1);
     final paras = chapters[c].paragraphs;
     if (paras.isEmpty) return (0, 0);
-    var remain = charOffset < 0 ? 0 : charOffset;
+    final coordinates = chapters[c].sourceCoordinates;
+    final target = charOffset.clamp(0, coordinates.last);
+    var low = 0, high = coordinates.length - 1;
+    while (low < high) {
+      final middle = (low + high) ~/ 2;
+      if (coordinates[middle] < target) { low = middle + 1; } else { high = middle; }
+    }
+    var remain = low;
     for (var i = 0; i < paras.length; i++) {
       final len = paras[i].display.length;
-      if (remain <= len) return (i, remain.clamp(0, len));
+      if (remain <= len) return (i, remain);
       remain -= len + 1; // +1 = 段间换行
       if (remain < 0) remain = 0;
     }
@@ -200,7 +213,11 @@ class Book {
     for (var i = 0; i < p; i++) {
       sum += paras[i].display.length + 1; // +1 = 段间换行
     }
-    return sum + offsetInParagraph.clamp(0, paras[p].display.length);
+    final text = paras[p].display;
+    var offset = offsetInParagraph.clamp(0, text.length);
+    if (offset > 0 && offset < text.length && text.codeUnitAt(offset) >= 0xdc00 && text.codeUnitAt(offset) <= 0xdfff &&
+        text.codeUnitAt(offset - 1) >= 0xd800 && text.codeUnitAt(offset - 1) <= 0xdbff) offset--;
+    return chapters[c].sourceCoordinates[sum + offset];
   }
 
   /// 计算全局百分比：0~1，依据累计字符数

@@ -1,78 +1,84 @@
 ﻿import 'dart:convert';
 import 'dart:io';
-
 import 'package:path_provider/path_provider.dart';
-
-import 'app_storage.dart';
 import 'tts_cache_store.dart';
 
-/// 导出语音缓存诊断：缓存根目录下每个 key 的文件数/大小/progress.json，
-/// 以及当前书架书籍的 contentKey。iOS 写 Documents（文件 App 可见），
-/// Android 写外部私有目录（adb 可拉取）。
-Future<String?> exportCacheDiagnostics(AppStorage storage) async {
-  try {
-    final books = await storage.loadBooks();
-    final settings = await storage.loadSettings();
-    final root = await TtsCacheStore.rootDir();
-    final keys = <Map<String, dynamic>>[];
-    await for (final e in root.list(followLinks: false)) {
-      if (e is! Directory) continue;
-      var bytes = 0;
-      var files = 0;
-      await for (final f in e.list(recursive: true, followLinks: false)) {
-        if (f is File && f.path.endsWith('.mp3')) {
-          files++;
-          bytes += await f.length();
-        }
-      }
-      final progress = <dynamic>[];
-      await for (final p in e.list(recursive: true, followLinks: false)) {
-        if (p is File && p.path.endsWith('progress.json')) {
-          try {
-            progress.add({
-              'path': p.path.substring(root.path.length),
-              'data': jsonDecode(await p.readAsString()),
-            });
-          } catch (_) {}
-        }
-      }
-      keys.add({
-        'key': e.path.split(Platform.pathSeparator).last,
-        'files': files,
-        'bytes': bytes,
-        'progress': progress,
-      });
-    }
+class CacheDiagnosticsCancelled implements Exception {
+  const CacheDiagnosticsCancelled();
+}
 
-    // iOS 的 getExternalStorageDirectory() 会直接抛异常，必须写 Documents。
-    Directory target = await getApplicationDocumentsDirectory();
-    if (!Platform.isIOS) {
+/// Explicit, cancellable traversal; no titles, book IDs, cache keys or paths.
+Future<Map<String, dynamic>> collectCacheDiagnostics(Directory root, {
+  bool Function()? isCancelled,
+  void Function(int)? onProgress,
+}) async {
+  void checkCancelled() {
+    if (isCancelled?.call() ?? false) throw const CacheDiagnosticsCancelled();
+  }
+  checkCancelled();
+  var visited = 0, audioFiles = 0, emptyAudioFiles = 0, bytes = 0;
+  var wordFiles = 0, malformedProgress = 0;
+  final progress = <Map<String, dynamic>>[];
+  if (await root.exists()) {
+    await for (final entry in root.list(recursive: true, followLinks: false)) {
+      checkCancelled();
+      if (entry is! File) continue;
+      visited++;
+      if (visited % 128 == 0) onProgress?.call(visited);
       try {
-        target = await getExternalStorageDirectory() ?? target;
-      } catch (_) {}
+        if (entry.path.endsWith('.mp3')) {
+          final length = await entry.length();
+          if (length == 0) { emptyAudioFiles++; } else { audioFiles++; bytes += length; }
+        } else if (entry.path.endsWith('.mp3.words.json')) {
+          wordFiles++;
+        } else if (entry.uri.pathSegments.last == 'progress.json') {
+          try {
+            final data = jsonDecode(await entry.readAsString()) as Map<String, dynamic>;
+            final state = data['state'];
+            const states = {'idle', 'building', 'caching', 'paused', 'done', 'cancelled'};
+            progress.add({
+              'total': (data['total'] as num?)?.toInt() ?? 0,
+              'done': (data['done'] as num?)?.toInt() ?? 0,
+              'state': states.contains(state) ? state : 'unknown',
+            });
+          } on FormatException { malformedProgress++; }
+          on TypeError { malformedProgress++; }
+        }
+      } on FileSystemException catch (error) {
+        if (error.osError?.errorCode != 2 && error.osError?.errorCode != 3) rethrow;
+      }
     }
-    final out = File('${target.path}${Platform.pathSeparator}cache_report.json');
-    final report = {
-      'exportedAt': DateTime.now().toIso8601String(),
-      'root': root.path,
-      'settings': {
-        'voice': settings['voice'],
-        'speechRate': settings['speechRate'],
-      },
-      'books': [
-        for (final b in books)
-          {
-            'id': b.id,
-            'title': b.title,
-            'contentKey': b.contentKey,
-            'chapters': b.chapterCount,
-          }
-      ],
-      'cacheKeys': keys,
-    };
-    await out.writeAsString(const JsonEncoder.withIndent('  ').convert(report), flush: true);
+  }
+  checkCancelled();
+  onProgress?.call(visited);
+  checkCancelled();
+  return {
+    'schema': 1, 'exportedAt': DateTime.now().toUtc().toIso8601String(),
+    'filesScanned': visited, 'audioFiles': audioFiles,
+    'emptyAudioFiles': emptyAudioFiles, 'audioBytes': bytes,
+    'wordFiles': wordFiles, 'malformedProgress': malformedProgress,
+    'progress': progress,
+  };
+}
+
+/// Manual action only; no startup export or network I/O.
+Future<String> exportCacheDiagnostics({
+  bool Function()? isCancelled,
+  void Function(int)? onProgress,
+}) async {
+  final report = await collectCacheDiagnostics(await TtsCacheStore.rootDir(),
+    isCancelled: isCancelled, onProgress: onProgress);
+  Directory target = await getApplicationDocumentsDirectory();
+  if (Platform.isAndroid) target = await getExternalStorageDirectory() ?? target;
+  final out = File('${target.path}${Platform.pathSeparator}cache_report.json');
+  final staging = File('${out.path}.${DateTime.now().microsecondsSinceEpoch}.tmp');
+  try {
+    if (isCancelled?.call() ?? false) throw const CacheDiagnosticsCancelled();
+    await staging.writeAsString(const JsonEncoder.withIndent('  ').convert(report), flush: true);
+    if (isCancelled?.call() ?? false) throw const CacheDiagnosticsCancelled();
+    await staging.rename(out.path);
     return out.path;
-  } catch (_) {
-    return null;
+  } finally {
+    if (await staging.exists()) await staging.delete();
   }
 }

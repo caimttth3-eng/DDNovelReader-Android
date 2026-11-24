@@ -1,4 +1,4 @@
-﻿package com.ddnovelreader
+package com.ddnovelreader
 
 import android.Manifest
 import android.app.Activity

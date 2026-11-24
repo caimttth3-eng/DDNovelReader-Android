@@ -51,6 +51,13 @@ app.*.map.json
 android/key.properties
 android/app/*.jks
 android/app/*.keystore
+*.p12
+*.pfx
+*.jks
+*.keystore
+**/signing-secret.json
+/signing/
+scripts/__pycache__/
 
 
 # Release APK (hosted on GitHub Releases, not in git)

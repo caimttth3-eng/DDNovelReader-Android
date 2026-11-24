@@ -1,9 +1,7 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
-import 'dart:async';
-import 'dart:io';
-
 import 'package:audio_service/audio_service.dart';
-import 'package:audio_session/audio_session.dart';
+import 'package:audio_session/audio_session.dart' show AudioSession, AudioSessionConfiguration;
+import 'package:audioplayers/audioplayers.dart' show AudioPlayer, AudioContext,
+    AudioContextAndroid, AndroidContentType, AndroidAudioFocus;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -18,12 +16,9 @@ import 'services/book_snapshot_cache.dart';
 import 'services/reader_preparation.dart';
 import 'services/reader_screen_awake.dart';
 import 'services/tts_audio_handler.dart';
-import 'services/diag_log.dart';
-import 'services/cache_diagnostics.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await diagLog('app start platform=${Platform.operatingSystem}');
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   final storage = AppStorage();
   final storedSettings = await storage.loadSettings();
@@ -31,30 +26,15 @@ Future<void> main() async {
     ReadingSettings.fromJson(storedSettings),
     WidgetsBinding.instance.platformDispatcher.platformBrightness,
   );
-  // v1.3.0 起默认翻页方式 = 上下滚动：老安装一次性迁移（之后用户仍可自己改）
-  if (storedSettings['scrollDefaultV1'] != true) {
-    startupSettings.pageTurnMode = 'scroll';
-    storedSettings['scrollDefaultV1'] = true;
-  }
   // Persist before the bookshelf can reopen its last book: ReaderScreen reads
   // this same setting and must not restore last session's opposite appearance.
   await storage.saveSettings({...storedSettings, ...startupSettings.toJson()});
   AppAppearance.nightMode.value = startupSettings.themeIndex == AppAppearance.nightThemeIndex;
-  // 启动时导出缓存诊断（外部私有目录，adb 可拉取）
-  unawaited(exportCacheDiagnostics(storage));
   // 注册用户自选字体（FontLoader 仅进程内有效，每次启动需重新注册）
   await FontManager.registerAll();
   AppI18n.current = AppLang.detect(
     WidgetsBinding.instance.platformDispatcher.locales,
   );
-  // iOS 必须显式配置 AVAudioSession，否则 audioplayers 播放会抛 PlatformException
-  try {
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
-    await diagLog('audio session configured');
-  } catch (e) {
-    await diagLog('audio session failed: $e');
-  }
   try {
     globalAudioHandler = await AudioService.init(
       builder: () => TtsAudioHandler(),
@@ -69,9 +49,15 @@ Future<void> main() async {
         androidStopForegroundOnPause: false,
       ),
     );
-    await diagLog('AudioService init ok');
   } catch (e) {
-    await diagLog('AudioService init failed: $e');
+    print('AudioService init failed: $e');
+  }
+  try {
+    await AudioPlayer.global.setAudioContext(AudioContext(android: const AudioContextAndroid(
+      contentType: AndroidContentType.speech, audioFocus: AndroidAudioFocus.none)));
+    await (await AudioSession.instance).configure(const AudioSessionConfiguration.speech());
+  } catch (error) {
+    debugPrint('Audio session configuration failed: $error');
   }
   runApp(const DuoduoLangduApp());
 }

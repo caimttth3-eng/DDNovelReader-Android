@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-15",
+  "projectId": "ddnovelreader",
+  "sourceBefore": "DDNovelReader/fork",
+  "sourceAfter": "DDNovelReader",
+  "gitHeadPreserved": "fb84403b3cb507dfb8d5ed6e97eb4a17cc47066d",
+  "holdingRoot": "_cache/projects/ddnovelreader/main/temp/layout-review",
+  "pendingDeletion": false,
+  "deletedFiles": 120,
+  "deletedBytes": 116295907,
+  "files": 120,
+  "bytes": 116295907.0,
+  "groups": [
+    {
+      "path": ".github",
+      "files": 1,
+      "bytes": 1274.0
+    },
+    {
+      "path": "android",
+      "files": 2,
+      "bytes": 5327.0
+    },
+    {
+      "path": "lib",
+      "files": 3,
+      "bytes": 150321.0
+    },
+    {
+      "path": "test",
+      "files": 1,
+      "bytes": 1467.0
+    },
+    {
+      "path": "artifacts",
+      "files": 26,
+      "bytes": 95196702.0
+    },
+    {
+      "path": "ui-previews",
+      "files": 4,
+      "bytes": 463223.0
+    },
+    {
+      "path": "ui-previews-final",
+      "files": 5,
+      "bytes": 781276.0
+    },
+    {
+      "path": "ui-previews-verified",
+      "files": 5,
+      "bytes": 738421.0
+    },
+    {
+      "path": "v1.2.5-final-previews",
+      "files": 11,
+      "bytes": 1582371.0
+    },
+    {
+      "path": "v1.2.5-previews",
+      "files": 10,
+      "bytes": 1462057.0
+    },
+    {
+      "path": "v1.2.6-check",
+      "files": 5,
+      "bytes": 970038.0
+    },
+    {
+      "path": "v1.2.6-final-previews",
+      "files": 15,
+      "bytes": 2396970.0
+    },
+    {
+      "path": "v1.2.6-previews",
+      "files": 15,
+      "bytes": 2395722.0
+    },
+    {
+      "path": "ui-previews-final.zip",
+      "files": 1,
+      "bytes": 734497.0
+    },
+    {
+      "path": "ui-previews-verified.zip",
+      "files": 1,
+      "bytes": 692500.0
+    },
+    {
+      "path": "ui-previews.zip",
+      "files": 1,
+      "bytes": 431341.0
+    },
+    {
+      "path": "v1.2.5-final-previews.zip",
+      "files": 1,
+      "bytes": 1457658.0
+    },
+    {
+      "path": "v1.2.5-previews.zip",
+      "files": 1,
+      "bytes": 1351485.0
+    },
+    {
+      "path": "v1.2.6-check.zip",
+      "files": 1,
+      "bytes": 921286.0
+    },
+    {
+      "path": "v1.2.6-final-previews.zip",
+      "files": 1,
+      "bytes": 2237140.0
+    },
+    {
+      "path": "v1.2.6-previews.zip",
+      "files": 1,
+      "bytes": 2236073.0
+    },
+    {
+      "path": "publish-reader.py",
+      "files": 1,
+      "bytes": 305.0
+    },
+    {
+      "path": "reader_followup.py",
+      "files": 1,
+      "bytes": 15056.0
+    },
+    {
+      "path": "reader_iteration3.py",
+      "files": 1,
+      "bytes": 12959.0
+    },
+    {
+      "path": "update_followup_reader.py",
+      "files": 1,
+      "bytes": 12056.0
+    },
+    {
+      "path": "update_followup_tts.py",
+      "files": 1,
+      "bytes": 6468.0
+    },
+    {
+      "path": "update_reader.py",
+      "files": 1,
+      "bytes": 24086.0
+    },
+    {
+      "path": "update_tests.py",
+      "files": 1,
+      "bytes": 7806.0
+    },
+    {
+      "path": "update_ui.py",
+      "files": 1,
+      "bytes": 4951.0
+    },
+    {
+      "path": "update_words.py",
+      "files": 1,
+      "bytes": 5071.0
+    }
+  ],
+  "preservedUnmatchedSource": [
+    "docs/history/initial-workspace/README.md",
+    "docs/history/initial-workspace/pubspec.yaml"
+  ],
+  "categorizedMoves": [
+    {
+      "from": "DDNovelReader/signing",
+      "to": "_data/ddnovelreader/signing",
+      "files": 2,
+      "bytes": 8319,
+      "aclPreserved": true,
+      "contentRead": false
+    },
+    {
+      "from": "DDNovelReader/artifacts/DDNovelReader-v1.2.26-arm64-v8a.apk",
+      "to": "_releases/ddnovelreader/v1.2.26/DDNovelReader-v1.2.26-arm64-v8a.apk",
+      "files": 1,
+      "bytes": 19350477,
+      "sha256Verified": true
+    },
+    {
+      "from": "DDNovelReader/artifacts/DDNovelReader-v1.2.26-arm64-v8a.apk.sha256",
+      "to": "_releases/ddnovelreader/v1.2.26/DDNovelReader-v1.2.26-arm64-v8a.apk.sha256",
+      "files": 1,
+      "bytes": 103,
+      "sha256Verified": true
+    },
+    {
+      "from": "DDNovelReader/artifacts/DDNovelReader-v1.2.26-build-info.json",
+      "to": "_releases/ddnovelreader/v1.2.26/DDNovelReader-v1.2.26-build-info.json",
+      "files": 1,
+      "bytes": 544,
+      "sha256Verified": true
+    },
+    {
+      "from": "DDNovelReader/artifacts/v1.2.26-signature-verification.txt",
+      "to": "_releases/ddnovelreader/v1.2.26/v1.2.26-signature-verification.txt",
+      "files": 1,
+      "bytes": 2386,
+      "sha256Verified": true
+    },
+    {
+      "from": "DDNovelReader/artifacts/v1.2.26-analysis",
+      "to": "_cache/projects/ddnovelreader/main/build/v1.2.26",
+      "files": 2,
+      "bytes": 3827727
+    }
+  ],
+  "reparsePointsFound": 0,
+  "rebuildPerformed": false,
+  "deletedManifestFiles": 1,
+  "deletedManifestBytes": 29650,
+  "deletedTotalFiles": 121,
+  "deletedTotalBytes": 116325557,
+  "review": {
+    "initialBatchDeletionRejected": true,
+    "safeHoldingMoveCompleted": true,
+    "explicitUserApproval": "允许删除全部列明旧物",
+    "finalDeletionCompleted": true
+  }
+}
