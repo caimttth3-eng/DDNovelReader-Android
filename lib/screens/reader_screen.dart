@@ -1,4 +1,4 @@
-﻿// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
+// 来源：NayGnehz/DDNovelReader-Android 的 PR #2（commit 27b6a1e，部分代码，已修改适配本项目的缓存/同步架构）。
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math';
@@ -155,7 +155,6 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   bool _viewportPrepared = false;
   (Size, double)? _preparedViewportKey;
   bool _leavingReader = false;
-  List<SystemVoice> _systemVoices = const [];
   Map<String, String> _systemVoiceNames = const {};
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   VoidCallback? _closeCacheScan;
@@ -271,6 +270,10 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   MediaSpeechText? _mediaSpeechText;
   // TTS 合成加载中（点击播放/恢复后等待首句出声；期间防误触）
   bool _ttsLoading = false;
+  // 语音失败后的「重试」进行中：此时不锁面板，可随时点重试按钮打断
+  bool _ttsRetrying = false;
+  // 最近一次使用的在线音色（从在线切到本地后，点左半可切回）
+  String? _lastOnlineVoice;
 
   /// 阅读页「一键同步」进行中
   bool _syncing = false;
@@ -1898,25 +1901,25 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   /// 从暂停恢复播放，隐藏底部面板
   /// - 暂停中滑动跨章：重新加载目标章，从当前句开始播放
   /// - 同章恢复：TtsReader 恢复暂停处；彻底失败时 onError 已触发退出
-  Future<void> _resumeReading() async {
+  Future<void> _resumeReading({bool keepPanel = false, bool keepError = false}) async {
     print('SCREEN resumeReading state=${_tts.state} loading=$_ttsLoading');
     _debugLog('SCREEN resumeReading state=${_tts.state}');
-    if (_ttsLoading) return; // 加载中忽略恢复，防误触
-    if (_ttsError != null) setState(() { _ttsError = null; _ttsErrorSeen = null; });
+    if (_ttsLoading && !_ttsRetrying) return; // 加载中忽略恢复，防误触；错误重试期间放行
+    if (!keepError && _ttsError != null) setState(() { _ttsError = null; _ttsErrorSeen = null; });
     final generation = _playbackGeneration;
     if (_tts.state != TtsState.paused) {
       // 状态丢失（stopped/idle，如章节播完/曾失败）：从当前阅读位置重新加载
       if (_tts.state == TtsState.stopped || _tts.state == TtsState.idle) {
         _startTtsLoading();
         await _startTtsFrom(
-            _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0);
+            _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0, keepPanel: keepPanel);
         if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
         _stopTtsLoading();
         globalAudioHandler?.notifyPlaying();
         if (!mounted) return;
         setState(() {
           _isPlaying = true;
-          _showReadingPanel = false;
+          if (!keepPanel) _showReadingPanel = false;
         });
       }
       return;
@@ -1924,12 +1927,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     _startTtsLoading();
     // Protect the speech cursor before resume can synchronously emit sentence,
     // word or scroll callbacks, including resume through the in-app lock.
-    setState(() { _isPlaying = true; _showReadingPanel = false; });
+    setState(() { _isPlaying = true; if (!keepPanel) _showReadingPanel = false; });
     if (_ttsChapter != _chapter) {
       // 暂停期间滑到了其他章节：TtsReader 内部仍是旧章句子，需重新加载
       final cursor = _speechPauseResumeCursor;
       await _startTtsFrom(
-          _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0,
+          _chapter, _para, _ttsSentence >= 0 ? _ttsSentence : 0, keepPanel: keepPanel,
           displayOffset: cursor != null && cursor.$1 == _chapter && cursor.$2 == _para && cursor.$3 == _ttsSentence ? cursor.$4 : null);
       if (!mounted || generation != _playbackGeneration || !_inReadingMode) return;
       _stopTtsLoading();
@@ -1937,7 +1940,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       if (!mounted) return;
       setState(() {
         _isPlaying = true;
-        _showReadingPanel = false;
+        if (!keepPanel) _showReadingPanel = false;
       });
       return;
     }
@@ -1953,7 +1956,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     globalAudioHandler?.notifyPlaying();
     setState(() {
       _isPlaying = true;
-      _showReadingPanel = false;
+      if (!keepPanel) _showReadingPanel = false;
     });
   }
 
@@ -2278,7 +2281,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
   }
 
-  Future<void> _startTtsFrom(int c, int p, int s, {int? displayOffset}) async {
+  Future<void> _startTtsFrom(int c, int p, int s, {int? displayOffset, bool keepPanel = false}) async {
     _speechPauseResumeCursor = null;
     if (c >= _book.chapters.length) {
       _exitFullscreen();
@@ -2297,7 +2300,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           _chapter = c + 1;
           _para = 0;
         });
-        await _startTtsFrom(c + 1, 0, 0);
+        await _startTtsFrom(c + 1, 0, 0, keepPanel: keepPanel);
       } else {
         setState(() => _isPlaying = false);
       }
@@ -2318,7 +2321,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       // before follow/tts callbacks can produce a scroll notification.
       if (_inReadingMode) {
         _isPlaying = true;
-        _showReadingPanel = false;
+        if (!keepPanel) _showReadingPanel = false;
       }
     });
     _updateMediaChapter(c);
@@ -2635,18 +2638,49 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
   }
 
-  /// 重试：清掉错误行，从失败那句重新加载（start() 会清掉上次的连接失败标记）
+  /// 重试：从失败那句重新加载。重试期间面板保持可操作，按钮变成「点此打断」。
   Future<void> _retryTts() async {
-    if (!_inReadingMode) return;
-    setState(() { _ttsError = null; _ttsErrorSeen = null; });
-    await _resumeReading();
+    if (!_inReadingMode || _ttsRetrying) return;
+    if (_ttsLoading) _stopTtsLoading();
+    setState(() { _ttsRetrying = true; _ttsErrorSeen = null; });
+    final generation = _playbackGeneration;
+    await _tts.stop();
+    if (!mounted) return;
+    if (generation != _playbackGeneration || !_inReadingMode) {
+      setState(() => _ttsRetrying = false);
+      return;
+    }
+    await _resumeReading(keepPanel: true, keepError: true);
+    if (!mounted) return;
+    final succeeded = _isPlaying && _tts.state == TtsState.playing;
+    setState(() {
+      _ttsRetrying = false;
+      if (succeeded) { _ttsError = null; _ttsErrorSeen = null; }
+      if (_ttsError == null && _isPlaying) _showReadingPanel = false;
+    });
+    _scheduleSave();
+  }
+
+  /// 打断正在进行的重试：停掉加载，回到异常暂停态等用户决定
+  Future<void> _cancelTtsRetry() async {
+    if (!_ttsRetrying) return;
+    _playbackGeneration++;
+    setState(() {
+      _ttsLoading = false;
+      _ttsRetrying = false;
+      _isPlaying = false;
+      _showReadingPanel = true;
+    });
+    await _tts.stop();
+    if (mounted && _inReadingMode) setState(() => _showReadingPanel = true);
+    _scheduleSave();
   }
 
   /// 换用本地语音：走现有音源面板，选中后自动从当前句恢复朗读
   Future<void> _useLocalTtsVoice() async {
     if (!_inReadingMode) return;
     setState(() { _ttsError = null; _ttsErrorSeen = null; });
-    await _openVoiceSelector();
+    await _openVoiceSelector(localOnly: true);
   }
 
   Widget _buildTtsErrorBanner() {
@@ -2677,9 +2711,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               style: const TextStyle(color: Color(0xFFE8C9A4), fontSize: 12, height: 1.45))),
           ]),
           Row(children: [
-            if (retryable) _ttsErrorAction(T('ttsRetry'), const ValueKey('tts-error-retry'),
-                () { unawaited(_retryTts()); }),
-            if (canLocal) _ttsErrorAction(T('ttsUseLocalVoice'), const ValueKey('tts-error-local'),
+            if (retryable) _ttsErrorAction(
+                _ttsRetrying ? T('ttsRetryCancel') : T('ttsRetry'),
+                const ValueKey('tts-error-retry'),
+                () { unawaited(_ttsRetrying ? _cancelTtsRetry() : _retryTts()); }),
+            if (canLocal && !_ttsRetrying) _ttsErrorAction(T('ttsUseLocalVoice'), const ValueKey('tts-error-local'),
                 () { unawaited(_useLocalTtsVoice()); }),
             _ttsErrorAction(T('exit'), const ValueKey('tts-error-exit'),
                 () { unawaited(_exitReadingMode()); }),
@@ -3049,7 +3085,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           // 手势操作提示条（开始播放时短暂提示，2.5s 后淡出）
           if (_inReadingMode) _buildGestureTip(),
           // TTS 加载中浮层（朗读模式点击恢复播放时显示）
-          if (_inReadingMode && _ttsLoading) _buildTtsLoadingOverlay(),
+          if (_inReadingMode && _ttsLoading && !_ttsRetrying) _buildTtsLoadingOverlay(),
             // 亮度遮罩
             if (_autoActive) _buildAutoGuide(),
             if (_autoActive && _showAutoPanel) _buildAutoPanel(),
@@ -3287,34 +3323,35 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               if (_tts.usingSystemFallback) Padding(key: const ValueKey('tts-offline-fallback'),
                 padding: const EdgeInsets.only(bottom: 4), child: Text(T('offlineSystemVoice'),
                   style: const TextStyle(color: Color(0xFF9BC5DD), fontSize: 12))),
-              // 功能按钮行
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _panelButton(
-                    icon: Icons.alarm,
-                    label: _sleepMinutes > 0
-                        ? T('minutes', {'m': '$_sleepMinutes'})
-                        : T('timer'),
-                    key: const ValueKey('reading-sleep'), onTap: _openSleepTimer,
-                    active: _sleepMinutes > 0,
-                  ),
-                  _panelButton(
-                    key: const ValueKey('reading-voice'),
-                    icon: Icons.record_voice_over,
-                    label: T('voiceWithName', {'name': _shortVoiceLabel(_effectiveVoice)}), singleLine: true,
-                    onTap: _openVoiceSelector,
-                  ),
-                  _panelButton(
-                    key: const ValueKey('playback-settings'), icon: Icons.settings_outlined,
-                    label: T('playbackSettings'), onTap: _openPlaybackSettings),
-                  _panelButton(
-                    icon: Icons.power_settings_new,
-                    label: T('exit'),
-                    onTap: _exitReadingMode,
-                  ),
-                ].map((button) => Expanded(child: button)).toList(),
+              // 功能按钮行：定时 / 音源（在线·本地合并胶囊）/ 播放设置 / 退出
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(child: _panelButton(
+                      icon: Icons.alarm,
+                      label: _sleepMinutes > 0
+                          ? T('minutes', {'m': '$_sleepMinutes'})
+                          : T('timer'),
+                      key: const ValueKey('reading-sleep'), onTap: _openSleepTimer,
+                      active: _sleepMinutes > 0,
+                    )),
+                    Expanded(flex: 5, child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _buildVoiceSourceCapsule(),
+                    )),
+                    Expanded(child: _panelButton(
+                      key: const ValueKey('playback-settings'), icon: Icons.settings_outlined,
+                      label: T('playbackSettings'), onTap: _openPlaybackSettings,
+                    )),
+                    Expanded(child: _panelButton(
+                      icon: Icons.power_settings_new,
+                      label: T('exit'),
+                      onTap: _exitReadingMode,
+                    )),
+                  ],
+                ),
               ),
             ],
           )),
@@ -3352,6 +3389,78 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         ],
       ),
     );
+  }
+
+  /// 当前是否在用本地（系统）音源
+  bool get _localVoiceActive => SystemTtsClient.isSystemVoiceId(_effectiveVoice);
+
+  /// 在线·本地合并胶囊：点哪半就把音源切到哪半并打开对应子菜单
+  Widget _buildVoiceSourceCapsule() {
+    final local = _localVoiceActive;
+    final onlineShort = _shortVoiceLabel(local ? (_lastOnlineVoice ?? TtsReader.defaultVoice) : _effectiveVoice);
+    final localShort = local ? _shortVoiceLabel(_effectiveVoice) : T('shortSystemVoice');
+    return Container(
+      key: const ValueKey('reading-voice-source'),
+      height: 56,
+      decoration: BoxDecoration(
+        color: const Color(0x0FFFFFFF),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0x1AFFFFFF)),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: Row(children: [
+          Expanded(child: _voiceSourceHalf(
+            key: const ValueKey('voice-source-online'),
+            title: T('voiceSourceOnline'), subtitle: onlineShort,
+            active: !local, onTap: () { unawaited(_selectVoiceSource(false)); },
+          )),
+          Container(width: 1, color: const Color(0x1AFFFFFF)),
+          Expanded(child: _voiceSourceHalf(
+            key: const ValueKey('voice-source-local'),
+            title: T('voiceSourceLocal'), subtitle: localShort,
+            active: local, onTap: () { unawaited(_selectVoiceSource(true)); },
+          )),
+        ]),
+      ),
+    );
+  }
+
+  Widget _voiceSourceHalf({
+    Key? key,
+    required String title,
+    required String subtitle,
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      key: key,
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: active ? const Color(0x339BC5DD) : Colors.transparent,
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: active ? const Color(0x999BC5DD) : Colors.transparent),
+        ),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12,
+              fontWeight: active ? FontWeight.w700 : FontWeight.w400,
+              color: active ? const Color(0xFFCBE6F5) : const Color(0xFF8D8477))),
+          const SizedBox(height: 1),
+          Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 10,
+              color: active ? const Color(0xFFA9C9DC) : const Color(0xFF7A7267))),
+        ]),
+      ),
+    );
+  }
+
+  /// 点胶囊的哪一半，就打开该来源的音色列表（选中即把音源切到该来源）
+  Future<void> _selectVoiceSource(bool local) async {
+    if (!_inReadingMode || _applyingSpeechPauses) return;
+    await _openVoiceSelector(localOnly: local);
   }
 
   /// 读取当前系统媒体音量（0.0~1.0）
@@ -3734,11 +3843,16 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
 
   /// 音源选择：在线 Edge 音色优先，其后是本地离线系统音色。
   /// 同类语言放一起：简体中文 / 繁体中文 / 英语 / 日语 / 韩语。
-  Future<void> _openVoiceSelector() async {
+  Future<void> _openVoiceSelector({bool? localOnly}) async {
     if (_applyingSpeechPauses) return;
+    final showOnline = localOnly != true;
+    final showLocal = localOnly != false;
     final systemVoices = await _tts.systemVoices();
     if (!mounted) return;
-    _systemVoices = systemVoices;
+    setState(() {
+      _systemVoiceChecked = true;
+      if (systemVoices.isNotEmpty) _systemVoiceAvailable = true;
+    });
     _systemVoiceNames = {for (final v in systemVoices) v.id: v.name};
     var enhancedOnly = true;
     final selected = await showModalBottomSheet<String>(context: context,
@@ -3753,24 +3867,27 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         ));
 
         // 在线语音（Edge TTS）在前：同语言分组。
-        addHeader(T('voiceSectionOnline'));
-        for (final family in _voiceFamilyOrder) {
-          final group = voices.where((v) => _voiceFamily(v.langCode) == family).toList();
-          if (group.isEmpty) continue;
-          addHeader(_familyLabel(family));
-          for (final v in group) {
-            items.add(ListTile(dense: true,
-              leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
-                color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
-              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
-                  icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
-              ]), onTap: () => Navigator.pop(ctx, v.id)));
+        if (showOnline) {
+          addHeader(T('voiceSectionOnline'));
+          for (final family in _voiceFamilyOrder) {
+            final group = voices.where((v) => _voiceFamily(v.langCode) == family).toList();
+            if (group.isEmpty) continue;
+            addHeader(_familyLabel(family));
+            for (final v in group) {
+              items.add(ListTile(dense: true,
+                leading: Icon(v.id == active ? Icons.radio_button_checked : Icons.radio_button_off,
+                  color: const Color(0xFF6498B5)), title: Text(_voiceLabel(v.id)),
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  IconButton(key: ValueKey('cache-voice-${v.id}'), tooltip: T('cacheBook'),
+                    icon: const Icon(Icons.download_outlined), onPressed: () => _openBookCache(cacheVoice: v.id)),
+                ]), onTap: () => Navigator.pop(ctx, v.id)));
+            }
           }
         }
 
         // 本地语音（离线）在后：只保留简繁中文 / 英语 / 日语 / 韩语。
-        items.add(const Divider());
+        if (showLocal && showOnline) items.add(const Divider());
+        if (showLocal) {
         addHeader(T('voiceSectionLocal'));
         items.add(ListTile(
           leading: Icon(active == TtsReader.systemVoice ? Icons.radio_button_checked : Icons.radio_button_off),
@@ -3803,6 +3920,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
               onTap: () => Navigator.pop(ctx, id)));
           }
         }
+        }
         return SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
           Padding(padding: const EdgeInsets.all(16), child: Text(T('voiceTitle'),
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
@@ -3810,10 +3928,12 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
         ]));
       }));
     if (selected == null || !mounted) return;
+    if (!SystemTtsClient.isSystemVoiceId(selected)) _lastOnlineVoice = selected;
     final desired = ReadingSettings.fromJson(_settings.toJson())..voice = selected..systemFallbackActive = false;
     desired.speechRate = ReadingSettings.normalizeSpeechRate(
         desired.speechRate, maxSpeechRateFor(selected));
-    await _applySpeechConfiguration(desired, updateVoice: true, resumeAfter: _inReadingMode);
+    final applied = await _applySpeechConfiguration(desired, updateVoice: true, resumeAfter: _inReadingMode);
+    if (applied && mounted && _ttsError != null) setState(() { _ttsError = null; _ttsErrorSeen = null; });
   }
 
   /// 全书语音缓存管理：任务控制（开始/暂停/继续/取消）+ 缓存占用 + 清除
