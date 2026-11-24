@@ -55,3 +55,6 @@ android/app/*.keystore
 
 # Release APK (hosted on GitHub Releases, not in git)
 releases/android/*.apk
+
+# 发布说明草稿（本地留档，不入库）
+/_release_body_*.md
