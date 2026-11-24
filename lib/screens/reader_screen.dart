@@ -232,6 +232,11 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
   // 朗读模式（全屏播放/暂停，顶栏隐藏，暂停时底部弹控制面板）
   bool _inReadingMode = false;
   bool _showReadingPanel = false;
+  // 语音异常暂停态：非空时控制面板顶部显示错误行（原因 + 重试 / 换本地语音 / 退出）
+  Object? _ttsError;
+  Object? _ttsErrorSeen; // 同一次失败只呈现一次，避免预取连续失败反复弹
+  bool _systemVoiceChecked = false;
+  bool _systemVoiceAvailable = false;
 
   // 定时播放
   Timer? _sleepTimer;
@@ -1836,6 +1841,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _showControls = false;
       _isPlaying = true;
       _showReadingPanel = false;
+      _ttsError = null;
+      _ttsErrorSeen = null;
       _ttsChapter = startC;
       _chapter = startC;
       _para = startP;
@@ -1895,6 +1902,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     print('SCREEN resumeReading state=${_tts.state} loading=$_ttsLoading');
     _debugLog('SCREEN resumeReading state=${_tts.state}');
     if (_ttsLoading) return; // 加载中忽略恢复，防误触
+    if (_ttsError != null) setState(() { _ttsError = null; _ttsErrorSeen = null; });
     final generation = _playbackGeneration;
     if (_tts.state != TtsState.paused) {
       // 状态丢失（stopped/idle，如章节播完/曾失败）：从当前阅读位置重新加载
@@ -1967,6 +1975,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _showControls = true;
       _isPlaying = false;
       _showReadingPanel = false;
+      _ttsError = null;
+      _ttsErrorSeen = null;
     });
     globalAudioHandler?.notifyStopped();
     _exitFullscreen();
@@ -1978,6 +1988,8 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
       _isPlaying = false;
       _showReadingPanel = false;
       _ttsSentence = -1;
+      _ttsError = null;
+      _ttsErrorSeen = null;
     });
     _applySystemUi();
     _scheduleSave();
@@ -2572,20 +2584,128 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
     }
   }
 
+  /// 语音失败：不退出朗读，把控制条切到「异常暂停态」，让用户就地换音源或重试
   void _onTtsError() {
     final failure = _tts.lastFailure;
     unawaited(diagLog('tts error: ${failure.runtimeType}: $failure'));
     if (!mounted || !_inReadingMode) return;
-    final message = failure is PlatformException ? T(_tts.usesSystemVoice ? 'systemTtsUnavailable' : 'voicePlaybackFailed')
-      : failure is TimeoutException || failure is EdgeTtsException && failure.kind == 'timeout'
-        ? T(_tts.usesSystemVoice ? 'systemTtsTimeout' : 'onlineTtsTimeout')
-      : failure is EdgeTtsException ? (failure.status != null ? T('onlineTtsRejected', {'err': '${failure.status}'}) : T('onlineTtsUnavailable'))
-      : T('voicePlaybackFailed');
-    _exitReadingMode();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$message（$failure）')),
+    // 预取 worker 连续失败会重复回调，同一次失败只呈现一次
+    if (_ttsErrorSeen != null && identical(_ttsErrorSeen, failure)) return;
+    _ttsErrorSeen = failure;
+    if (!_systemVoiceChecked) unawaited(_probeSystemVoices());
+    globalAudioHandler?.notifyStopped();
+    setState(() {
+      _isPlaying = false;
+      _ttsLoading = false;
+      _showReadingPanel = true;
+      _ttsError = failure;
+    });
+    _scheduleSave();
+  }
+
+  String _ttsErrorText(Object? failure) {
+    if (failure is PlatformException) {
+      return T(_tts.usesSystemVoice ? 'systemTtsUnavailable' : 'voicePlaybackFailed');
+    }
+    if (failure is TimeoutException || (failure is EdgeTtsException && failure.kind == 'timeout')) {
+      return T(_tts.usesSystemVoice ? 'systemTtsTimeout' : 'onlineTtsTimeout');
+    }
+    if (failure is EdgeTtsException) {
+      return failure.status != null
+          ? T('onlineTtsRejected', {'err': '${failure.status}'})
+          : T('onlineTtsUnavailable');
+    }
+    return T('voicePlaybackFailed');
+  }
+
+  /// 服务端明确拒绝（403 / 429 等）重试必然再失败，只留换音源与退出
+  bool get _ttsErrorRetryable {
+    final failure = _ttsError;
+    return !(failure is EdgeTtsException && failure.status != null);
+  }
+
+  Future<void> _probeSystemVoices() async {
+    try {
+      final voices = await _tts.systemVoices();
+      if (!mounted) return;
+      setState(() { _systemVoiceChecked = true; _systemVoiceAvailable = voices.isNotEmpty; });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { _systemVoiceChecked = true; _systemVoiceAvailable = false; });
+    }
+  }
+
+  /// 重试：清掉错误行，从失败那句重新加载（start() 会清掉上次的连接失败标记）
+  Future<void> _retryTts() async {
+    if (!_inReadingMode) return;
+    setState(() { _ttsError = null; _ttsErrorSeen = null; });
+    await _resumeReading();
+  }
+
+  /// 换用本地语音：走现有音源面板，选中后自动从当前句恢复朗读
+  Future<void> _useLocalTtsVoice() async {
+    if (!_inReadingMode) return;
+    setState(() { _ttsError = null; _ttsErrorSeen = null; });
+    await _openVoiceSelector();
+  }
+
+  Widget _buildTtsErrorBanner() {
+    final retryable = _ttsErrorRetryable;
+    final canLocal = _systemVoiceChecked && _systemVoiceAvailable && !_tts.usesSystemVoice;
+    return Container(
+      key: const ValueKey('tts-error-banner'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 4),
+      decoration: BoxDecoration(
+        color: const Color(0x26D08A5A),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0x66D08A5A)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 2),
+              child: Icon(Icons.error_outline, size: 16, color: Color(0xFFE0A46B)),
+            ),
+            const SizedBox(width: 6),
+            Expanded(child: Text(_ttsErrorText(_ttsError),
+              key: const ValueKey('tts-error-text'),
+              style: const TextStyle(color: Color(0xFFE8C9A4), fontSize: 12, height: 1.45))),
+          ]),
+          Row(children: [
+            if (retryable) _ttsErrorAction(T('ttsRetry'), const ValueKey('tts-error-retry'),
+                () { unawaited(_retryTts()); }),
+            if (canLocal) _ttsErrorAction(T('ttsUseLocalVoice'), const ValueKey('tts-error-local'),
+                () { unawaited(_useLocalTtsVoice()); }),
+            _ttsErrorAction(T('exit'), const ValueKey('tts-error-exit'),
+                () { unawaited(_exitReadingMode()); }),
+          ]),
+        ],
+      ),
     );
   }
+
+  Widget _ttsErrorAction(String label, Key key, VoidCallback onTap) => Padding(
+    padding: const EdgeInsets.only(right: 4, top: 2, bottom: 2),
+    child: Material(
+      color: const Color(0x1FFFFFFF),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        key: key,
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Text(label,
+            style: const TextStyle(color: Color(0xFFE0A46B), fontSize: 12, fontWeight: FontWeight.w600)),
+        ),
+      ),
+    ),
+  );
 
   (int, int, int) _sentenceDragTarget((int, int, int) origin, int steps) {
     int count(int chapter) => _book.chapters[chapter].paragraphs.fold(0, (sum, p) => sum + p.sentences.length);
@@ -3135,6 +3255,7 @@ class _ReaderScreenState extends State<ReaderScreen> with TickerProviderStateMix
           child: SingleChildScrollView(child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (_ttsError != null) _buildTtsErrorBanner(),
               Row(children: [
                 const SizedBox(width: 44, height: 44, child: Icon(Icons.volume_down, color: Color(0xFF9BC5DD), size: 20)),
                 Expanded(child: Slider(key: const ValueKey('reading-volume-slider'),
