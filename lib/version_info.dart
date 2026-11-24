@@ -6,12 +6,18 @@
 
 class VersionInfo {
   static const String appName = '多多朗读';
-  static const String version = '1.3.4';
-  static const String build = '15';
+  static const String version = '1.3.5';
+  static const String build = '18';
   static const String platform = 'Android';
 
   /// 更新记录，新版本在最上面。
   static const List<String> changelog = [
+    'v1.3.5：朗读异常不再退出。语音因网络等原因放不出来时，控制条切成异常暂停态，'
+        '顶上说清原因，就地给「重试」「换用本地语音」「退出」；重试从那句接着读，'
+        '服务端明确拒绝（403/429）不给重试。重试改成不再假死：重试期间控制条照样能点，'
+        '按钮变成「重试中，点此打断」，点一下就能停下本次重试、退回异常暂停态。'
+        '音源按钮合成一个胶囊：左半「在线音源」、右半「本地音源」，点哪半就打开该来源的音色列表，'
+        '选中的那半高亮、另一半变暗，两半各自记着自己的当前音色。',
     'v1.3.4：同步改成按项合并，不再整条覆盖。读到第几页和书签各比各自的时间，'
         '另一边刚读到的新位置不会被这一边的旧位置盖掉；上传前会核对云端这本有没有'
         '被别人改过，改过就重读再合并，两边改动都留下。数据同步页拆成'

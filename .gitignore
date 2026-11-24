@@ -58,3 +58,7 @@ releases/android/*.apk
 
 # 发布说明草稿（本地留档，不入库）
 /_release_body_*.md
+
+# 发布产物（体积大，只留在 releases 目录，不入库）
+releases/ios/*.ipa
+releases/android/*.apk

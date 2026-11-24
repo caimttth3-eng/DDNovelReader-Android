@@ -10,7 +10,7 @@
 
 ## 🎉 iOS 版正式上线
 
-**v1.3.0 起支持 iPhone / iPad，当前 v1.3.4**（同步按项合并、方向按钮拆分），与安卓共用同一套阅读、朗读与同步能力。
+**v1.3.0 起支持 iPhone / iPad，当前 v1.3.5**（音源胶囊、朗读异常可打断重试），与安卓共用同一套阅读、朗读与同步能力。
 
 > iOS 版以**未签名 IPA** 形式发布（不走 App Store），需要用签名工具自签安装。
 > 这是苹果的限制，不是安装包损坏；按下面的教程操作即可。
@@ -19,7 +19,7 @@
 
 前往 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载：
 
-- iOS：`DDNovelReader_v1.3.4_unsigned.ipa`（约 9MB）
+- iOS：`DDNovelReader_v1.3.5_unsigned.ipa`（约 9MB）
 - Android：三个架构 APK（见下方「下载」）
 
 ### 系统要求
@@ -69,7 +69,7 @@
 ## 下载
 
 - **Android**：本仓库 [Releases](https://github.com/caimttth3-eng/DDNovelReader-Android/releases) 下载 APK（三架构）
-- **iOS**：同页下载 `DDNovelReader_v1.3.4_unsigned.ipa`，按上面的教程自签
+- **iOS**：同页下载 `DDNovelReader_v1.3.5_unsigned.ipa`，按上面的教程自签
 - **Windows / macOS / Linux**：前往 [桌面版发布页](https://github.com/caimttth3-eng/DDNovelReader) 下载（Windows 绿色免安装 exe / macOS DMG / Linux 单文件）
 
 > 桌面版功能更全：本地离线语音 + Edge 神经语音、整本语音缓存、书签划线笔记、全文搜索、多主题、定时播放。
@@ -186,6 +186,9 @@ zip -qry DuoDuoLangDu-unsigned.ipa Payload
 ---
 
 ## 版本历史
+
+### v1.3.5（2026-11-24）
+朗读异常不再退出：语音因网络等原因放不出来时，控制条切成异常暂停态，顶上说清原因，就地给「重试 / 换用本地语音 / 退出」；重试从那句接着读，服务端明确拒绝（403/429）不给重试。重试不再假死：重试期间控制条照样能点，按钮变成「重试中，点此打断」，点一下即停下本次重试、退回异常暂停态。音源按钮合成一个胶囊：左半「在线音源」、右半「本地音源」，点哪半就打开该来源的音色列表，选中的那半高亮、另一半变暗，两半各自记着当前音色。iOS 与安卓同批发布。
 
 ### v1.3.4（2026-11-22）
 同步与桌面端 v2.3.2 同批：手机和电脑同时读同一本书时，各自改的进度和书签不再互相覆盖（按项合并、谁新留谁，书签按条目合并）；阅读页工具栏拆成「上传 / 下载」两个图标，点哪个方向就只走哪个方向；「数据同步」里的云端与局域网两个区块都改成「保存到云端」「从云端读取」两颗按钮；点同步先列出差异（上传几本 / 更新几本 / 移除几本），确认后才写入；上传带条件校验，云端刚被改过就重读再合并。iOS 与安卓同批发布。
