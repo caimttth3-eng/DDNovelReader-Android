@@ -258,7 +258,7 @@ List<(String, String)> _splitByInner(String text, List<_InnerHead> heads) {
   heads.sort((a, b) => a.off.compareTo(b.off));
   final chapters = <(String, String)>[];
   final intro = _strip(_stripOuterResid(text.substring(0, heads[0].off)));
-  if (intro.isNotEmpty) chapters.add(('简介', intro));
+  if (intro.isNotEmpty) chapters.add(('', intro));
   for (var k = 0; k < heads.length; k++) {
     final start = heads[k].off + heads[k].title.length;
     final end = k + 1 < heads.length ? heads[k + 1].off : text.length;
@@ -357,7 +357,7 @@ List<(String, String)> _chaptersFromHeads(List<String> lines, List<(int, String)
   final chapters = <(String, String)>[];
   final intro =
       _strip(lines.sublist(0, heads[0].$1).join('\n'));
-  if (intro.isNotEmpty) chapters.add(('简介', intro));
+  if (intro.isNotEmpty) chapters.add(('', intro));
   for (var k = 0; k < heads.length; k++) {
     var start = heads[k].$1 + 1;
     if (start < lines.length && _sepLine.hasMatch(_strip(lines[start]))) {
@@ -460,7 +460,7 @@ List<(String, String)>? splitChapters(String text, {bool preserveLayout = false}
   return [for (final c in chapters) (c.$1, preserveLayout ? c.$2 : _addLinebreaks(c.$2))];
 }
 
-/// 无标题书：按自然段落聚合成约 [paraTarget] 字一节
+/// 无标题书：按自然段落聚合成约 [paraTarget] 字的技术块，不生成标题。
 List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000, bool preserveLayout = false}) {
   var paras = text
       .split(RegExp(r'\n\s*\n'))
@@ -476,7 +476,7 @@ List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000, bool p
   for (final p in paras) {
     final length = _strip(p).length;
     if (cur.isNotEmpty && curLen + length > paraTarget) {
-      chapters.add(('第 ${chapters.length + 1} 节', cur.join('\n\n')));
+      chapters.add(('', cur.join('\n\n')));
       cur
         ..clear()
         ..add(p);
@@ -487,9 +487,9 @@ List<(String, String)> fallbackSplit(String text, {int paraTarget = 5000, bool p
     }
   }
   if (cur.isNotEmpty) {
-    chapters.add(('第 ${chapters.length + 1} 节', cur.join('\n\n')));
+    chapters.add(('', cur.join('\n\n')));
   }
-  if (chapters.isEmpty) return [('正文', _strip(text))];
+  if (chapters.isEmpty) return [('', _strip(text))];
   return chapters;
 }
 

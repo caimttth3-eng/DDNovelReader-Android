@@ -81,6 +81,27 @@ class BookParser {
   /// chapters or remove headings, preserving progress, annotations and audio.
   static List<BookTocEntry> extractToc(Book source, {bool autoExtractToc = true}) {
     final whitespace = RegExp(r'\s');
+    // Navigation-only labels quote original text; never invent visible headings.
+    String excerpt(String text, int offset) {
+      final label = StringBuffer();
+      var count = 0;
+      var previousSpace = true;
+      for (var i = offset; i < text.length && count < 24;) {
+        final first = text.codeUnitAt(i++);
+        var rune = first;
+        if (first >= 0xD800 && first <= 0xDBFF && i < text.length) {
+          final second = text.codeUnitAt(i);
+          if (second >= 0xDC00 && second <= 0xDFFF) {
+            rune = 0x10000 + ((first - 0xD800) << 10) + second - 0xDC00; i++;
+          }
+        }
+        final character = String.fromCharCode(rune);
+        final space = whitespace.hasMatch(character);
+        if (space && previousSpace) continue;
+        label.write(space ? ' ' : character); count++; previousSpace = space;
+      }
+      return label.toString().trimRight();
+    }
     List<BookTocEntry> fallbackIndex() {
     final fallback = <BookTocEntry>[];
     var count = 0, next = 0;
@@ -92,7 +113,7 @@ class BookParser {
           final code = text.codeUnitAt(offset);
           if (whitespace.hasMatch(text[offset]) || (code >= 0xDC00 && code <= 0xDFFF)) continue;
           if (count >= next) {
-            fallback.add(BookTocEntry(title: '第 ${fallback.length + 1} 节', chapterIndex: c,
+            fallback.add(BookTocEntry(title: excerpt(text, offset), chapterIndex: c,
               paragraphIndex: p, displayOffset: offset));
             next = count + 5000;
           }
@@ -108,8 +129,8 @@ class BookParser {
       final chapter = source.chapters[c];
       final joined = chapter.paragraphs.map((p) => p.display).join('\n');
       final detected = detectChapterTitles(joined);
-      final synthetic = RegExp(r'^(?:第\s*\d+\s*节|正文|简介)$').hasMatch(chapter.title.trim());
-      final existing = !synthetic && (detectChapterTitles(chapter.title).isNotEmpty || source.format == BookFormat.epub);
+      final existing = chapter.title.trim().isNotEmpty &&
+        (detectChapterTitles(chapter.title).isNotEmpty || source.format == BookFormat.epub);
       if (existing && chapter.paragraphs.isNotEmpty) {
         entries.add(BookTocEntry(title: chapter.title, chapterIndex: c, paragraphIndex: 0));
       }
@@ -130,13 +151,14 @@ class BookParser {
     for (var c = 0; c < source.chapters.length && firstContent == null; c++) {
       for (var p = 0; p < source.chapters[c].paragraphs.length; p++) {
         final match = RegExp(r'\S').firstMatch(source.chapters[c].paragraphs[p].display);
-        if (match != null) { firstContent = BookTocEntry(title: '正文', chapterIndex: c, paragraphIndex: p, displayOffset: match.start); break; }
+        if (match != null) { firstContent = BookTocEntry(title: excerpt(source.chapters[c].paragraphs[p].display, match.start),
+          chapterIndex: c, paragraphIndex: p, displayOffset: match.start); break; }
       }
     }
     if (firstContent != null) {
       final first = entries.first, start = firstContent;
       if (first.chapterIndex != start.chapterIndex || first.paragraphIndex != start.paragraphIndex || first.displayOffset > start.displayOffset) {
-        entries.insert(0, BookTocEntry(title: '正文', chapterIndex: start.chapterIndex,
+        entries.insert(0, BookTocEntry(title: start.title, chapterIndex: start.chapterIndex,
           paragraphIndex: start.paragraphIndex, displayOffset: start.displayOffset));
       }
     }
@@ -511,10 +533,10 @@ class BookParser {
     }
     if (chapters.isEmpty) {
       if (desktopText) {
-        final chapter = _buildChapter('正文', raw.trim(), detectedHeading: false);
+        final chapter = _buildChapter('', raw.trim(), detectedHeading: false);
         if (chapter != null) chapters.add(chapter);
       } else {
-        chapters.add(Chapter(title: '正文', paragraphs: _toParagraphs(raw.trim())));
+        chapters.add(Chapter(title: '', paragraphs: _toParagraphs(raw.trim())));
       }
     }
     return chapters;

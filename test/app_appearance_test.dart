@@ -8,6 +8,46 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => AppAppearance.initialize(ReadingSettings(), Brightness.light));
   tearDown(() => AppAppearance.initialize(ReadingSettings(), Brightness.light));
+  for (final dark in [false, true]) {
+    test('settings menus use neutral surfaces and one text hierarchy in dark=$dark', () {
+      final theme = AppAppearance.theme(dark);
+      final background = dark ? const Color(0xFF1A1A1A) : Colors.white;
+      expect(theme.colorScheme.surface, background);
+      expect(theme.canvasColor, background);
+      expect(theme.bottomSheetTheme.backgroundColor, background);
+      expect(theme.bottomSheetTheme.modalBackgroundColor, background);
+      expect(theme.bottomSheetTheme.surfaceTintColor, Colors.transparent);
+      expect(theme.dialogTheme.backgroundColor, background);
+      expect(theme.dialogTheme.surfaceTintColor, Colors.transparent);
+      expect(theme.popupMenuTheme.color, background);
+      expect(theme.popupMenuTheme.surfaceTintColor, Colors.transparent);
+      expect(theme.menuTheme.style!.backgroundColor!.resolve(const <WidgetState>{}), background);
+      expect(theme.menuTheme.style!.surfaceTintColor!.resolve(const <WidgetState>{}), Colors.transparent);
+      expect(theme.textTheme.titleLarge!.fontSize, 20);
+      expect(theme.textTheme.titleLarge!.fontWeight, FontWeight.w600);
+      expect(theme.textTheme.titleSmall!.fontSize, 16);
+      expect(theme.textTheme.titleSmall!.fontWeight, FontWeight.w600);
+      expect(theme.textTheme.titleSmall!.color, theme.colorScheme.primary);
+      expect(theme.listTileTheme.titleTextStyle!.fontSize, 16);
+      expect(theme.listTileTheme.subtitleTextStyle!.fontSize, 14);
+      expect(theme.dialogTheme.titleTextStyle!.fontSize, 20);
+      expect(theme.dialogTheme.contentTextStyle!.fontSize, 16);
+    });
+  }
+
+  test('light menus stay white without changing the selected reader paper palette', () {
+    const paper = Color(0xFFB5AB92), ink = Color(0xFF25231D);
+    final reader = AppAppearance.theme(false).copyWith(scaffoldBackgroundColor: paper);
+    final menu = AppAppearance.menuTheme(reader, foreground: ink);
+    expect(menu.colorScheme.surface, Colors.white);
+    expect(menu.colorScheme.onSurface, const Color(0xFF222222));
+    expect(menu.canvasColor, Colors.white);
+    expect(menu.bottomSheetTheme.modalBackgroundColor, Colors.white);
+    expect(menu.dialogTheme.backgroundColor, Colors.white);
+    expect(menu.popupMenuTheme.color, Colors.white);
+    expect(reader.scaffoldBackgroundColor, paper);
+  });
+
   test('a light launch restores the saved daylight palette after a night session', () {
     final saved = ReadingSettings()..themeIndex = 2..dayThemeIndex = 3;
     final startup = AppAppearance.applySystemStartup(saved, Brightness.light);

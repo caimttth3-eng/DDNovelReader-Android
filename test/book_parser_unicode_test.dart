@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:duoduo_langdu/models/book.dart';
 import 'package:duoduo_langdu/services/book_parser.dart';
+import 'package:duoduo_langdu/services/chapterizer.dart';
 import 'package:duoduo_langdu/services/content_key.dart';
 import 'package:duoduo_langdu/services/tts_cache_store.dart';
 import 'package:duoduo_langdu/services/tts_text.dart';
@@ -47,6 +48,40 @@ void main() {
     expect(book.locateByCharOffset(0, 2), (0, 3));
     expect(bookFullText(book), '$source\n');
     expect(book.contentKey, '4d48752f355bf8f7');
+  });
+
+  test('untitled TXT parse retains block source tables without generated visible labels', () async {
+    final a = List.filled(400, '甲𠀀。').join();
+    final b = List.filled(400, '乙𠀁。').join();
+    final c = List.filled(600, '丙𠀂。').join();
+    final book = await parse('$a\n\n$b\n\n$c', name: 'untitled-blocks.txt');
+    expect(book.parseOk, isTrue, reason: book.parseError);
+    expect(book.chapters.map((chapter) => chapter.title), ['', '']);
+    expect(book.chapters.map((chapter) => chapter.paragraphs.map((p) => p.display).toList()), [[a, b], [c]]);
+    expect(bookFullText(book), '$a\n$b\n$c\n');
+    expect(book.contentKey, computeContentKey('Unicode', 2, '$a\n$b\n$c\n'));
+    final bodies = ['$a\n$b', c];
+    for (var index = 0; index < book.chapters.length; index++) {
+      final chapter = book.chapters[index];
+      expect(chapter.sourceCoordinates, canonicalSourceOffsets(bodies[index]));
+      expect(chapter.sourceCoordinates.length, bodies[index].length + 1);
+      expect(chapter.sourceCoordinates[1], 1);
+      expect(chapter.sourceCoordinates[2], 1);
+      expect(chapter.sourceCoordinates.last, bodies[index].runes.length);
+      for (final paragraph in chapter.paragraphs) {
+        expect(paragraph.tts, paragraph.display);
+      }
+    }
+    for (final automatic in [false, true]) {
+      final toc = BookParser.extractToc(book, autoExtractToc: automatic);
+      expect(toc, isNotEmpty);
+      for (final entry in toc) {
+        final original = book.chapters[entry.chapterIndex].paragraphs[entry.paragraphIndex].display;
+        expect(original.substring(entry.displayOffset), startsWith(entry.title));
+        expect(entry.title.runes.length, lessThanOrEqualTo(24));
+        expect(entry.title, isNot(matches(RegExp(r'^第\s*\d+\s*节$|^正文$|^简介$'))));
+      }
+    }
   });
 
   test('emoji cleanup preserves source layout and coordinates', () async {

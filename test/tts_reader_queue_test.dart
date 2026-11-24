@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:duoduo_langdu/models/speech_word.dart';
@@ -8,6 +9,7 @@ import 'package:duoduo_langdu/models/book.dart';
 import 'package:duoduo_langdu/services/reading_text.dart';
 import 'package:duoduo_langdu/services/edge_tts.dart';
 import 'package:duoduo_langdu/services/tts_reader.dart';
+import 'package:duoduo_langdu/services/system_tts.dart';
 import 'package:duoduo_langdu/services/tts_cache_store.dart';
 
 class _Player extends AudioPlayer {
@@ -405,6 +407,96 @@ void main() {
     reader.setPrefetchSentences(0); expect(reader.prefetchSentences, 0);
     expect(reader.state, TtsState.playing); expect(reader.currentIndex, 0);
     expect(player.played, [0, 0]);
+  });
+
+  final scopedLegacyVoice = '${SystemTtsClient.voicePrefix}${SystemTtsClient.engineVoiceIdentifier('engine.a', 'zh-CN')}';
+  for (final selection in [
+    (TargetPlatform.android, scopedLegacyVoice, 'engine.a', null),
+    (TargetPlatform.android, '${SystemTtsClient.voicePrefix}legacy-zh-CN', null, null),
+    (TargetPlatform.iOS, scopedLegacyVoice, 'engine.a', 'zh-CN'),
+    (TargetPlatform.iOS, '${SystemTtsClient.voicePrefix}com.apple.voice.Tingting', null, 'com.apple.voice.Tingting'),
+  ]) {
+    test('${selection.$1.name} applies saved system selection ${selection.$2} only at the playback boundary', () async {
+      debugDefaultTargetPlatformOverride = selection.$1;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final messenger = binding.defaultBinaryMessenger;
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+        calls.add(call);
+        if (call.method == 'speak') {
+          final delivered = Completer<void>();
+          messenger.handlePlatformMessage(SystemTtsClient.channel.name,
+            const StandardMethodCodec().encodeMethodCall(MethodCall('start', {'id': (call.arguments as Map)['id']})),
+            (_) => delivered.complete());
+          await delivered.future;
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(SystemTtsClient.channel, null));
+      final reader = TtsReader(player: _Player())..setVoice(selection.$2);
+      addTearDown(reader.dispose);
+      await reader.start(['正文。']);
+      final initialized = calls.singleWhere((call) => call.method == 'initialize').arguments;
+      final spoken = calls.singleWhere((call) => call.method == 'speak').arguments as Map;
+      expect(initialized, selection.$3 == null ? null : {'engine': selection.$3});
+      expect(spoken['engine'], selection.$3);
+      expect(spoken.containsKey('voice'), selection.$4 != null);
+      if (selection.$4 != null) expect(spoken['voice'], selection.$4);
+      expect(reader.voice, selection.$2, reason: 'Compatibility adaptation cannot rewrite stored or cache identity');
+      expect(reader.state, TtsState.playing);
+    });
+  }
+
+  test('Android preserves an explicitly selected installed language at the playback boundary', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final messenger = binding.defaultBinaryMessenger;
+    final calls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+      calls.add(call);
+      if (call.method == 'speak') {
+        final delivered = Completer<void>();
+        messenger.handlePlatformMessage(SystemTtsClient.channel.name,
+          const StandardMethodCodec().encodeMethodCall(MethodCall('start', {'id': (call.arguments as Map)['id']})),
+          (_) => delivered.complete());
+        await delivered.future;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(SystemTtsClient.channel, null));
+    final selected = '${SystemTtsClient.voicePrefix}${SystemTtsClient.engineLanguageIdentifier('engine.a', 'en-US')}';
+    final reader = TtsReader(player: _Player())..setVoice(selected);
+    addTearDown(reader.dispose);
+    await reader.start(['English text.']);
+    final spoken = calls.singleWhere((call) => call.method == 'speak').arguments as Map;
+    expect(calls.singleWhere((call) => call.method == 'initialize').arguments, {'engine': 'engine.a'});
+    expect(spoken['engine'], 'engine.a');
+    expect(spoken['language'], 'en-US');
+    expect(spoken.containsKey('voice'), isFalse);
+    expect(reader.voice, selected, reason: 'Explicit language remains part of stored selection and cache identity');
+    expect(reader.state, TtsState.playing);
+  });
+
+  test('Android engine-only compatibility leaves online voice requests unchanged', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final messenger = binding.defaultBinaryMessenger;
+    final nativeCalls = <String>[];
+    messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async { nativeCalls.add(call.method); return null; });
+    addTearDown(() => messenger.setMockMethodCallHandler(SystemTtsClient.channel, null));
+    final requests = <(String, String, String)>[];
+    Future<Uint8List> synth(String text, {required String voice, required String rate,
+      required void Function(List<SpeechWord>) onWords, required EdgeSynthCancelToken cancelToken}) async {
+      requests.add((text, voice, rate)); return Uint8List.fromList([42]);
+    }
+    final player = _Player();
+    final reader = TtsReader(player: player, synthesize: synth)..setVoice('en-US-AriaNeural');
+    addTearDown(reader.dispose);
+    reader.setPrefetchSentences(0);
+    await reader.start(['English text.']);
+    expect(requests, hasLength(1));
+    expect(requests.single.$1, 'English text.'); expect(requests.single.$2, 'en-US-AriaNeural');
+    expect(reader.voice, 'en-US-AriaNeural'); expect(player.played, [42]); expect(nativeCalls, isEmpty);
   });
 
   test('system voice never starts online prefetch even at the maximum count', () async {

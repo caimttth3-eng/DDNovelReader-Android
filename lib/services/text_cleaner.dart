@@ -22,6 +22,24 @@ class CleanedText {
     if (ttsPos >= ttsToDisplay.length) return display.length;
     return ttsToDisplay[ttsPos];
   }
+
+  /// The actual retained character, rather than the end of its predecessor.
+  /// Those differ when repeated punctuation or removed characters lie between
+  /// them, for example the second slash of an unfiltered URL.
+  int displayStartOfTts(int ttsPos) {
+    if (tts.isEmpty || ttsPos >= tts.length) return display.length;
+    return ttsToDisplay[(ttsPos < 0 ? 0 : ttsPos) + 1] - 1;
+  }
+
+  /// First retained speech character at or after a visible-text cursor.
+  int ttsOffsetOfDisplay(int displayPos) {
+    var low = 0, high = tts.length;
+    while (low < high) {
+      final mid = (low + high) ~/ 2;
+      if (displayStartOfTts(mid) < displayPos) { low = mid + 1; } else { high = mid; }
+    }
+    return low;
+  }
 }
 
 /// 双文本清洗管线。

@@ -129,7 +129,10 @@ void main() {
       expect(highlightEnd.$1, progress.$1);
       expect(display.substring(progress.$2, highlightEnd.$2), '继续前进');
       expect(prepared.book.chapters[0].paragraphs.any((p) => p.display.contains('example.com')), isFalse);
-      expect(prepared.toc.map((entry) => entry.title), ['正文', '第一章 山中', '第二章 海边']);
+      expect(prepared.toc.map((entry) => entry.title), [
+        String.fromCharCodes(source.chapters.first.paragraphs.first.display.trimLeft()
+          .replaceAll(RegExp(r'\s+'), ' ').runes.take(24)).trimRight(),
+        '第一章 山中', '第二章 海边']);
       final rawToc = BookParser.extractToc(source);
       for (var i = 0; i < rawToc.length; i++) {
         final raw = rawToc[i], actual = prepared.toc[i];

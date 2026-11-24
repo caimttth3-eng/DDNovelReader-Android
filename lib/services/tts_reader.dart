@@ -41,7 +41,15 @@ class TtsReader {
   ValueChanged<bool>? onVoiceModeChanged;
   bool get usingSystemFallback => _usingSystemFallback;
   bool get usesSystemVoice => SystemTtsClient.isSystemVoiceId(_voice) || _usingSystemFallback;
-  String? get _systemVoiceIdentifier => SystemTtsClient.identifierFrom(_voice);
+  String? get _systemVoiceIdentifier {
+    final identifier = SystemTtsClient.identifierFrom(_voice);
+    if (defaultTargetPlatform != TargetPlatform.android) return identifier;
+    if (SystemTtsClient.languageFromIdentifier(identifier) != null) return identifier;
+    // Android's menu selects engines. Older saved voice IDs must not silently
+    // override the engine's language preference while the UI shows only its name.
+    final engine = SystemTtsClient.decodeIdentifier(identifier).engine;
+    return engine == null ? null : SystemTtsClient.engineVoiceIdentifier(engine, '');
+  }
   static const defaultVoice = 'zh-CN-XiaoxiaoNeural';
   static const _positionReadTimeout = Duration(seconds: 2);
   static const _loadingIndicatorDelay = Duration(milliseconds: 150);
@@ -228,7 +236,9 @@ class TtsReader {
   }
 
   Future<List<SystemVoice>> systemVoices() => _system.voices();
-  Future<SystemVoiceCatalog> systemVoiceCatalog() => _system.catalog();
+  Future<SystemVoiceCatalog> systemEngineCatalog() => _system.catalog(enginesOnly: true);
+  Future<SystemVoiceCatalog> systemEngineNames() => _system.catalog(enginesOnly: true, namesOnly: true);
+  Future<List<SystemTtsLanguage>> systemInstalledLanguages(String engine) => _system.checkLanguages(engine);
   String get currentSystemVoiceName => _system.currentVoiceName;
   Future<bool> openSystemVoiceSettings() => _system.openSettings();
 

@@ -1,15 +1,18 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:duoduo_langdu/models/book.dart';
 import 'package:duoduo_langdu/models/progress.dart';
+import 'package:duoduo_langdu/models/speech_word.dart';
 import 'package:duoduo_langdu/screens/reader_screen.dart';
 import 'package:duoduo_langdu/screens/shelf_screen.dart';
 import 'package:duoduo_langdu/services/app_storage.dart';
@@ -25,6 +28,7 @@ import 'package:duoduo_langdu/services/reader_preparation.dart';
 import 'package:duoduo_langdu/services/book_cache_task.dart';
 import 'package:duoduo_langdu/services/tts_cache_store.dart';
 import 'package:duoduo_langdu/services/reader_typography.dart';
+import 'package:duoduo_langdu/services/text_cleaner.dart';
 import 'package:duoduo_langdu/services/annotation_store.dart';
 import 'package:duoduo_langdu/services/sync_engine.dart';
 import 'package:duoduo_langdu/widgets/reader_brightness_control.dart';
@@ -276,6 +280,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1400));
     for (var frame = 0; frame < 8; frame++) { await tester.pump(const Duration(milliseconds: 60)); }
     expect(topIndex(), greaterThan(autoStartPage));
+    for (var frame = 0; frame < 60 && find.byKey(const ValueKey('page-outgoing-transform')).evaluate().isNotEmpty; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(find.byKey(const ValueKey('page-outgoing-transform')), findsNothing);
     await tester.tapAt(const Offset(195, 360));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('auto-page-pause')));
@@ -320,28 +328,37 @@ void main() {
     expect(find.byWidgetPredicate((w) => w is DropdownButton<String> && w.value == 'zh-CN-XiaoxiaoNeural'), findsNothing);
     expect(find.text('缓存在线语音'), findsNothing, reason: 'Online cache belongs to the playback panel');
     expect(find.text('变速'), findsNothing, reason: 'Speech speed belongs to the playback panel');
+    Future<void> revealSetting(Finder target, {double delta = 200}) async {
+      final scrollable = find.descendant(of: readingSettings, matching: find.byType(Scrollable)).last;
+      await tester.scrollUntilVisible(target, delta, scrollable: scrollable);
+      await tester.pumpAndSettle();
+    }
     final correction = find.byKey(const ValueKey('text-correction'));
-    tester.widget<SwitchListTile>(correction).onChanged!(false);
+    await revealSetting(correction); await tester.tap(correction);
     await tester.pumpAndSettle();
     expect((await AppStorage().loadSettings())['textCorrection'], isFalse);
-    tester.widget<SwitchListTile>(correction).onChanged!(true);
+    await revealSetting(correction); await tester.tap(correction);
     await tester.pumpAndSettle();
     final indent = find.byKey(const ValueKey('first-line-indent'));
-    tester.widget<SwitchListTile>(indent).onChanged!(false); await tester.pumpAndSettle();
+    await revealSetting(indent); await tester.tap(indent); await tester.pumpAndSettle();
     expect((await AppStorage().loadSettings())['firstLineIndent'], isFalse);
-    tester.widget<SwitchListTile>(indent).onChanged!(true); await tester.pumpAndSettle();
+    await revealSetting(indent); await tester.tap(indent); await tester.pumpAndSettle();
     final filter = find.byKey(const ValueKey('information-filter'));
+    await revealSetting(filter);
     expect(tester.widget<SwitchListTile>(filter).value, isTrue);
-    tester.widget<SwitchListTile>(filter).onChanged!(false); await tester.pumpAndSettle();
-    tester.widget<SwitchListTile>(filter).onChanged!(true); await tester.pumpAndSettle();
+    await tester.tap(filter); await tester.pumpAndSettle();
+    await tester.tap(filter); await tester.pumpAndSettle();
     expect((await AppStorage().loadSettings())['informationFilterLevel'], 'links', reason: 'Level one is selected by default');
-    final radios = find.byType(RadioListTile<String>);
-    expect(radios, findsNWidgets(3));
-    tester.widget<RadioListTile<String>>(radios.first).onChanged!('links'); await tester.pumpAndSettle();
+    for (final label in ['一级：网址和邮箱', '二级：再过滤明确广告行', '三级：再过滤求票、求收藏及作者说明行']) {
+      final option = find.widgetWithText(RadioListTile<String>, label);
+      await revealSetting(option); expect(option, findsOneWidget);
+    }
+    final firstLevel = find.widgetWithText(RadioListTile<String>, '一级：网址和邮箱');
+    await revealSetting(firstLevel, delta: -200); await tester.tap(firstLevel); await tester.pumpAndSettle();
     expect((await AppStorage().loadSettings())['informationFilterLevel'], 'links');
-    await tester.ensureVisible(filter); await tester.pumpAndSettle();
+    await revealSetting(filter, delta: -200);
     await capture('reader-text-options');
-    tester.widget<SwitchListTile>(filter).onChanged!(false); await tester.pumpAndSettle();
+    await tester.tap(filter); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(20, 120));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu')));
@@ -386,6 +403,114 @@ void main() {
       paragraphs: List.generate(30, (p) => Paragraph(
         display: '第${c + 1}章第${p + 1}段。' + List.filled(6, '山间的风吹过树林，远方传来朋友的问候。').join(),
         tts: '', sentences: const [], sentenceStartTts: const [])))));
+
+  for (final palette in [
+    (name: 'dark', index: 2, background: const Color(0xFF1A1A1A), paper: const Color(0xFF1A1A1A)),
+    (name: 'light', index: 0, background: Colors.white, paper: const Color(0xFFB5AB92)),
+  ]) {
+    testWidgets('reading, voice and playback settings share surfaces, text hierarchy and section boundaries in ${palette.name}', (tester) async {
+      tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+      tester.view.viewPadding = const FakeViewPadding(top: 40, bottom: 24);
+      tester.view.padding = const FakeViewPadding(top: 40, bottom: 24);
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetViewPadding); addTearDown(tester.view.resetPadding);
+      final sizes = <Size>[];
+      final titleOffsets = <Offset>[];
+      for (final menu in ['reading', 'voice', 'playback']) {
+        AppAppearance.setThemeMode(palette.name);
+        final storage = AppStorage();
+        await storage.saveSettings((ReadingSettings()..themeMode = palette.name
+          ..themeIndex = palette.index..dayThemeIndex = 0).toJson());
+        await tester.pumpWidget(MaterialApp(theme: AppAppearance.theme(palette.name == 'dark'),
+          home: ReaderScreen(book: sample('settings-${palette.name}-$menu'), storage: storage, ttsReader: _TestSpeech())));
+        await tester.pumpAndSettle();
+        if (menu == 'reading') {
+          await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+          await tester.tap(find.byTooltip('阅读设置'));
+        } else {
+          await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+          await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
+          await tester.tap(find.byKey(ValueKey(menu == 'voice' ? 'reading-voice' : 'playback-settings')));
+        }
+        await tester.pumpAndSettle();
+        final panel = find.byKey(const ValueKey('reader-settings-panel'));
+        final title = find.byKey(const ValueKey('settings-panel-title'));
+        expect(panel, findsOneWidget); expect(title, findsOneWidget);
+        final rect = tester.getRect(panel);
+        sizes.add(rect.size); titleOffsets.add(tester.getTopLeft(title) - rect.topLeft);
+        expect(rect.height, closeTo(844 * .85, 1));
+        expect(tester.getTopLeft(title).dx - rect.left, closeTo(16, 1), reason: 'Every settings title aligns to the same left edge');
+        final titleDivider = find.byKey(const ValueKey('settings-panel-divider'));
+        expect(titleDivider, findsOneWidget);
+        final list = find.descendant(of: panel, matching: find.byType(ListView)).first;
+        expect(tester.widget<ListView>(list).padding, const EdgeInsets.all(16));
+        final menuTheme = Theme.of(tester.element(title));
+        expect(menuTheme.colorScheme.surface, palette.background);
+        expect(menuTheme.canvasColor, palette.background);
+        expect(menuTheme.dialogTheme.backgroundColor, palette.background);
+        expect(menuTheme.dialogTheme.surfaceTintColor, Colors.transparent);
+        expect(tester.widget<Scaffold>(find.byType(Scaffold).first).backgroundColor, palette.paper,
+          reason: 'Menu surfaces must not replace the chosen reading paper');
+        TextStyle renderedStyle(Finder text) => tester.renderObject<RenderParagraph>(text).text.style!;
+        final headingStyle = renderedStyle(title);
+        expect(headingStyle.fontSize, 20); expect(headingStyle.fontWeight, FontWeight.w600);
+        expect(menuTheme.listTileTheme.titleTextStyle!.fontSize, 16);
+        expect(menuTheme.listTileTheme.subtitleTextStyle!.fontSize, 14);
+        final scrollable = find.descendant(of: panel, matching: find.byType(Scrollable)).first;
+        final sections = switch (menu) {
+          'reading' => ['settingsAppearance', 'settingsPageTurning', 'settingsScreen', 'settingsTextProcessing'],
+          'voice' => ['voiceSectionOnline', 'voiceSectionLocal'],
+          _ => ['settingsSpeechFeedback', 'settingsSpeechNetwork', 'settingsSpeechControls'],
+        };
+        for (var index = 0; index < sections.length; index++) {
+          final section = sections[index];
+          final label = find.byKey(ValueKey('reader-menu-section-$section'));
+          await tester.scrollUntilVisible(label, 180, scrollable: scrollable); await tester.pumpAndSettle();
+          final style = renderedStyle(label);
+          expect(style.fontSize, 16); expect(style.fontWeight, FontWeight.w600);
+          expect(style.color, menuTheme.colorScheme.primary);
+          expect(tester.getTopLeft(label).dx - rect.left, closeTo(16, 1));
+          final boundary = find.byKey(ValueKey('reader-menu-divider-$section'));
+          expect(boundary, index == 0 ? findsNothing : findsOneWidget,
+            reason: 'Only a transition into another major group adds a section boundary');
+          for (final divider in tester.widgetList<Divider>(find.descendant(of: panel, matching: find.byType(Divider)))) {
+            final key = divider.key;
+            expect(key, isA<ValueKey<String>>());
+            final value = (key! as ValueKey<String>).value;
+            expect(value == 'settings-panel-divider' || value.startsWith('reader-menu-divider-'), isTrue,
+              reason: 'Ordinary setting rows must not gain their own divider');
+          }
+        }
+        tester.state<ScrollableState>(scrollable).position.jumpTo(0); await tester.pumpAndSettle();
+        final entry = find.byKey(ValueKey(switch (menu) {
+          'reading' => 'reader-font-family', 'voice' => 'system-engine-', _ => 'word-highlight',
+        }));
+        await tester.scrollUntilVisible(entry, 180, scrollable: scrollable); await tester.pumpAndSettle();
+        final entryWidget = tester.widget(entry);
+        final Widget entryTitle = entryWidget is SwitchListTile ? entryWidget.title! : (entryWidget as ListTile).title!;
+        final entryStyle = renderedStyle(find.byWidget(entryTitle));
+        expect(entryStyle.fontSize, 16); expect(entryStyle.fontWeight, FontWeight.w400);
+        if (menu != 'voice') {
+          final supported = find.byKey(ValueKey(menu == 'reading' ? 'retain-page-line' : 'reading-prefetch'));
+          await tester.scrollUntilVisible(supported, 180, scrollable: scrollable); await tester.pumpAndSettle();
+          final supportedWidget = tester.widget(supported);
+          final Widget description = supportedWidget is SwitchListTile
+            ? supportedWidget.subtitle! : (supportedWidget as ListTile).subtitle!;
+          expect(renderedStyle(find.byWidget(description)).fontSize, 14);
+        }
+        expect(tester.getTopLeft(title) - rect.topLeft, titleOffsets.last,
+          reason: 'The shared title remains fixed while each menu scrolls');
+        final background = tester.widgetList<Material>(find.ancestor(of: panel, matching: find.byType(Material)))
+          .where((material) => material.color == palette.background);
+        expect(background, isNotEmpty);
+        expect(background.every((material) => material.surfaceTintColor == null || material.surfaceTintColor == Colors.transparent), isTrue);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+      }
+      expect(sizes.toSet(), hasLength(1));
+      expect(titleOffsets.toSet(), hasLength(1));
+    });
+  }
 
   testWidgets('disabled launch sync prevents the startup sync request', (tester) async {
     final storage = AppStorage();
@@ -653,17 +778,39 @@ void main() {
         final current = highlighted.single;
         expect(plain(current.textSpan!), contains(sentence(p, s)));
         final spans = coloredSpans(current);
+        final paragraphFinder = find.byWidgetPredicate((w) => identical(w, current));
+        final render = tester.renderObject<RenderParagraph>(paragraphFinder);
+        final displayed = current.textSpan!.toPlainText();
+        final clipFinder = find.byKey(const ValueKey('reader-page-clip'));
+        final clipSize = tester.getSize(clipFinder);
+        final clip = tester.widget<ClipRect>(clipFinder).clipper?.getClip(clipSize) ?? (Offset.zero & clipSize);
+        final origin = render.localToGlobal(Offset.zero) - tester.getTopLeft(clipFinder);
+        final plainOffsets = [for (var i = 0; i < displayed.length; i++) if (displayed[i] != '\u200B') i];
+        final sentenceStart = displayed.replaceAll('\u200B', '').indexOf(sentence(p, s));
+        expect(sentenceStart, greaterThanOrEqualTo(0));
+        var visibleEnd = 0;
+        // A sentence can straddle a fixed page cut. Compute the expected
+        // highlighted prefix from actual glyph boxes and the page clip,
+        // independently of the produced color spans.
+        for (var i = 0; i < sentence(p, s).length; i++) {
+          final offset = plainOffsets[sentenceStart + i];
+          final boxes = render.getBoxesForSelection(TextSelection(
+            baseOffset: offset, extentOffset: offset + 1),
+            boxHeightStyle: ui.BoxHeightStyle.tight);
+          if (boxes.isEmpty || boxes.any((box) => box.top + origin.dy < clip.top - 0.5 ||
+              box.bottom + origin.dy > clip.bottom + 0.5)) break;
+          visibleEnd = i + 1;
+        }
+        expect(visibleEnd, greaterThan(0), reason: 'The active sentence must actually begin inside the page clip');
+        final wordEnd = visibleEnd < 3 ? visibleEnd : 3;
         expect(spans.where((w) => w.style?.backgroundColor == const Color(0xFF9BC5DD)).map(plain).join(),
-          sentence(p, s).substring(0, 3), reason: 'The word cursor must move into paragraph $p sentence $s');
+          sentence(p, s).substring(0, wordEnd), reason: 'The visible word cursor must move into paragraph $p sentence $s');
         expect(spans.where((w) => w.style?.backgroundColor == const Color(0x44FFC107)).map(plain).join(),
-          sentence(p, s).substring(3), reason: 'The current sentence must follow the audio');
+          sentence(p, s).substring(wordEnd, visibleEnd), reason: 'The current sentence must follow the audio up to the actual page cut');
         final position = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value
           .singleWhere((pos) => pos.index == p + 1);
         expect(position.itemLeadingEdge, lessThan(1));
         expect(position.itemTrailingEdge, greaterThan(0));
-        final paragraphFinder = find.byWidgetPredicate((w) => identical(w, current));
-        final render = tester.renderObject<RenderParagraph>(paragraphFinder);
-        final displayed = current.textSpan!.toPlainText();
         final glyphOffset = displayed.indexOf(sentence(p, s).substring(0, 1));
         final glyph = render.getBoxesForSelection(TextSelection(baseOffset: glyphOffset, extentOffset: glyphOffset + 1)).first;
         final cursorY = render.localToGlobal(Offset(glyph.left, glyph.top)).dy;
@@ -715,7 +862,7 @@ void main() {
       final render = tester.renderObject<RenderParagraph>(find.byWidgetPredicate((w) => identical(w, text)));
       final start = text.textSpan!.toPlainText().indexOf(blue);
       final line = render.getBoxesForSelection(TextSelection(baseOffset: start, extentOffset: start + 1),
-        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle).first;
+        boxHeightStyle: ui.BoxHeightStyle.tight).first;
       final clipFinder = find.byKey(const ValueKey('reader-page-clip'));
       final clip = tester.widget<ClipRect>(clipFinder);
       final clipSize = tester.getSize(clipFinder);
@@ -762,8 +909,10 @@ void main() {
       expect(speech.state, TtsState.paused);
       expect(find.byKey(const ValueKey('reading-volume-slider')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
-      await tester.scrollUntilVisible(find.text(target.$2), 250, scrollable: find.byType(Scrollable).last);
-      await tester.tap(find.text(target.$2)); await tester.pumpAndSettle();
+      final voiceRow = target.$1 == TtsReader.systemVoice
+        ? find.byKey(const ValueKey('system-engine-')) : find.widgetWithText(ListTile, target.$2);
+      await _ensureVoiceRowVisible(tester, voiceRow);
+      await tester.tap(voiceRow); await tester.pumpAndSettle();
       expect(speech.voice, target.$1);
       expect(speech.state, TtsState.playing);
       expect(find.byKey(const ValueKey('reading-volume-slider')), findsNothing,
@@ -805,6 +954,13 @@ void main() {
   }
 
   testWidgets('paused cursor survives layout drift and foreground return never restarts speech', (tester) async {
+    var entryResets = 0;
+    final previousLayoutHook = ReaderScreen.onLayoutWorkForTesting;
+    ReaderScreen.onLayoutWorkForTesting = (event, count) {
+      previousLayoutHook?.call(event, count);
+      if (event == 'jointEntryReset') entryResets += count;
+    };
+    addTearDown(() => ReaderScreen.onLayoutWorkForTesting = previousLayoutHook);
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
     final storage = AppStorage();
@@ -869,6 +1025,7 @@ void main() {
     binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed); await tester.pumpAndSettle();
     expect(speech.currentIndex, 11); assertCursor(11);
     expect(speech.startCalls, starts); expect(speech.resumeCalls, resumes + 1);
+    expect(entryResets, greaterThan(0), reason: 'Viewport drift must retire overlapping old cuts before replanning');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
@@ -1050,6 +1207,49 @@ void main() {
     });
   }
 
+  for (final width in [320.0, 390.0]) {
+    for (final engine in [('iOS-婷婷', '婷婷'), ('AiService TTS', 'AiService')]) {
+      testWidgets('playback action slots remain equally spaced at width $width with ${engine.$1}', (tester) async {
+        tester.view.devicePixelRatio = 1; tester.view.physicalSize = Size(width, 844);
+        addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+        messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async => call.method == 'voiceCatalog'
+          ? {'defaultEngine': 'engine.local', 'engines': [{'id': 'engine.local', 'name': engine.$1}]} : null);
+        final storage = AppStorage();
+        final selected = '${SystemTtsClient.voicePrefix}${SystemTtsClient.engineVoiceIdentifier('engine.local', '')}';
+        await storage.saveSettings((ReadingSettings()..voice = selected).toJson());
+        await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: sample('equal-actions-$width-${engine.$2}'),
+          storage: storage, ttsReader: _TestSpeech())));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+        await tester.tapAt(Offset(width / 2, 360)); await tester.pumpAndSettle();
+        final row = tester.getRect(find.byKey(const ValueKey('reading-actions')));
+        final actions = [for (final key in ['reading-sleep', 'reading-voice', 'playback-settings', 'reading-exit'])
+          find.byKey(ValueKey(key))];
+        final boxes = actions.map(tester.getRect).toList();
+        final slotWidth = row.width / actions.length;
+        for (var index = 0; index < boxes.length; index++) {
+          expect(boxes[index].width, closeTo(slotWidth, .5));
+          expect(boxes[index].center.dx, closeTo(row.left + slotWidth * (index + .5), .5));
+          if (index > 0) expect(boxes[index].center.dx - boxes[index - 1].center.dx, closeTo(slotWidth, .5));
+          final caption = find.descendant(of: actions[index], matching: find.byType(Text)).first;
+          expect(tester.renderObject<RenderParagraph>(caption).text.style!.fontSize, 11,
+            reason: 'Long engine names must not change the font size of one action');
+        }
+        final voice = actions[1];
+        final caption = find.descendant(of: voice, matching: find.text(engine.$2));
+        expect(caption, findsOneWidget);
+        expect(tester.renderObject<RenderParagraph>(caption).didExceedMaxLines, isFalse,
+          reason: 'A local engine short name may use two lines within its equal-width slot');
+        expect(tester.getRect(caption).left, greaterThanOrEqualTo(boxes[1].left - .5));
+        expect(tester.getRect(caption).right, lessThanOrEqualTo(boxes[1].right + .5));
+        expect(tester.widget<Tooltip>(find.ancestor(of: voice, matching: find.byType(Tooltip)).first).message,
+          '音源：${engine.$1}');
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+      });
+    }
+  }
+
   testWidgets('playback preloading persists and custom timer accepts only 1 to 120 minutes', (tester) async {
     tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
@@ -1203,15 +1403,21 @@ void main() {
       reason: 'Restarting from an already open cleared-cache sheet must register its controller again.');
     ScaffoldMessenger.of(tester.element(find.byKey(const ValueKey('reader-body')))).hideCurrentSnackBar();
     await tester.pumpAndSettle(); await tester.tapAt(const Offset(195, 100)); await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('系统默认测试音色'), 250, scrollable: find.byType(Scrollable).last);
-    await tester.tap(find.text('系统默认测试音色')); await tester.pumpAndSettle();
+    final systemEngineRow = find.byKey(const ValueKey('system-engine-'));
+    await _ensureVoiceRowVisible(tester, systemEngineRow);
+    await tester.tap(systemEngineRow); await tester.pumpAndSettle();
     await tester.tapAt(const Offset(195, 360)); await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('reading-cache')), findsNothing);
-    expect(find.text('音源：系统默认测试音色'), findsOneWidget);
+    final voiceShortcut = find.byKey(const ValueKey('reading-voice'));
+    expect(find.descendant(of: voiceShortcut, matching: find.text('系统默认测试音色')), findsOneWidget);
+    expect(find.descendant(of: voiceShortcut, matching: find.text('音源：系统默认测试音色')), findsNothing);
+    expect(tester.widget<Tooltip>(find.ancestor(of: voiceShortcut, matching: find.byType(Tooltip)).first).message,
+      '音源：系统默认测试音色');
     await tester.tap(find.byKey(const ValueKey('reading-voice'))); await tester.pumpAndSettle();
-    final systemOption = find.widgetWithText(ListTile, '系统默认测试音色');
-    await tester.scrollUntilVisible(systemOption, 250, scrollable: find.byType(Scrollable).last);
-    expect(tester.widget<ListTile>(systemOption).trailing?.key, const ValueKey('pause-voice-__system_tts__'));
+    final systemOption = find.byKey(const ValueKey('system-engine-'));
+    await _ensureVoiceRowVisible(tester, systemOption);
+    expect(find.descendant(of: systemOption,
+      matching: find.byKey(const ValueKey('pause-voice-__system_tts__'))), findsOneWidget);
     expect(find.descendant(of: systemOption, matching: find.byIcon(Icons.download_outlined)), findsNothing);
     expect(find.descendant(of: systemOption, matching: find.byIcon(Icons.hourglass_empty)), findsOneWidget);
     expect(tester.widget<ListTile>(systemOption).subtitle, isNull);
@@ -1305,7 +1511,7 @@ void main() {
         for (final paragraph in tester.renderObjectList<RenderParagraph>(find.descendant(of: body, matching: find.byType(RichText)))) {
           if (!paragraph.hasSize) continue;
           final boxes = paragraph.getBoxesForSelection(TextSelection(baseOffset: 0,
-            extentOffset: paragraph.text.toPlainText().length), boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+            extentOffset: paragraph.text.toPlainText().length), boxHeightStyle: ui.BoxHeightStyle.tight);
           final topLeft = paragraph.localToGlobal(Offset.zero);
           for (final box in boxes) {
             final rect = box.toRect().shift(topLeft);
@@ -1455,8 +1661,10 @@ void main() {
       .where((p) => p.itemTrailingEdge > 0 && p.itemLeadingEdge < 1).map((p) => (p.index, p.itemLeadingEdge)).toList();
     final before = visible(), started = speech.startCalls, resumed = speech.resumeCalls;
     final toggle = find.byKey(const ValueKey('auto-extract-toc'));
+    final settingsScroll = find.descendant(of: find.byType(BottomSheet).last, matching: find.byType(Scrollable)).last;
+    await tester.scrollUntilVisible(toggle, 180, scrollable: settingsScroll); await tester.pumpAndSettle();
     expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
-    tester.widget<SwitchListTile>(toggle).onChanged!(false); await tester.pumpAndSettle();
+    await tester.tap(toggle); await tester.pumpAndSettle();
     expect(visible(), before, reason: 'Rebuilding only the TOC must preserve the first visible text line');
     expect(speech.startCalls, started); expect(speech.resumeCalls, resumed); expect(speech.state, TtsState.playing);
     expect((await storage.loadSettings())['autoExtractToc'], isFalse);
@@ -1469,6 +1677,128 @@ void main() {
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     await handler.playbackState.close(); await handler.mediaItem.close();
   });
+
+  for (final link in [
+    (name: 'url', prefix: 'https://', text: 'https://example.invalid/advertisement'),
+    (name: 'email', prefix: 'reader__', text: 'reader__example@example.invalid'),
+    (name: 'dotted-url', prefix: 'abc.', text: 'abc.example'),
+    (name: 'mixed-dotted-url', prefix: 'abc.', text: '中文abc.example中文'),
+  ]) {
+    for (final voice in [TtsReader.systemVoice, TtsReader.defaultVoice]) {
+      testWidgets('starting speech on an unfiltered link page preserves its first line ${link.name} $voice', (tester) async {
+        tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+        addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+        final spoken = <String>[], nativeRequests = <Map>[];
+        Future<void> nativeEvent(String name, Map data) async {
+          final done = Completer<void>();
+          messenger.handlePlatformMessage(SystemTtsClient.channel.name,
+            const StandardMethodCodec().encodeMethodCall(MethodCall(name, data)), (_) => done.complete());
+          await done.future;
+        }
+        messenger.setMockMethodCallHandler(SystemTtsClient.channel, (call) async {
+          if (call.method == 'initialize') return {'voiceName': '测试音色'};
+          if (call.method == 'speak') {
+            final data = call.arguments as Map; nativeRequests.add(data); spoken.add(data['text'] as String);
+            unawaited(Future<void>.microtask(() => nativeEvent('start', {'id': data['id']})));
+          }
+          return null;
+        });
+        final player = _PageStartAudioPlayer();
+        final speech = TtsReader(player: player, activateAudioSession: (_) async => true,
+          synthesize: (text, {required voice, required rate, required onWords, required cancelToken}) async {
+            spoken.add(text);
+            onWords([SpeechWord(startMicros: 0, durationMicros: 1000000, textStart: 0, textEnd: 1, text: text[0])]);
+            return Uint8List.fromList([1]);
+          });
+        final storage = AppStorage();
+        await storage.saveSettings((ReadingSettings()..voice = voice..pageTurnMode = 'tap'..pageTurnAnimation = 'off'
+          ..fontSize = 20..lineHeight = 1.5..firstLineIndent = false..mergeNonSentenceBreaks = false
+          ..prefetchSentences = 0..wordHighlightEnabled = true..informationFilter = true..informationFilterLevel = 'links').toJson());
+        final advert = List.generate(68, (index) => '${'字' * (index % 17)}请访问本站 ${link.text} 广告标记${index.toString().padLeft(2, '0')} ').join();
+        final book = Book(id: 'link-start-${link.name}-$voice', title: '网址页首', filePath: '', format: BookFormat.txt,
+          addedAt: DateTime(2026), chapters: [Chapter(title: '正文', paragraphs: [
+            Paragraph(display: List.filled(50, '前文正文。').join(), tts: '', sentences: const [], sentenceStartTts: const []),
+            Paragraph(display: advert, tts: '', sentences: const [], sentenceStartTts: const []),
+            Paragraph(display: List.filled(100, '后续正文。').join(), tts: '', sentences: const [], sentenceStartTts: const []),
+          ])]);
+        await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: book, storage: storage, ttsReader: speech)));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
+        final filter = find.byKey(const ValueKey('information-filter'));
+        final settingsScroll = find.descendant(of: find.byType(BottomSheet).last, matching: find.byType(Scrollable)).last;
+        await tester.scrollUntilVisible(filter, 180, scrollable: settingsScroll); await tester.pumpAndSettle();
+        await tester.tap(filter); await tester.pumpAndSettle();
+        expect((await storage.loadSettings())['informationFilter'], isFalse);
+        Navigator.of(tester.element(find.byType(BottomSheet).last)).pop(); await tester.pumpAndSettle();
+        final body = find.byKey(const ValueKey('reader-body'));
+        final indexed = tester.widget<ScrollablePositionedList>(body);
+        indexed.itemScrollController!.jumpTo(index: 2); await tester.pumpAndSettle();
+        final paragraph = find.byWidgetPredicate((widget) => widget is Text &&
+          (widget.textSpan?.toPlainText().replaceAll('\u200B', '').contains(link.text) ?? false)).first;
+        RenderParagraph render() => tester.renderObject<RenderParagraph>(paragraph);
+        Rect glyph(int sourceOffset) => render().getBoxesForSelection(TextSelection(
+          baseOffset: ReaderTypography.layoutOffset(advert, sourceOffset),
+          extentOffset: ReaderTypography.layoutOffset(advert, sourceOffset + 1)),
+          boxHeightStyle: ui.BoxHeightStyle.tight).first.toRect();
+        int? floor;
+        final ordinaryDomain = link.name.contains('dotted');
+        for (final match in RegExp(RegExp.escape(link.prefix)).allMatches(advert)) {
+          if (ordinaryDomain) {
+            // Use the actual row containing a domain, without requiring the
+            // domain's suffix to wrap. A previous line box may extend .1 px
+            // into the viewport while the intended row is fully visible.
+            final row = glyph(match.start);
+            if (row.top < 30) continue;
+            var first = match.start;
+            while (first > 0) {
+              if (advert[first - 1].trim().isEmpty) { first--; continue; }
+              if ((glyph(first - 1).top - row.top).abs() >= .5) break;
+              first--;
+            }
+            while (first < advert.length && advert[first].trim().isEmpty) { first++; }
+            if ((glyph(first).top - row.top).abs() >= .5 || !RegExp(r'[A-Za-z\u4E00-\u9FFF]').hasMatch(advert[first])) continue;
+            floor = first; break;
+          } else {
+            final next = match.end;
+            if (glyph(next).top > glyph(next - 1).top + .5) { floor = next; break; }
+          }
+        }
+        expect(floor, isNotNull, reason: 'The fixture needs a complete text row containing the chosen domain boundary');
+        final clip = find.byKey(const ValueKey('reader-page-clip'));
+        double topOfFloor() => render().localToGlobal(Offset(0, glyph(floor!).top)).dy - tester.getTopLeft(clip).dy;
+        final rowInset = ordinaryDomain ? .1 : 0.0;
+        unawaited(indexed.scrollOffsetController!.animateScroll(offset: topOfFloor() - rowInset, duration: const Duration(milliseconds: 1)));
+        await tester.pumpAndSettle();
+        expect(topOfFloor(), closeTo(rowInset, .02));
+        if (find.byTooltip('朗读').hitTestable().evaluate().isEmpty) {
+          await tester.tapAt(const Offset(195, 300)); await tester.pumpAndSettle();
+        }
+        final before = topOfFloor();
+        await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+        expect(topOfFloor(), closeTo(before, .5),
+          reason: 'Page preparation and the sentence callback must preserve the displayed first line at the URL boundary');
+        expect(spoken, isNotEmpty);
+        if (ordinaryDomain) {
+          final formatted = ReadingText.paragraph(advert);
+          final sentence = formatted.sentences[ReadingText.sentenceAt(formatted, floor!)];
+          final expected = const TextCleaner().clean(sentence.display.substring(floor! - sentence.displayStart)).tts;
+          expect(spoken.first, expected, reason: 'Speech must start at this complete visible row, not the preceding line');
+        } else {
+          expect(spoken.first, startsWith('example'));
+        }
+        if (voice == TtsReader.systemVoice) {
+          await nativeEvent('range', {'id': nativeRequests.last['id'], 'start': 0, 'end': 1});
+        } else {
+          player.positions.add(Duration.zero);
+        }
+        await tester.pumpAndSettle();
+        expect(topOfFloor(), closeTo(before, .5), reason: 'The first real word event must preserve the same visible page');
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+      });
+    }
+  }
 
   for (final voice in [TtsReader.systemVoice, TtsReader.defaultVoice]) {
   testWidgets('$voice speech starts at the visible line and manual pages keep its character offset', (tester) async {
@@ -1852,7 +2182,7 @@ void main() {
       for (final render in tester.renderObjectList<RenderParagraph>(find.descendant(of: body, matching: find.byType(RichText)))) {
         final origin = render.localToGlobal(Offset.zero);
         for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: render.text.toPlainText().length),
-          boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+          boxHeightStyle: ui.BoxHeightStyle.tight)) {
           final rect = box.toRect().shift(origin);
           if (rect.height > 2 && rect.width > 0.1 && rect.bottom > bodyRect.top + 0.5 && rect.top < bodyRect.bottom) rows.add(rect);
         }
@@ -1889,8 +2219,13 @@ void main() {
     expect(tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-animation'))).value, 'off');
     tester.widget<DropdownButton<String>>(find.byKey(const ValueKey('page-turn-animation'))).onChanged!('slide'); await tester.pumpAndSettle();
     expect((await storage.loadSettings())['pageTurnAnimation'], 'slide');
+    final settingsScroll = find.descendant(of: find.byType(BottomSheet).last, matching: find.byType(Scrollable)).last;
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('follow-system-rotation')), 160, scrollable: settingsScroll);
+    await tester.pumpAndSettle();
     tester.widget<SwitchListTile>(find.byKey(const ValueKey('follow-system-rotation'))).onChanged!(true); await tester.pumpAndSettle();
     expect(rotation().arguments, DeviceOrientation.values.map((value) => value.toString()).toList());
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('reading-screen-seconds')), 120, scrollable: settingsScroll);
+    await tester.pumpAndSettle();
     expect(tester.widget<DropdownButton<int>>(find.byKey(const ValueKey('reading-screen-seconds'))).items!.map((item) => item.value), [0, 60, 120, 300, 600, 1800]);
     tester.widget<DropdownButton<int>>(find.byKey(const ValueKey('reading-screen-seconds'))).onChanged!(120); await tester.pumpAndSettle();
     expect((await storage.loadSettings())['readingScreenSeconds'], 120);
@@ -1983,38 +2318,53 @@ void main() {
     final body = find.byKey(const ValueKey('reader-body'));
     final controller = tester.widget<ScrollablePositionedList>(body);
     final item = find.descendant(of: body, matching: find.byType(RichText));
-    List<Rect> rows() {
+    List<({int start, int end, Rect rect})> rows() {
       final paragraph = tester.renderObjectList<RenderParagraph>(item).firstWhere(
         (render) => render.text.toPlainText().replaceAll('\u200B', '').replaceAll('\uFFFC', '').startsWith('第1章第4段。'));
       final origin = paragraph.localToGlobal(Offset.zero) - tester.getTopLeft(body);
       final lines = <int, Rect>{};
       for (final box in paragraph.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: paragraph.text.toPlainText().length),
-        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
-        final rect = box.toRect().shift(origin);
-        if (rect.width <= 2) continue;
-        lines.update(rect.top.round(), (line) => line.expandToInclude(rect), ifAbsent: () => rect);
+        boxHeightStyle: ui.BoxHeightStyle.tight)) {
+        final rect = box.toRect();
+        if (rect.width <= 2 || rect.height < 2) continue;
+        final start = paragraph.getPositionForOffset(Offset(-1, rect.center.dy)).offset;
+        lines.update(start, (line) => line.expandToInclude(rect), ifAbsent: () => rect);
       }
-      return lines.values.toList()..sort((a, b) => a.top.compareTo(b.top));
+      return [for (final entry in lines.entries) (start: entry.key,
+        end: paragraph.getPositionForOffset(Offset(paragraph.size.width + 1, entry.value.center.dy)).offset,
+        rect: entry.value.shift(origin))]..sort((a, b) => a.rect.top.compareTo(b.rect.top));
     }
     controller.itemScrollController!.jumpTo(index: 4);
     await tester.pumpAndSettle();
-    final rowHeight = rows()[3].top - rows()[2].top;
+    final glyphHeight = rows()[2].rect.height;
     final fixedHeight = 320 - tester.getSize(body).height;
-    tester.view.physicalSize = Size(844, (fixedHeight + rowHeight * 1.15).roundToDouble());
+    tester.view.physicalSize = Size(844, (fixedHeight + glyphHeight * 1.15).roundToDouble());
     await tester.pumpAndSettle();
+    final bodyHeight = tester.getSize(body).height;
+    expect(rows().where((row) => row.rect.top >= -.25 && row.rect.bottom <= bodyHeight + .25),
+      hasLength(1), reason: 'The actual calibrated viewport fits one complete native row');
     for (final direction in [-1, 1]) {
       controller.itemScrollController!.jumpTo(index: 4);
       await tester.pumpAndSettle();
-      final offset = rows()[2].top + rowHeight * .65;
+      final original = rows();
+      final offset = original[2].rect.top + glyphHeight * .65;
+      var nearest = 0;
+      for (var row = 1; row < original.length; row++) {
+        if ((original[row].rect.top - offset).abs() < (original[nearest].rect.top - offset).abs()) nearest = row;
+      }
       final scroll = controller.scrollOffsetController!.animateScroll(offset: offset, duration: const Duration(milliseconds: 1));
       await tester.pump(); await tester.pump(const Duration(milliseconds: 16)); await scroll;
       await tester.pumpAndSettle();
       final before = rows();
       final viewportSize = tester.getSize(body);
       final clipBefore = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(viewportSize);
-      expect(before.where((row) => row.top >= -.25 && row.bottom <= viewportSize.height), isEmpty);
-      expect(clipBefore.bottom, closeTo(before[2].bottom, .25),
-        reason: 'A partially restored page must not show another incomplete row at the bottom');
+      final completeBefore = before.where((row) => row.rect.top >= -.25 && row.rect.bottom <= viewportSize.height + .25).toList();
+      expect(completeBefore, hasLength(1), reason: 'An injected partial restore normalizes to one complete actual row');
+      expect(completeBefore.single.start, original[nearest].start,
+        reason: 'Normalization retains the true native row nearest the injected viewport top');
+      expect(before[nearest].rect.top, closeTo(0, .25));
+      expect(clipBefore.bottom, closeTo(before[nearest].rect.bottom, .25),
+        reason: 'The normalized clip ends exactly at the current complete glyph row');
       final y = tester.getCenter(body).dy;
       await tester.tapAt(Offset(direction < 0 ? 100 : 790, y));
       final outgoing = find.byKey(const ValueKey('page-outgoing-transform'));
@@ -2025,13 +2375,18 @@ void main() {
       }
       expect(outgoing, findsNothing);
       final after = rows();
-      expect(after[2 + direction].top, closeTo(0, .25),
+      expect(after[nearest + direction].rect.top, closeTo(0, .25),
         reason: 'One tap must land on the immediately adjacent row, even after an in-between restore');
       final viewport = tester.getRect(body);
       final clip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(viewport.size);
-      final visible = after.where((row) => row.top < clip.bottom - .5 && row.bottom > .5);
-      expect(visible.map((row) => row.top.round()).toSet(), hasLength(1));
-      for (final row in visible) { expect(row.bottom, lessThanOrEqualTo(clip.bottom + .5)); }
+      final visible = after.where((row) => row.rect.top < clip.bottom - .5 && row.rect.bottom > .5).toList();
+      expect(visible, hasLength(1));
+      expect(visible.single.start, before[nearest + direction].start,
+        reason: 'The new source row is the exact immediate neighbour, without skipping or repeating the old row');
+      expect(visible.single.start, isNot(completeBefore.single.start));
+      expect(visible.single.end, before[nearest + direction].end);
+      expect(clip.bottom, closeTo(visible.single.rect.bottom, .25));
+      expect(visible.single.rect.bottom, lessThanOrEqualTo(clip.bottom + .5));
     }
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
@@ -2064,26 +2419,62 @@ void main() {
       await tester.pumpWidget(RepaintBoundary(key: preview, child: MaterialApp(home: ReaderScreen(book: book, storage: storage))));
       await tester.pumpAndSettle();
       final body = find.byKey(const ValueKey('reader-body'));
+      final renderItems = <RenderParagraph, int>{};
+      final rowKeys = <String, String>{};
+      final jointCuts = <String, List<String>>{};
+      final precedingPlanHook = ReaderScreen.onJointPagePlanForTesting;
+      ReaderScreen.onJointPagePlanForTesting = (chapter, plan, keys) {
+        precedingPlanHook?.call(chapter, plan, keys);
+        for (final page in plan.pages) { jointCuts[keys[page.first]] = keys.sublist(page.first, page.end); }
+      };
+      addTearDown(() => ReaderScreen.onJointPagePlanForTesting = precedingPlanHook);
       (int, double) viewportAnchor() {
         final visible = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value
           .where((position) => position.itemTrailingEdge > 0 && position.itemLeadingEdge < 1).toList()
             ..sort((a, b) => a.index.compareTo(b.index));
         return (visible.first.index, visible.first.itemLeadingEdge);
       }
+      List<(RenderParagraph, Offset)> positionedParagraphs() {
+        final paragraphs = <int, RenderParagraph>{};
+        for (final element in find.descendant(of: body, matching: find.byType(RichText)).evaluate()) {
+          int? index;
+          element.visitAncestorElements((ancestor) {
+            final key = ancestor.widget.key;
+            if (key is ValueKey<int>) { index = key.value; return false; }
+            return true;
+          });
+          final render = element.findRenderObject();
+          final itemIndex = index;
+          if (itemIndex != null && render is RenderParagraph && render.attached) {
+            paragraphs[itemIndex] = render; renderItems[render] = itemIndex;
+          }
+        }
+        final visible = tester.widget<ScrollablePositionedList>(body).itemPositionsNotifier!.itemPositions.value
+          .where((position) => position.itemTrailingEdge > 0 && position.itemLeadingEdge < 1 && paragraphs.containsKey(position.index));
+        final anchor = paragraphs[visible.first.index]!;
+        final viewport = RenderAbstractViewport.of(anchor);
+        final origin = anchor.localToGlobal(Offset.zero).dy - viewport.getOffsetToReveal(anchor, 0).offset;
+        return [for (final render in paragraphs.values)
+          if (RenderAbstractViewport.maybeOf(render) == viewport)
+            (render, Offset(render.localToGlobal(Offset.zero).dx, viewport.getOffsetToReveal(render, 0).offset + origin))];
+      }
       List<(String, Rect)> laidOutRows() {
         final bounds = tester.getRect(body), result = <(String, Rect)>[];
-        for (final render in tester.renderObjectList<RenderParagraph>(find.descendant(of: body, matching: find.byType(RichText)))) {
-          final origin = render.localToGlobal(Offset.zero);
+        for (final (render, origin) in positionedParagraphs()) {
           if (origin.dy - bounds.top > bounds.height * 2 || origin.dy + render.size.height < bounds.top - bounds.height) continue;
           final text = render.text.toPlainText(), lines = <int, Rect>{};
           for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
-            boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+            boxHeightStyle: ui.BoxHeightStyle.tight)) {
             final rect = box.toRect();
             if (rect.width < 0.01 || rect.height < 2) continue;
             final start = render.getPositionForOffset(Offset(-10000, rect.center.dy)).offset;
             lines[start] = lines[start]?.expandToInclude(rect) ?? rect;
           }
-          for (final line in lines.entries) { result.add(('$text/${line.key}', line.value.shift(origin))); }
+          for (final line in lines.entries) {
+            final id = '$text/${line.key}';
+            rowKeys[id] = '${renderItems[render]}/${line.key}';
+            result.add((id, line.value.shift(origin)));
+          }
         }
         result.sort((a, b) => a.$2.top.compareTo(b.$2.top));
         return result;
@@ -2093,10 +2484,9 @@ void main() {
         final localClip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(bounds.size);
         final clip = localClip.shift(bounds.topLeft);
         final visible = <Rect>[];
-        for (final render in tester.renderObjectList<RenderParagraph>(find.descendant(of: body, matching: find.byType(RichText)))) {
-          final origin = render.localToGlobal(Offset.zero);
+        for (final (render, origin) in positionedParagraphs()) {
           for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: render.text.toPlainText().length),
-            boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+            boxHeightStyle: ui.BoxHeightStyle.tight)) {
             final row = box.toRect().shift(origin);
             if (row.width < 0.01 || row.height < 2 || row.bottom <= clip.top + 0.5 || row.top >= clip.bottom - 0.5) continue;
             visible.add(row);
@@ -2128,6 +2518,7 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('contents-handle'))); await tester.pumpAndSettle();
         final entry = find.byKey(ValueKey('toc-entry-$chapter'));
         await tester.ensureVisible(entry); await tester.pumpAndSettle();
+        jointCuts.clear();
         await tester.tap(entry); await tester.pumpAndSettle();
         expectWholeVisibleRows();
         for (var page = 0; page < 3; page++) {
@@ -2150,14 +2541,29 @@ void main() {
           expect(outgoing, findsNothing);
           expect(viewportAnchor(), isNot(before), reason: 'Each left-side tap must really move to the previous page');
           final landed = laidOutRows().firstWhere((row) => row.$2.bottom > tester.getRect(body).top + 0.5);
-          if (target != null) {
+          final actualCut = jointCuts[rowKeys[landed.$1]];
+          if (actualCut != null) {
+            final actualBounds = tester.getRect(body);
+            final actualClip = tester.widget<ClipRect>(find.byKey(const ValueKey('reader-page-clip'))).clipper!.getClip(actualBounds.size);
+            final actualKeys = laidOutRows().where((row) => row.$2.top >= actualBounds.top - .5 &&
+              row.$2.bottom <= actualBounds.top + actualClip.bottom + .5).map((row) => rowKeys[row.$1]).toList();
+            expect(actualKeys, actualCut, reason: 'The actual TOC-back page must implement its complete joint slice');
+          } else if (target != null) {
             expect(landed.$1, target, reason: 'The actual first row must remain the selected previous-page row after the indexed list settles');
           } else if (previous.isEmpty) {
-            expect(landed.$1.replaceAll('\u200B', '').replaceAll('\uFFFC', ''), contains('第$chapter章第7段。'),
-              reason: 'An uncached chapter boundary must prepare the preceding chapter final paragraph before paging');
+            // This fixture has one title and seven paragraphs per chapter.
+            // Later taps may start in paragraph 6, not at the chapter title.
+            final precedingItem = before.$1 - 1;
+            expect(precedingItem, greaterThanOrEqualTo(0));
+            final precedingChapter = precedingItem ~/ 8;
+            final precedingParagraph = precedingItem % 8;
+            final precedingText = precedingParagraph == 0 ? book.chapters[precedingChapter].title
+              : book.chapters[precedingChapter].paragraphs[precedingParagraph - 1].display;
+            expect(landed.$1.replaceAll('\u200B', '').replaceAll('\uFFFC', ''), contains(precedingText),
+              reason: 'An uncached item boundary must prepare the actual immediate preceding paragraph or title before paging');
             expect(find.descendant(of: find.byKey(const ValueKey('reader-chapter-header')),
-              matching: find.text('第$chapter章 山间来信')), findsOneWidget,
-              reason: 'The post-layout source anchor must update the chapter header after paging across a TOC boundary');
+              matching: find.text(book.chapters[precedingChapter].title)), findsOneWidget,
+              reason: 'The post-layout source anchor must update the chapter header for the actual preceding item');
           }
           expect(landed.$2.top, closeTo(tester.getRect(body).top, 0.25),
             reason: 'The selected row must land at zero actual pixel offset, not a partial row');
@@ -2200,7 +2606,7 @@ void main() {
         final origin = render.localToGlobal(Offset.zero);
         final text = render.text.toPlainText();
         final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: text.length),
-          boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+          boxHeightStyle: ui.BoxHeightStyle.tight);
         final seen = <int>{};
         for (final box in boxes) {
           if (box.right - box.left < 0.01 || box.bottom - box.top < 2) continue;
@@ -2298,9 +2704,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
     final filter = find.byKey(const ValueKey('information-filter'));
-    tester.widget<SwitchListTile>(filter).onChanged!(true); await tester.pumpAndSettle();
+    final settingsScroll = find.descendant(of: find.byType(BottomSheet).last, matching: find.byType(Scrollable)).last;
+    await tester.scrollUntilVisible(filter, 200, scrollable: settingsScroll); await tester.pumpAndSettle();
+    await tester.tap(filter); await tester.pumpAndSettle();
     expect(firstLine().$1, before.$1); expect(firstLine().$2, closeTo(before.$2, 1));
-    tester.widget<SwitchListTile>(filter).onChanged!(false); await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(filter, 200, scrollable: settingsScroll); await tester.pumpAndSettle();
+    await tester.tap(filter); await tester.pumpAndSettle();
     expect(firstLine().$1, before.$1); expect(firstLine().$2, closeTo(before.$2, 1));
     await tester.tapAt(const Offset(20, 120)); await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reader-menu'))); await tester.pumpAndSettle();
@@ -2317,6 +2726,17 @@ void main() {
     expect(firstLine().$1, before.$1); expect(firstLine().$2, closeTo(before.$2, 1));
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   });
+}
+
+Future<void> _ensureVoiceRowVisible(WidgetTester tester, Finder row) async {
+  final sheet = find.byType(BottomSheet).last;
+  final scroll = find.descendant(of: sheet, matching: find.byType(Scrollable)).last;
+  await tester.scrollUntilVisible(row, 250, scrollable: scroll);
+  await tester.ensureVisible(row); await tester.pumpAndSettle();
+  final bounds = tester.getRect(scroll).intersect(tester.getRect(sheet));
+  final actual = tester.getRect(row);
+  expect(actual.top, greaterThanOrEqualTo(bounds.top - 0.5), reason: 'The complete voice row must be inside the sheet scrolling area before interaction');
+  expect(actual.bottom, lessThanOrEqualTo(bounds.bottom + 0.5), reason: 'Finding a cached voice label below the sheet is not enough to select it');
 }
 
 Future<void> _captureReaderPreview(WidgetTester tester, GlobalKey key, String name) async {
@@ -2358,7 +2778,22 @@ class _GatedScanStore extends TtsCacheStore {
 class _CountingSyncEngine extends SyncEngine {
   int calls = 0;
   _CountingSyncEngine(AppStorage storage) : super(storage: storage, annotations: AnnotationStore());
-  @override Future<SyncReport> sync() async { calls++; return SyncReport()..ok = true; }
+  @override Future<SyncReport> sync({String mode = 'both', bool dryRun = false,
+    Map<String, dynamic>? expectedSettings}) async { calls++; return SyncReport()..ok = true; }
+}
+
+class _PageStartAudioPlayer implements AudioPlayer {
+  final positions = StreamController<Duration>.broadcast();
+  @override PositionUpdater? positionUpdater;
+  @override Stream<void> get onPlayerComplete => const Stream<void>.empty();
+  @override Stream<Duration> get onPositionChanged => positions.stream;
+  @override Future<Duration?> getCurrentPosition() async => Duration.zero;
+  @override Future<void> play(Source source, {double? volume, double? balance, AudioContext? ctx,
+    Duration? position, PlayerMode? mode}) async {}
+  @override Future<void> stop() async {}
+  @override Future<void> pause() async {}
+  @override Future<void> dispose() async { positionUpdater?.dispose(); await positions.close(); }
+  @override dynamic noSuchMethod(Invocation invocation) => throw StateError('Unexpected audio call: ${invocation.memberName}');
 }
 
 class _TestSpeech extends TtsReader {

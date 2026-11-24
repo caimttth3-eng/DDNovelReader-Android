@@ -167,7 +167,8 @@ void main() {
     await scrollTo(expand, delta: -180);
     expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pause-apply'))).onPressed, isNotNull);
     expect(tester.getRect(find.byKey(const ValueKey('pause-apply'))).center.dy,
-      closeTo(tester.getRect(expand).center.dy, 1), reason: 'Apply remains on the expanded section header row');
+      closeTo(tester.getRect(find.byKey(const ValueKey('pause-reset'))).center.dy, 1),
+      reason: 'Reset and Apply share one action row');
     if (Platform.isLinux && Platform.environment['DD_READER_CAPTURE_UI_PREVIEWS'] == '1') {
       await tester.runAsync(() async {
         final boundary = preview.currentContext!.findRenderObject()! as RenderRepaintBoundary;

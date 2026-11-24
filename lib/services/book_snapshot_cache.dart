@@ -8,6 +8,7 @@ import '../models/progress.dart';
 import 'app_storage.dart';
 import 'book_parser.dart';
 import 'reader_preparation.dart';
+import 'reader_headings.dart';
 
 class BookSnapshot {
   final Book source;
@@ -28,7 +29,7 @@ class SnapshotLookup {
 class BookSnapshotCache {
   static final shared = BookSnapshotCache();
   // Bump when parser/preparation semantics or the serialized graph change.
-  static const schema = 3;
+  static const schema = 4;
   static const maxBytes = 64 * 1024 * 1024;
   final String? directoryPath;
   int _generation = 0;
@@ -150,7 +151,9 @@ Future<(Map<String, dynamic>?, BookSnapshot?)> _readSnapshot(String path, List<O
         entry.displayOffset > paragraphs[entry.paragraphIndex].display.length) return (before, null);
     }
     if (!_same(before, await _stat(key[2] as String))) return (null, null);
-    return (before, BookSnapshot(source, PreparedReadingBook(book, data['fingerprint'] as String, maps, toc, anchors, titles)));
+    final headings = ReaderHeadings(book, autoExtractToc: key[8] as bool);
+    return (before, BookSnapshot(source, PreparedReadingBook(book, data['fingerprint'] as String, maps, toc, anchors, titles,
+      headings: headings, fontProbeText: ReaderPreparation.collectFontProbeText(book, headings: headings))));
   } catch (_) { return (before, null); }
 }
 

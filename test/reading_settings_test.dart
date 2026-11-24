@@ -5,6 +5,121 @@ import 'package:duoduo_langdu/services/speech_breaks.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('paragraph spacing exposes four integer levels and defaults independently of indentation', () {
+    expect(ReadingSettings.paragraphSpacingLevels, [0, 1, 2, 3]);
+    expect(ReadingSettings().paragraphSpacingLevel, 0);
+    expect(ReadingSettings.fromJson(null).paragraphSpacingLevel, 0);
+    expect(ReadingSettings.fromJson({}).paragraphSpacingLevel, 0);
+    for (final indent in [false, true]) {
+      final old = ReadingSettings.fromJson({'firstLineIndent': indent, 'fontSize': 39, 'lineHeight': 1.6});
+      expect(old.paragraphSpacingLevel, 0);
+      expect(old.firstLineIndent, indent);
+      expect(old.fontSize, 39); expect(old.lineHeight, 1.6);
+    }
+  });
+  test('old spacing models migrate once to zero rather than enlarging their persisted levels', () {
+    for (final oldLevel in ReadingSettings.paragraphSpacingLevels) {
+      final migrated = ReadingSettings.fromJson({'paragraphSpacingLevel': oldLevel});
+      expect(migrated.paragraphSpacingLevel, 0);
+      expect(migrated.toJson()['paragraphSpacingLevel'], 0);
+      expect(migrated.toJson()['paragraphSpacingModel'], 'fixed');
+      expect(ReadingSettings.fromJson(migrated.toJson()).paragraphSpacingLevel, 0);
+    }
+    for (final legacy in <num>[0, 0.0, -0.0, .05, .1, .25, .5, 1, 1.0]) {
+      final migrated = ReadingSettings.fromJson({'paragraphSpacing': legacy});
+      expect(migrated.paragraphSpacingLevel, 0);
+      expect(migrated.toJson()['paragraphSpacingLevel'], 0);
+      expect(migrated.toJson()['paragraphSpacingModel'], 'fixed');
+      expect(migrated.toJson().containsKey('paragraphSpacing'), isFalse);
+      expect(ReadingSettings.fromJson(migrated.toJson()).paragraphSpacingLevel, 0);
+    }
+    for (final other in <Object?>[null, false, '0', '0.5', -1, .05, .1, .15, .75, 2,
+      double.nan, double.infinity, double.negativeInfinity, {}, []]) {
+      final restored = ReadingSettings.fromJson({'paragraphSpacing': other});
+      expect(restored.paragraphSpacingLevel, 0);
+      expect(ReadingSettings.fromJson(restored.toJson()).paragraphSpacingLevel, 0,
+        reason: 'An unsupported old value must migrate once to the new zero default');
+    }
+  });
+  test('new spacing level accepts only integer levels and takes precedence over legacy data', () {
+    for (final value in ReadingSettings.paragraphSpacingLevels) {
+      expect(ReadingSettings.normalizeParagraphSpacingLevel(value), value);
+      final settings = ReadingSettings.fromJson({'paragraphSpacingModel': 'fixed',
+        'paragraphSpacingLevel': value, 'paragraphSpacing': .5});
+      expect(settings.paragraphSpacingLevel, value);
+      expect(settings.toJson()['paragraphSpacingModel'], 'fixed');
+      expect(ReadingSettings.fromJson(settings.toJson()).paragraphSpacingLevel, value);
+    }
+    for (final invalid in <Object?>[
+      null, false, true, '', '0', '1', '2', '3', {}, [],
+      double.nan, double.infinity, double.negativeInfinity,
+      -1, 4, 25, 0.0, 1.0, 2.0, 3.0, .25, .5, 1.5,
+    ]) {
+      expect(ReadingSettings.normalizeParagraphSpacingLevel(invalid), 0, reason: 'Unsupported level $invalid must use the default');
+      expect(ReadingSettings.fromJson({'paragraphSpacingModel': 'fixed',
+        'paragraphSpacingLevel': invalid, 'paragraphSpacing': .5}).paragraphSpacingLevel, 0,
+        reason: 'An invalid present new key must not fall back to a legacy ratio');
+    }
+    expect(ReadingSettings.fromJson({'paragraphSpacingModel': 'fixed', 'paragraphSpacing': .5}).paragraphSpacingLevel, 0);
+    for (final marker in <Object?>[null, '', 'adaptive', 'Fixed', 1, 2, true, false, {}, []]) {
+      expect(ReadingSettings.fromJson({'paragraphSpacingModel': marker, 'paragraphSpacingLevel': 2}).paragraphSpacingLevel, 0,
+        reason: 'An absent or unrecognized model must not amplify an old level');
+    }
+  });
+  test('upgrading old level two resets once and a later fixed-model user choice survives restart', () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = AppStorage();
+    await storage.saveSettings({'paragraphSpacingLevel': 2, 'fontSize': 39, 'lineHeight': 1.6});
+    final upgraded = ReadingSettings.fromJson(await storage.loadSettings());
+    expect(upgraded.paragraphSpacingLevel, 0);
+    await storage.saveSettings(upgraded.toJson());
+    final restarted = ReadingSettings.fromJson(await AppStorage().loadSettings());
+    expect(restarted.paragraphSpacingLevel, 0);
+    restarted.paragraphSpacingLevel = 2;
+    await storage.saveSettings(restarted.toJson());
+    final raw = await AppStorage().loadSettings();
+    expect(raw['paragraphSpacingModel'], 'fixed');
+    expect(ReadingSettings.fromJson(raw).paragraphSpacingLevel, 2,
+      reason: 'The upgrade migration must never repeatedly overwrite a choice made in the new model');
+    expect(ReadingSettings.fromJson(raw).fontSize, 39);
+    expect(ReadingSettings.fromJson(raw).lineHeight, 1.6);
+  });
+  test('paragraph spacing serializes a valid level after an invalid direct integer assignment', () {
+    for (final invalid in [-1, 4, 100]) {
+      final settings = ReadingSettings()..paragraphSpacingLevel = invalid;
+      expect(settings.toJson()['paragraphSpacingLevel'], 0);
+      expect(settings.toJson().containsKey('paragraphSpacing'), isFalse);
+      expect(ReadingSettings.fromJson(settings.toJson()).paragraphSpacingLevel, 0);
+    }
+  });
+  test('paragraph spacing copies and persists across storage instances without changing indentation or speech settings', () async {
+    SharedPreferences.setMockInitialValues({});
+    await AppStorage().saveSettings({'independentSyncPreference': 'preserve'});
+    for (final spacing in ReadingSettings.paragraphSpacingLevels) {
+      for (final indent in [false, true]) {
+        final settings = ReadingSettings()..paragraphSpacingLevel = spacing..firstLineIndent = indent
+          ..fontSize = 39..lineHeight = 1.6..voice = '__system_tts__'..speechRate = 1.4;
+        final copy = ReadingSettings.fromJson(settings.toJson());
+        copy.firstLineIndent = !indent;
+        expect(copy.paragraphSpacingLevel, spacing);
+        expect(settings.firstLineIndent, indent, reason: 'Copying settings must not mutate the original');
+        await AppStorage().saveSettings(settings.toJson());
+        await AppStorage().saveBookSpeech('paragraph-spacing-book', voice: '__system_tts__', rate: 2.4);
+        await AppStorage().saveSettings({'themeIndex': 2});
+        final recreated = AppStorage();
+        final raw = await recreated.loadSettings();
+        final restored = await recreated.loadReadingSettings('paragraph-spacing-book');
+        expect(raw['paragraphSpacingLevel'], spacing);
+        expect(raw['paragraphSpacingModel'], 'fixed');
+        expect(raw.containsKey('paragraphSpacing'), isFalse);
+        expect(raw['independentSyncPreference'], 'preserve');
+        expect(restored.paragraphSpacingLevel, spacing);
+        expect(restored.firstLineIndent, indent);
+        expect(restored.fontSize, 39); expect(restored.lineHeight, 1.6); expect(restored.themeIndex, 2);
+        expect(restored.voice, '__system_tts__'); expect(restored.speechRate, 2.4);
+      }
+    }
+  });
   test('per-book voice and rate override global settings without overwriting another book', () async {
     SharedPreferences.setMockInitialValues({});
     final storage = AppStorage();
@@ -114,6 +229,35 @@ void main() {
     expect(settings.hasVoiceSpeechPauses('zh-CN-YunxiNeural'), isFalse);
     expect(settings.speechPausesForVoice('zh-CN-YunxiNeural'), const SpeechPauseSettings());
   });
+  test('system engine quality filter defaults on and ignores malformed preferences', () {
+    expect(ReadingSettings().systemVoiceEnhancedOnly, isTrue);
+    expect(ReadingSettings.fromJson(null).systemVoiceEnhancedOnly, isTrue);
+    expect(ReadingSettings.fromJson({}).systemVoiceEnhancedOnly, isTrue);
+    for (final invalid in <Object?>[null, '', 'true', 'false', 0, 1, {}, []]) {
+      expect(ReadingSettings.fromJson({'systemVoiceEnhancedOnly': invalid}).systemVoiceEnhancedOnly, isTrue);
+    }
+  });
+  for (final enhancedOnly in [false, true]) {
+    test('system engine quality filter persists $enhancedOnly across new settings and storage instances', () async {
+      SharedPreferences.setMockInitialValues({});
+      final storage = AppStorage();
+      await storage.saveSettings({'independentSyncPreference': 'preserve'});
+      final settings = ReadingSettings.fromJson(await storage.loadSettings())
+        ..systemVoiceEnhancedOnly = enhancedOnly..fontSize = 36;
+      await storage.saveSettings(settings.toJson());
+      await AppStorage().saveBookSpeech('filter-book', voice: '__system_tts__', rate: 2.4);
+      await AppStorage().saveSettings({'themeIndex': 2});
+      final recreated = AppStorage();
+      final raw = await recreated.loadSettings();
+      expect(raw['systemVoiceEnhancedOnly'], enhancedOnly);
+      expect(raw['independentSyncPreference'], 'preserve');
+      final restored = await recreated.loadReadingSettings('filter-book');
+      expect(restored.systemVoiceEnhancedOnly, enhancedOnly);
+      expect(restored.fontSize, 36); expect(restored.themeIndex, 2);
+      expect(restored.voice, '__system_tts__'); expect(restored.speechRate, 2.4);
+      expect(ReadingSettings.fromJson(restored.toJson()).systemVoiceEnhancedOnly, enhancedOnly);
+    });
+  }
   test('system media spoken text defaults off and persists only explicit boolean choices', () async {
     SharedPreferences.setMockInitialValues({});
     expect(ReadingSettings().showSystemMediaText, isFalse);

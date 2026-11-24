@@ -210,3 +210,89 @@
 本轮按总根/项目 AGENTS 沿用唯一源码、便携固定工具、Prepare lease、SDK 四份包身份和 16B 缓存只读护栏；签名凭据只由既有本地脚本消费，未展示或外发。LocalApk 清退旧 1.3.9 完整包 5 文件、19,761,536 字节，及匹配签名 staging 6 文件、19,892,714 字节，cleanupPending 为空。Finalize 清退自有测试输出 13 文件、108,126,144 字节，Prepare lease 内精确退役 `voice140-target-initial.log`、`voice140-target-second.log`、`voice140-analyze-initial.log`、`voice140-tests-final.log`、`voice140-tests-confirmed.log`、`voice140-analyze-final.log` 六份已替代日志、266,818 字节。当前符号 4,008,656 字节和增量输出保留；前述 17 份历史待办没有重试清理。
 
 最终证据在本实例 temp 的 `voice140-tests-passed.log`、`voice140-model-confirmed.log`、`voice140-analyze-confirmed.log`、`voice140-delivery.log`；最新 SDK 审计由本轮入口更新。完整包位置及限制见 [1.3.10 交付说明](releases/v1.3.10.md)。未生成截图、安装设备、在线构建或远端发布 APK/Release；不同厂商 TTS 引擎实际输出和 iOS 仍未验收。网络路由及远程 SHA 复核确认本人原 master 为 `791ed37`，原作者仍为 `514661e`；沿用用户授权的本人 master 和开放 PR #6 路径。
+
+## 1.3.11（45）本地引擎与菜单修订（2026-11-21）
+
+用户已明确纠正提交权限：今后未获明确指令不提交、不推送、不创建或更新 PR；此前 PR #6 已按用户要求关闭。本轮只在唯一工作区修改并交付本地 APK，HEAD 保持 `4dc2d62286430ddc7e66cc3816e788757971e22f`，未暂存或提交源码。
+
+引擎与引擎内部语言分层处理：只选择引擎，不展示或展开无法可靠验证的内部条目。用户确认“仅显示优化音质”按各引擎默认音色标记筛选，开关放在本地语音标题下，管理系统音色入口保留。AiService 伪报较多语言不构成串用婷婷的证据；本轮不改播放路由或宣称真实外语能力。引擎目录请求不向 Flutter 返回完整语言表，合并请求仍有界复用探测，完整音色请求另行交接；默认 Voice API 内部仍可能读取引擎数据，不将其超时或质量标记解释为真实声学能力验收。
+
+重置与应用并排，重置确认后直接保存，取消不变；圆点按有效值比较默认值，不按配置记录存在与否判断。三主菜单统一 85% 高度、固定左标题、16 内容边距、右侧操作，无内容分隔线与展开边框，背景和子菜单/确认框采用主题色并取消 surface tint。
+
+最终完整套件 **523 通过、8 可选探测跳过**，Analyze exit 0、无 error（180 warning/info）。使用子代理分别处理样式回归、文档和只读复查，由主流程独占 Prepare 运行测试/构建；旧测试改为按真实滚动操作，时间序列化断言仅放宽 1 微秒机器误差，删除/幂等断言仍严格。实际 DeliverApk 为 2 分 14 秒，421 任务（35 执行、386 已最新），固定签名、独立验签、LocalApk 接收和 SDK 全树审计通过。
+
+包位于 `_releases/ddnovelreader/v1.3.11/`，19,880,465 字节，SHA-256 `243ccb83ef24d195714c8ce7a1b3bfbba00ef2515cc98954b57e65e4e986957c`。旧 1.3.10 完整包 5 文件、19,892,611 字节及本次签名 staging 6 文件、19,892,714 字节已由原入口清退，cleanupPending 为空。Finalize 清退宿主测试输出 13 文件、127,599,376 字节；Prepare lease 内退役本轮九份中间日志、424,306 字节：`voice-filter-reset-tests.log`、`engine-reset-tests-final.log`、`engine-reset-analyze.log`、`engine-quality-tests-full.log`、`settings-unified-analyze-initial.log`、`settings-unified-tests-full.log`、`settings-unified-tests-confirmed.log`、`settings-unified-analyze-confirmed.log`、`settings-unified-android-build.log`。当前必要符号 4,010,048 字节和增量输出继续复用；之前 17 份待协调/拒绝目标没有重试清理。
+
+最终日志在本实例 temp 的 `settings1311-tests-final.log`、`settings1311-analyze-final.log`、`settings1311-delivery.log`，最新 SDK 前后审计由本轮入口更新。详细成品与限制见 [1.3.11 交付说明](releases/v1.3.11.md)。没有安装、截图、线上构建、源码推送或远端 Release，真机及 iOS 未验收。
+
+## 1.3.12（46）菜单层级、筛选记忆与本地音源短名（2026-11-21）
+
+按用户后续反馈恢复重点色分组标题，统一主标题 20、分组及普通文字 16、说明 14，仅在主要层级边界分隔；浅色菜单恢复白底，深色保留中性深灰，阅读纸张背景独立。三主菜单仍统一 85% 屏高及对齐。“仅显示优化音质”通过现有全局设置持久化，其他设置及按书更新不会覆盖该偏好。本地音源控制栏按钮冷启动即可从引擎元数据提取关键词，增加宽度并保留完整名称提示，不需先打开音源设置，不初始化/探测或切换播放引擎。目录等待在退出时取消并忽略迟到结果。
+
+最终完整 Flutter 套件 **536 通过、8 可选探测跳过**，Analyze exit 0、无 error（181 warning/info）。新增实际文字样式/颜色、主题动画、筛选跨页面和重新加载、320 窄屏关键词及未完成目录请求退出的回归。实际离线 DeliverApk 成功（2 分 12 秒，421 任务：38 执行、383 已最新），固定签名、独立验签、SDK 全树前后审计及 LocalApk 接收通过。包 19,880,465 字节，SHA-256 `46ccbf4ab4a498eefb63a947f94577499e7957a10ed9b37c6802a4075594e869`；固定证书及依赖锁不变。
+
+原入口清退旧 1.3.11 包 5 文件、19,892,611 字节及本次匹配签名 staging 6 文件、19,892,714 字节，cleanupPending 为空。Finalize 清退自有测试输出 13 文件、121,666,888 字节；Prepare lease 内精确退役 `menus1312-tests-initial.log`、`menus1312-theme-transition.log`、`menus1312-theme-transition-confirmed.log`、`menus1312-tests-confirmed.log`、`menus1312-shortcuts-confirmed.log`、`menus1312-tests-final.log` 六份本轮已替代日志、845,476 字节。必要符号 4,011,576 字节及增量缓存保留；历史 17 项保持原拒绝/待协调状态，没有重试清理。
+
+成品见 [1.3.12 交付说明](releases/v1.3.12.md)，最终日志位于本实例 temp 的 `menus1312-tests-passed.log`、`menus1312-analyze-final.log`、`menus1312-delivery.log`，SDK 前后审计由原入口更新。本轮无暂存、提交、推送或 PR 操作，HEAD 仍为 `4dc2d62286430ddc7e66cc3816e788757971e22f`；没有安装设备、生成截图、线上构建或远端发布，真机及 iOS 未验收。
+
+## 1.3.13（47）中途过渡构建（2026-11-21）
+
+恢复四个按钮等宽等距，并在 Android 播放出口解除旧记录隐藏的固定音色绑定后，已完成过渡包的实际验证：545 通过、8 可选探测跳过，Analyze exit 0、无 error（181 warning/info），离线 DeliverApk 2 分 12 秒、421 任务（35 执行、386 已最新）。固定签名、独立验签、SDK 全树审计和 LocalApk 接收通过，包 19,880,465 字节，SHA-256 `4cb3740897cdd349665881b6ab5aece9bbd6b3c19962211eab4c94aa6b3477df`，cleanupPending 为空。接收清退旧 1.3.12 完整包 5 文件、19,892,611 字节及匹配签名 staging 6 文件、19,892,714 字节。
+
+构建途中用户追加已安装语言选择、普通网址起读行定位和通知原文分段要求，因此该过渡包不代表这些新增功能已经验证。随后自然结清消费者继续开发，最终完整包由下述 1.3.14 替代；不保留额外旧包、复制源码或改写此前验证事实。
+
+## 1.3.14（48）语言选择、页首定位与通知原文（2026-11-21，当前）
+
+并行子代理分别实现系统语言协议、页面/媒体流回归、通知分段及文档，主流程独占 Prepare 验证/构建并整合。语言通过用户显式点击引擎旁的按钮启动该包 `ACTION_CHECK_TTS_DATA`，仅 PASS 的有效安装清单可选，归一化 ISO3/ISO2 语言标识；不再用泛化 Voice 目录证明已安装语言。新语言选择按书保存，经支持校验后 setLanguage；默认引擎选择仍跟随系统。查询无结果、取消、配置脱离、失败及超时安全结清；内部请求 ID 避免旧取消影响新检查。真实 vivo OriginOS 7 返回清单仍未获取，不能预先保证恰好中英两项。
+
+用户澄清的普通点分网址不含双斜线，且无需先翻页就会在起读时回退。合成普通/混排网址基线实际记录当前首行 `0.1px → 553/583px`：起读选择上一行残留行距盒，分页却选下一完整行。修正分页模式起读一次捕获已有 pageWindow / speechPositionAtPageStart 四元组，语音和页面共用该位置；滚动半行策略及保留上一页末行设置不变。独立修复重复符号压缩后实际字符起点和逆映射，保持原句段边界、音频与缓存格式。
+
+通知原文按每个标点段显示，一两字的逗号段也独立；只对单个长段使用原宽度窗口。无词范围时显示首段，换句/句中起读在发布前种入真实起点，同句恢复保留当前段，避免先发整句再收回；测试捕获媒体流全部中间值。当前语言的沙漏入口使用该有效选择标识，仍沿用既有系统停顿规则。
+
+最终全套 **573 通过、8 可选探测跳过**；Analyze exit 0、无 error（184 warning/info）。初轮唯一失败是旧停顿用例通过默认沙漏键找引擎，改用稳定引擎行定位后最终通过；没有删断言或放宽停顿、声音及缓存约束。实际离线 DeliverApk **2 分 9 秒、421 任务（40 执行、381 已最新）**，Kotlin 实际编译、固定签名、独立验签、完整 SDK 前后审计及接收通过。APK 19,880,465 字节，SHA-256 `94a9288c5ba5cbc296c6a0ae36b6d8137edd48dc5e05d4c96e794703bb765a60`，证书及依赖锁不变。
+
+原入口清退过渡 1.3.13 完整包 5 文件、19,892,611 字节及本次匹配签名 staging 6 文件、19,892,714 字节，cleanupPending 为空。Finalize 清退本轮自有宿主测试输出 13 文件、122,420,864 字节；Prepare lease 内精确退役 13 份已被最终结果替代的过程日志、304,071 字节：`menus1313-tests-final.log`、`menus1313-analyze-final.log`、`menus1313-delivery.log`、`speech1314-map-unit.log`、`speech1314-link-before.log`、`speech1314-link-page-before.log`、`speech1314-link-map-after.log`、`speech1314-dotted-before.log`、`speech1314-languages-ui-initial.log`、`speech1314-languages-ui-confirmed.log`、`speech1314-link-floor-after.log`、`speech1314-language-protocol.log`、`speech1314-tests-final.log`。当前必要符号 4,017,448 字节及增量缓存保留；此前 17 项历史日志/staging 沿用原拒绝及待协调状态，未重试清理。
+
+最终日志为本实例 temp 的 `speech1314-tests-passed.log`、`speech1314-analyze-final.log`、`speech1314-delivery.log`，另保留真实网址退页修复前证据 `speech1314-dotted-floor-before.log` 和最新 SDK 前后清单。详情见 [1.3.14 交付说明](releases/v1.3.14.md)。HEAD 仍为 `4dc2d62286430ddc7e66cc3816e788757971e22f`，无暂存、提交、推送或 PR 操作；没有安装设备、生成截图、启动在线构建或远端发布，OriginOS 实机及 iOS 未验收。
+
+## 1.3.15（49）过滤、分页与朗读设计审查（2026-11-21）
+
+按用户要求由子代理顺序审查映射、页面生命周期及成熟产品方案，主流程统一产品改动、Prepare 验证和交付。原文映射的 8 项合成回归通过，未确认存活正文映射故障；实际复现的是完整行与残余行距盒规则不一致、页底精度不同、旧异步状态覆盖新意图。统一行几何及 0.25 像素精度、布局/导航所有权和稳定绘制后发布；过滤准备期间保留最新普通视口，覆盖翻页和自由滚动，最新暂停撤销恢复、播放延后到新队列。相关基线、成熟 KOReader/Readium 官方来源、取舍及真机边界见 [设计审查](reader-layout-audit-2026-11-21.md)。
+
+音色及语言选择圆点固定前置，本地标题齿轮取代底部管理行，语言和沙漏按钮中心间距 40 像素。最终完整套件 **598 通过、8 可选探测跳过**，Analyze exit 0、无 error（191 warning/info）。真实离线 DeliverApk **1 分 56 秒、421 任务（35 执行、386 已最新）**，固定签名、独立验签、LocalApk 接收及 SDK 全树前后审计通过；证书和依赖锁不变。包 19,880,465 字节，SHA-256 `f4545b31d52fa1e0867b0502aa374a24afabc239d28cffa88e327185a926ff5a`。
+
+原入口清退旧 1.3.14 完整包 5 文件、19,892,611 字节及本次匹配签名 staging 6 文件、19,892,714 字节，cleanupPending 为空。Finalize 清退自有测试输出 13 文件、121,660,352 字节，Prepare lease 内精确退役六份已替代过程日志、57,650 字节，名称见 [1.3.15 交付记录](releases/v1.3.15.md)。必要符号 4,017,000 字节、四份独立修复前证据、最终日志及可复用缓存保留；历史 17 项没有重试删除。
+
+最终日志为实例 temp 的 `layout1315-tests-final.log`、`layout1315-analyze-final.log`、`layout1315-delivery.log`，保留基线 `layout1315-filter-before.log`、`layout1315-geometry-and-race.log`、`layout1315-navigation-before.log`、`layout1315-scroll-before.log`；最新 SDK 前后清单由入口更新。源码仍无暂存、提交、推送或 PR 操作，HEAD 保持 `4dc2d62286430ddc7e66cc3816e788757971e22f`。未安装真机、生成截图、读取真实书籍、启动在线构建或远端发布，iOS 未编译或设备验证。
+
+## 1.3.16（50）手机反馈后的页底与快速过滤追加修复（2026-11-21）
+
+四项大字号回归确认：完整文字行可以容纳，却被其额外下半行距挤出页底；分页、起读及可见性统一改用同行最大字体高度，保持既有实际行距、段距、页脚和标点规则。新增九项顺序/异步回归确认并修正过滤准备与翻页交接、安装恢复期间输入、RawImage 触摸拦截及旧草稿发布；最终切回原状态而不重排时也保留最新跨段进度和起读。过程与成熟方案取舍见 [设计审查](reader-layout-audit-2026-11-21.md)。
+
+最终完整套件 **611 通过、8 可选探测跳过**，Analyze exit 0、无 error（198 warning/info）。实际离线 DeliverApk **2 分 52 秒、421 任务（35 执行、386 已最新）**，固定签名、独立验签、LocalApk 接收和 SDK 全树前后审计通过。APK 19,880,465 字节，SHA-256 `f1fe9cacf18abe5247d3478670ca765a3e58e1346cd081af2d3c5540f4bd3fde`，固定证书和依赖锁未变。
+
+旧 1.3.15 完整包 5 文件、19,892,611 字节及本次签名 staging 6 文件、19,892,714 字节由原入口清退，cleanupPending 为空。Finalize 清退自有宿主测试输出 13 文件、121,979,808 字节，Prepare lease 内精确退役六份被替代中间日志、43,195 字节，完整名称见 [1.3.16 交付记录](releases/v1.3.16.md)。必要符号 4,019,144 字节、匹配增量/依赖缓存保留；历史 17 项未重试删除。
+
+最终日志为本实例 temp 的 `layout1316-tests-final.log`、`layout1316-analyze-final.log`、`layout1316-delivery.log`；保留 `layout1316-bottom-before-valid.log`、`layout1316-sequence-before.log`（前两项有效，第三项为夹具问题）、`layout1316-draft-before.log`。SDK 清单由既有入口更新；源码 HEAD 不变，未暂存、提交、推送或操作 PR，未安装真机、生成截图、读取私人书籍、触发在线构建或远端发布。
+
+## 1.3.17（51）真实字体、实际像素和首末游标复核（2026-11-21，当前）
+
+再次按用户反馈由三个子代理分块复核成熟方案、完整字符/像素、真实语音准备链，主流程独占产品修改与 Prepare 验证。真实 CJK 四项先失败，改同行 tight 安全范围后通过；透明快照消融产生 12.335% 像素差，现改为带纸张底色的整页捕获与覆盖；自然段距反例由 B40..71 回成32..71，现按已确认切片返回；暂停翻页后的继续播放先等待异步 seek，明确暂停仍能取消恢复。保留用户排版和原文/音频/缓存模型，未复制 GPL 阅读器实现。证据与成熟方案取舍见 [设计审查](reader-layout-audit-2026-11-21.md)。
+
+新增 23 项，最终全套 **634 通过、8 可选探测跳过**，Analyze exit 0、无 error（208 warning/info）。实际离线 DeliverApk **2 分 4 秒、421 任务（35 执行、386 已最新）**，固定签名、独立验签、LocalApk 接收和 SDK 全树前后审计通过。成品 19,946,001 字节，SHA-256 `d89ff1f2123d282241a196f3f58b44942caae0f3f97be4ff2bfac5836cd1a7e1`，证书与依赖锁不变。
+
+原入口清退旧 1.3.16 完整包 5 文件、19,892,611 字节及本次签名 staging 6 文件、19,958,250 字节，cleanupPending 为空。Finalize 清退自有测试输出 13 文件、121,789,672 字节；Prepare lease 内精确退役 18 份已替代日志、295,555 字节，完整清单见 [1.3.17 交付记录](releases/v1.3.17.md)。必要符号 4,028,544 字节、匹配增量/依赖缓存保留；历史 17 项未重试清理。
+
+最终日志 `layout1317-tests-passed.log`、`layout1317-analyze-passed.log`、`layout1317-delivery.log`，另保留真实字体、透明快照、段距切片及旧 seek 的四份有效修复前证据。旧测试对缩进占位、cached paint transform、跨章前驱及调试角标的错误假设已修正；平移像素参考改用同后端独立合成，所有像素仅允同坐标1级舍入，无原先12级/150处例外。HEAD 不变，无暂存、提交、推送或 PR 操作；未安装真机、生成图片文件、读取私人书籍或远端发布。页历史容量256，未知或失效切片仍按当前布局计算，未宣称全书永久页目录或所有设备绝对无误。
+
+### 1.3.18（52）段距与长段打开性能（2026-11-21，当前）
+
+针对字号 39、默认行距/字体的两张非连续截图，开启首行缩进时取消额外 12 逻辑像素段距；关闭缩进保留块段落间隔。正文行几何改为按排版身份缓存视口附近范围，远原文进度直接查询目标字形窗口；保留过滤事务、页面切片及真实朗读游标。修复前有效反例和 W3C/KOReader 依据见 [阅读审查](reader-layout-audit-2026-11-21.md)。
+
+匹配界面回归 123 项通过；完整套件 **643 通过、8 可选探测跳过**，Analyze exit 0、无 error（214 warning/info）。新增 9 项覆盖实际 CJK 段距、长段工作量、宽度/字号失效、前后各 12 页，以及第 20,000 字恢复和过滤往返。首次长段入书 caret 从点击26,696/滚动13,348降至86，远进度恢复218；这是主机几何开销证据，不是实际手机秒数。
+
+离线 DeliverApk **1 分 58 秒、421 任务（35 执行、386 已最新）**，固定签名、独立验签、LocalApk 接收及共享 SDK 全树审计通过，cleanupPending 为空。最新完整包为 `_releases/ddnovelreader/v1.3.18/DDNovelReader-v1.3.18-arm64-v8a.apk`，19,946,001 字节，SHA-256 `2059aa11cfa9658ab63d36e61cc4289619c6cb050f661da7d70ebc47038814ef`；固定证书及依赖锁未变。
+
+原入口清退旧1.3.17完整包5文件19,958,147字节、匹配签名staging6文件19,958,250字节；Finalize清退宿主测试输出13文件121,740,800字节，Prepare lease内退役6份已替代日志79,664字节。保留必要符号4,034,288字节、增量/依赖缓存、三份最终日志及两份有效修复前证据，文件名与边界见 [1.3.18 交付记录](releases/v1.3.18.md)。此前17项历史待办未重试清理。
+
+本轮重新核对共享根和项目 AGENTS：唯一源码/Git根、已登记实例、固定工具/离线依赖、Prepare lease、SDK四份package.xml与既有16B缓存只读句柄、固定签名私密边界及成品收尾均沿用既有入口。未升级工具/依赖、回写共享SDK、生成截图或读取私人书籍；无暂存、提交、推送、PR、安装设备及远端发布。OriginOS 7字体、实际打开时间和手势体验仍待真机验收。

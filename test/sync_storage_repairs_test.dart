@@ -22,6 +22,11 @@ class _MemoryDav extends WebDavClient {
   List<WebDavEntry>? bookEntries;
   Future<void> Function()? beforeBookList;
 
+  // Derive the opaque validator from the actual bytes, including fixtures
+  // that deliberately replace files[] directly instead of calling record().
+  String? _etagOf(String path) => files.containsKey(path)
+      ? '"${base64Encode(files[path]!)}"' : null;
+
   void record(String key, Map<String, dynamic> value) {
     files['v1/books/$key.json'] = utf8.encode(jsonEncode(value));
   }
@@ -40,22 +45,36 @@ class _MemoryDav extends WebDavClient {
     }
     return [for (final path in files.keys)
       if (path.startsWith('$rel/') && !path.substring(rel.length + 1).contains('/'))
-        WebDavEntry(name: path.split('/').last, rel: path, isDir: false)];
+        WebDavEntry(name: path.split('/').last, rel: path, isDir: false,
+          etag: _etagOf(path) ?? '')];
   }
 
   @override
   Future<List<int>?> get(String rel) async => files[rel];
 
   @override
+  Future<WebDavResponse> getWithMetadata(String rel) async => WebDavResponse(
+      files.containsKey(rel) ? 200 : 404, List.of(files[rel] ?? const []),
+      etag: _etagOf(rel) ?? '');
+
+  @override
   Future<bool> put(String rel, List<int> data, {bool atomic = true,
+      String? etag, bool ifNoneMatch = false,
       String contentType = 'application/json; charset=utf-8'}) async {
+    if (etag != null && ifNoneMatch) throw WebDavException('Conflicting fixture preconditions');
+    if (ifNoneMatch && files.containsKey(rel) || etag != null && etag != _etagOf(rel)) {
+      throw WebDavException('Fixture write precondition failed', 412);
+    }
     files[rel] = List<int>.from(data);
     if (rel.startsWith('v1/books/')) bookPuts.add(rel);
     return true;
   }
 
   @override
-  Future<bool> delete(String rel) async { files.remove(rel); return true; }
+  Future<bool> delete(String rel, {String? etag}) async {
+    if (etag != null && etag != _etagOf(rel)) throw WebDavException('Fixture delete precondition failed', 412);
+    files.remove(rel); return true;
+  }
 }
 
 class _Engine extends SyncEngine {
@@ -130,8 +149,10 @@ void main() {
         .localRecords({}, 'sender'))['content']!.value;
     final deleted = (record['bookmark_deletions'] as Map)['gone'] as double;
     expect(record['bookmarks'], isEmpty);
-    expect(record['bookmarks_at'], deleted);
-    expect(record['updated_at'], deleted);
+    // Deletion clocks add 1 ms in binary doubles; wire clocks round to 1 ms.
+    // Allow one microsecond of representation drift, not a logical clock step.
+    expect(record['bookmarks_at'], closeTo(deleted, 0.000001));
+    expect(record['updated_at'], closeTo(deleted, 0.000001));
     expect(record['progress_at'], 0);
 
     SharedPreferences.setMockInitialValues({});
@@ -373,6 +394,8 @@ void main() {
     expect(await storage.loadBooks(), isEmpty);
     expect(original.readAsStringSync(), text);
     expect(File(meta.filePath).readAsStringSync(), text);
+    expect(dav.files['v1/sources/$key.txt'], original.readAsBytesSync(),
+      reason: 'Logical deletion leaves the shared source blob intact so a concurrent resurrection cannot lose its source');
   });
 
   test('device and completion patches preserve edits made after captured settings', () async {

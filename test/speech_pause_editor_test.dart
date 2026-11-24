@@ -8,7 +8,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => AppI18n.current = AppLang.zhHans);
 
-  testWidgets('single apply action stays in the expandable header and fixed columns survive narrow-screen decimal edits', (tester) async {
+  testWidgets('reset stays beside Apply and fixed columns survive narrow-screen decimal edits', (tester) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(320, 844);
     tester.platformDispatcher.textScaleFactorTestValue = 1.3;
@@ -31,8 +31,10 @@ void main() {
     expect(find.byType(FilledButton), findsOneWidget);
     final title = tester.getRect(find.byKey(const ValueKey('pause-expand-label')));
     final button = tester.getRect(current);
-    expect(button.left, greaterThan(title.right));
-    expect(button.center.dy, closeTo(title.center.dy, 1));
+    final reset = tester.getRect(find.byKey(const ValueKey('pause-reset')));
+    expect(button.top, greaterThanOrEqualTo(title.bottom));
+    expect(reset.right, lessThanOrEqualTo(button.left));
+    expect(reset.center.dy, closeTo(button.center.dy, 1));
     expect(button.height, greaterThanOrEqualTo(48));
     expect(find.descendant(of: current, matching: find.text(T('applyPauseSettings'))), findsOneWidget);
     final comma = find.byKey(const ValueKey('pause-slider-comma'));
@@ -90,7 +92,7 @@ void main() {
     expect(applied, isEmpty); expect(tester.takeException(), isNull);
   });
 
-  testWidgets('reset restores real default pauses as a draft and Apply commits them', (tester) async {
+  testWidgets('reset requires confirmation and saves defaults only after confirmation', (tester) async {
     final initial = const SpeechPauseSettings().withPause(SpeechPauseKind.comma, 650)
       .withPause(SpeechPauseKind.dash, 900).withPause(SpeechPauseKind.paragraph, 1000);
     final applied = <SpeechPauseSettings>[];
@@ -99,11 +101,38 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('pause-reset'))); await tester.pumpAndSettle();
     expect(applied, isEmpty);
+    expect(find.text(T('resetPauseConfirm')), findsOneWidget);
+    expect(tester.widget<Slider>(find.byKey(const ValueKey('pause-slider-comma'))).value, 650);
+    await tester.tap(find.text(T('cancel'))); await tester.pumpAndSettle();
+    expect(applied, isEmpty);
+    expect(tester.widget<Slider>(find.byKey(const ValueKey('pause-slider-comma'))).value, 650);
+    await tester.tap(find.byKey(const ValueKey('pause-reset'))); await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pause-reset-confirm'))); await tester.pumpAndSettle();
     expect(tester.widget<Slider>(find.byKey(const ValueKey('pause-slider-comma'))).value, 0);
     expect(tester.widget<Slider>(find.byKey(const ValueKey('pause-slider-dash'))).value, 200);
     expect(tester.widget<Slider>(find.byKey(const ValueKey('pause-slider-paragraph'))).value, 300);
-    await tester.tap(find.byKey(const ValueKey('pause-apply'))); await tester.pumpAndSettle();
+    expect(applied, hasLength(1));
     expect(applied.single, const SpeechPauseSettings());
     expect(initial.millisecondsFor(SpeechPauseKind.comma), 650);
   });
+
+  for (final language in AppLang.values) {
+    testWidgets('pause actions fit a narrow screen in ${language.name}', (tester) async {
+      AppI18n.current = language;
+      tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(320, 844);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+      addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(child: Padding(
+        padding: const EdgeInsets.all(16), child: SpeechPauseEditor(initialPauses: const SpeechPauseSettings(),
+          initiallyExpanded: true, onApply: (_) {}))))));
+      await tester.pumpAndSettle();
+      final reset = tester.getRect(find.byKey(const ValueKey('pause-reset')));
+      final apply = tester.getRect(find.byKey(const ValueKey('pause-apply')));
+      expect(reset.left, greaterThanOrEqualTo(0)); expect(apply.right, lessThanOrEqualTo(320));
+      expect(reset.center.dy, closeTo(apply.center.dy, 1));
+      expect(reset.right, lessThanOrEqualTo(apply.left));
+      expect(tester.takeException(), isNull);
+    });
+  }
 }

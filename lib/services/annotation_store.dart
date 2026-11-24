@@ -78,8 +78,14 @@ class AnnotationStore {
   Future<Map<String, double>> loadBookmarkDeletions(String bookId) async =>
       _loadDeletions(await AppStorage().resolveBookId(bookId));
 
+  /// Exact-ID reads for a side-effect-free synchronization preview.
+  Future<Map<String, double>> loadBookmarkDeletionsSnapshot(String bookId) => _loadDeletions(bookId);
+
   Future<double> loadBookmarksAt(String bookId) async =>
-      (await _sp).getDouble(_clockPrefix + await AppStorage().resolveBookId(bookId)) ?? 0;
+      loadBookmarksAtSnapshot(await AppStorage().resolveBookId(bookId));
+
+  Future<double> loadBookmarksAtSnapshot(String bookId) async =>
+      (await _sp).getDouble(_clockPrefix + bookId) ?? 0;
 
   static List<Map<String, dynamic>> mergeRawBookmarks(
       List<Map<String, dynamic>> local, List<Map<String, dynamic>> remote,
@@ -158,8 +164,11 @@ class AnnotationStore {
   // offset_end/text/created_at），所以这里直接读写未解析的 Map 列表。
   Future<List<Map<String, dynamic>>> loadRawBookmarks(String bookId) async {
     final id = await AppStorage().resolveBookId(bookId);
-    return mergeRawBookmarks(await _loadRaw(id), [], await _loadDeletions(id));
+    return loadRawBookmarksSnapshot(id);
   }
+
+  Future<List<Map<String, dynamic>>> loadRawBookmarksSnapshot(String bookId) async =>
+      mergeRawBookmarks(await _loadRaw(bookId), [], await _loadDeletions(bookId));
 
   Future<List<Map<String, dynamic>>> _loadRaw(String bookId) async {
     final sp = await _sp;

@@ -227,6 +227,9 @@ void main() {
     await tester.tap(find.byTooltip('阅读设置')); await tester.pumpAndSettle();
     await completeAction(tester, handler.play()); await tester.pumpAndSettle();
     expect(speech.lastSentences.join(), contains('下载APP'));
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('information-filter')), 250,
+      scrollable: find.descendant(of: find.byType(BottomSheet).last, matching: find.byType(Scrollable)).last);
+    await tester.pumpAndSettle();
     tester.widget<SwitchListTile>(find.byKey(const ValueKey('information-filter'))).onChanged!(true);
     await tester.pumpAndSettle();
     expect(speech.starts, 2); expect(speech.lastSentences.join(), isNot(contains('下载APP')));
@@ -381,9 +384,10 @@ void main() {
     addTearDown(() { unawaited(subscription.cancel()); });
     await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
     await tester.pumpAndSettle(); await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
-    expect(handler.mediaItem.value!.displaySubtitle, text,
-      reason: 'Before the first real range, the notification must not guess a speaking position');
     final slicing = MediaSpeechText(text);
+    expect(handler.mediaItem.value!.displaySubtitle, slicing.textAt(0),
+      reason: 'Before the first word range, show the known playback start clause without flashing the whole sentence');
+    expect(items.whereType<String>(), everyElement(isNot(text)));
     speech.onWordChanged?.call(0, 2); await tester.pumpAndSettle();
     final first = handler.mediaItem.value!.displaySubtitle!;
     expect(first, slicing.textAt(0)); expect(first, isNot(text)); expect(text.startsWith(first), isTrue);
@@ -424,6 +428,57 @@ void main() {
     expect(ReadingSettings.fromJson(await storage.loadSettings()).wordHighlightEnabled, isFalse);
     await tester.tapAt(const Offset(195, 60)); await tester.pumpAndSettle();
     unawaited(subscription.cancel()); expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
+  }, timeout: const Timeout(Duration(seconds: 45)));
+
+  testWidgets('media subtitle stream publishes each punctuation clause without transient whole or next clauses', (tester) async {
+    tester.view.devicePixelRatio = 1; tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetDevicePixelRatio); addTearDown(tester.view.resetPhysicalSize);
+    const firstSentence = '甲，乙，丙丁，接下来的一段。';
+    const nextSentence = '新，开始，最后的片段。';
+    final source = Book(id: 'media-clause-stream', title: '逐段通知', filePath: '', format: BookFormat.txt,
+      addedAt: DateTime(2026), chapters: [Chapter(title: '第一章',
+        paragraphs: [ReadingText.paragraph('$firstSentence$nextSentence')])]);
+    final storage = AppStorage();
+    await storage.saveSettings((ReadingSettings()..firstLineIndent = false
+      ..wordHighlightEnabled = false..showSystemMediaText = true).toJson());
+    final speech = _MediaSpeech(), items = <String?>[];
+    final subscription = handler.mediaItem.listen((item) { items.add(item?.displaySubtitle); });
+    addTearDown(() { unawaited(subscription.cancel()); });
+    await tester.pumpWidget(MaterialApp(home: ReaderScreen(book: source, storage: storage, ttsReader: speech)));
+    await tester.pumpAndSettle();
+    items.clear();
+    await tester.tap(find.byTooltip('朗读')); await tester.pumpAndSettle();
+    expect(items, ['甲，']);
+    items.clear();
+
+    // Ending punctuation and a no-word gap keep the current clause. They must
+    // never preannounce the following clause and then clear it again.
+    for (final step in [(0, 1, '甲，'), (1, 2, '甲，'), (-1, -1, '甲，'),
+      (2, 3, '乙，'), (3, 4, '乙，'), (4, 6, '丙丁，'),
+      (6, 7, '丙丁，'), (7, 9, '接下来的一段。')]) {
+      final before = items.length;
+      speech.emitWord(step.$1, step.$2); await tester.pumpAndSettle();
+      expect(handler.mediaItem.value!.displaySubtitle, step.$3);
+      expect(items.skip(before), everyElement(step.$3));
+    }
+    expect(items, ['乙，', '丙丁，', '接下来的一段。']);
+    items.clear();
+
+    // A new sentence must discard the old word cursor immediately, including
+    // when actual playback begins midway through the new sentence.
+    speech.emitWord(-1, -1);
+    speech.emitSentence(1, ttsOffset: nextSentence.indexOf('开始'));
+    await tester.pumpAndSettle();
+    expect(items, ['开始，']);
+    items.clear();
+    speech.emitWord(nextSentence.indexOf('开始'), nextSentence.indexOf('开始') + 2);
+    speech.emitWord(-1, -1); await tester.pumpAndSettle();
+    expect(items, isEmpty, reason: 'First range and silence must retain the seeded clause without duplicate or null metadata');
+    speech.emitWord(nextSentence.indexOf('最后'), nextSentence.indexOf('最后') + 2);
+    await tester.pumpAndSettle();
+    expect(items, ['最后的片段。']);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
   }, timeout: const Timeout(Duration(seconds: 45)));
 
@@ -528,16 +583,25 @@ class _MediaSpeech extends TtsReader {
   TtsState status = TtsState.idle;
   int starts = 0, resumes = 0;
   int sentenceIndex = -1;
+  int speechOffset = 0;
   List<String> lastSentences = const [];
   Completer<void>? pendingStart;
   Completer<void>? pendingPause;
   void changeState(TtsState state) { status = state; onStateChanged?.call(); }
-  void emitSentence(int index) { sentenceIndex = index; onSentenceChanged?.call(index); }
+  void emitSentence(int index, {int ttsOffset = 0}) {
+    sentenceIndex = index; speechOffset = ttsOffset; onSentenceChanged?.call(index);
+  }
+  void emitWord(int start, int end) {
+    if (start >= 0) speechOffset = start;
+    onWordChanged?.call(start, end);
+  }
   @override int get currentIndex => sentenceIndex;
+  @override int get currentTtsOffset => speechOffset;
   @override TtsState get state => status;
   @override Future<void> start(List<String> sentences, {List<int>? offsets, List<int>? pauseAfterMilliseconds,
     int chapterIndex = 0, int from = 0, int initialTtsOffset = 0}) async {
-    starts++; lastSentences = List.of(sentences); changeState(TtsState.playing); emitSentence(from);
+    starts++; lastSentences = List.of(sentences); changeState(TtsState.playing);
+    emitSentence(from, ttsOffset: initialTtsOffset);
     await pendingStart?.future;
   }
   @override Future<void> pause({bool interrupted = false}) async {

@@ -31,10 +31,11 @@ void main() {
 
   test('TOC indexing retains the complete original book and precise physical coordinates', () {
     const text = '前言内容。\n　　第一章 开始\n正文。\n第二章 后续\n后来。';
-    final book = source([chapter('第 1 节', text)]);
+    final book = source([chapter('', text)]);
     final before = book.chapters.single.paragraphs.single.display;
     final entries = BookParser.extractToc(book);
-    expect(entries.map((e) => e.title), ['正文', '第一章 开始', '第二章 后续']);
+    final excerpt = String.fromCharCodes(text.replaceAll(RegExp(r'\s+'), ' ').runes.take(24)).trimRight();
+    expect(entries.map((e) => e.title), [excerpt, '第一章 开始', '第二章 后续']);
     expect(entries[1].displayOffset, text.indexOf('第一章'));
     expect(entries[2].displayOffset, text.indexOf('第二章'));
     expect(book.chapters.single.paragraphs.single.display, before);
@@ -54,9 +55,9 @@ void main() {
     expect(entries.last.displayOffset, '内容。\n'.length);
   });
 
-  test('synthetic base sections do not pollute detected chapter titles', () {
-    final book = source([chapter('第 1 节', '第一章 初见\n正文。'),
-      chapter('第 2 节', '第二章 再遇\n正文。')]);
+  test('untitled technical blocks do not pollute detected chapter titles', () {
+    final book = source([chapter('', '第一章 初见\n正文。'),
+      chapter('', '第二章 再遇\n正文。')]);
     final entries = BookParser.extractToc(book);
     expect(entries.map((e) => e.title), ['第一章 初见', '第二章 再遇']);
     expect(entries.map((e) => e.chapterIndex), [0, 1]);
@@ -66,9 +67,23 @@ void main() {
     final text = '${List.filled(4999, '甲').join()}😀乙丙';
     final book = source([chapter('第一章', text)]);
     final entries = BookParser.extractToc(book, autoExtractToc: false);
-    expect(entries.map((e) => e.title), ['第 1 节', '第 2 节']);
+    expect(entries.map((e) => e.title), [List.filled(24, '甲').join(), '乙丙']);
     expect(entries.last.displayOffset, 5001);
     expect(text.substring(entries.last.displayOffset), '乙丙');
     expect(BookParser.extractToc(source([])), isEmpty);
+  });
+
+  test('navigation excerpts retain supplementary characters at the 24-rune boundary', () {
+    final prefix = List.filled(23, '甲').join();
+    final entries = BookParser.extractToc(source([chapter('', '$prefix😀乙')]), autoExtractToc: false);
+    expect(entries.single.title, '$prefix😀');
+    expect(entries.single.title.runes.length, 24);
+    expect(entries.single.displayOffset, 0);
+  });
+
+  test('real numeric section metadata is no longer mistaken for a generated label', () {
+    final entries = BookParser.extractToc(source([chapter('第1节', '真实内容。')]));
+    expect(entries.single.title, '第1节');
+    expect(entries.single.displayOffset, 0);
   });
 }

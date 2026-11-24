@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import '../i18n.dart';
 import '../services/speech_breaks.dart';
 
-/// Edits a local system-voice draft; only Apply publishes the new settings.
+/// Edits a system-voice draft; Apply or a confirmed Reset publishes settings.
 /// Closing the containing sheet or collapsing this widget cannot persist it.
 class SpeechPauseEditor extends StatefulWidget {
   final SpeechPauseSettings initialPauses;
@@ -23,6 +23,20 @@ class _SpeechPauseEditorState extends State<SpeechPauseEditor> {
   late SpeechPauseSettings _draft = widget.initialPauses;
   late bool _expanded = widget.initiallyExpanded;
 
+  Future<void> _reset() async {
+    final confirmed = await showDialog<bool>(context: context, builder: (dialog) => AlertDialog(
+      title: Text(T('resetPauseSettings')),
+      content: Text(T('resetPauseConfirm')),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text(T('cancel'))),
+        FilledButton(key: const ValueKey('pause-reset-confirm'),
+          onPressed: () => Navigator.pop(dialog, true), child: Text(T('ok'))),
+      ]));
+    if (confirmed != true || !mounted) return;
+    setState(() => _draft = const SpeechPauseSettings());
+    widget.onApply(_draft);
+  }
+
   @override
   void didUpdateWidget(covariant SpeechPauseEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -34,30 +48,32 @@ class _SpeechPauseEditorState extends State<SpeechPauseEditor> {
   @override
   Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
     ListTile(key: const ValueKey('pause-expand'),
-      title: Text(widget.title ?? T('additionalPauses'), key: const ValueKey('pause-expand-label')),
-      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-        if (_expanded) SizedBox(height: 48, child: FilledButton(key: const ValueKey('pause-apply'),
-          style: FilledButton.styleFrom(minimumSize: const Size(0, 48), padding: const EdgeInsets.symmetric(horizontal: 12)),
-          onPressed: _draft == widget.initialPauses ? null : () => widget.onApply(_draft),
-          child: Text(T('applyPauseSettings'), maxLines: 1))),
-        Icon(_expanded ? Icons.expand_less : Icons.expand_more),
-      ]),
+      title: Text(widget.title ?? T('additionalPauses'), key: const ValueKey('pause-expand-label'),
+        style: Theme.of(context).textTheme.titleLarge),
+      trailing: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
       onTap: () => setState(() => _expanded = !_expanded)),
     if (_expanded) ...[
-      Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(T('pauseDescription'))),
-      Align(alignment: Alignment.centerRight, child: TextButton.icon(
-        key: const ValueKey('pause-reset'),
-        onPressed: _draft == const SpeechPauseSettings() ? null
-          : () => setState(() => _draft = const SpeechPauseSettings()),
-        icon: const Icon(Icons.restore), label: Text(T('resetPauseSettings')))),
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(
+        mainAxisAlignment: MainAxisAlignment.end, children: [
+          Flexible(child: TextButton(key: const ValueKey('pause-reset'),
+            style: TextButton.styleFrom(minimumSize: const Size(0, 48), padding: const EdgeInsets.symmetric(horizontal: 12)),
+            onPressed: _reset, child: Text(T('resetPauseSettings'), maxLines: 1, overflow: TextOverflow.ellipsis))),
+          const SizedBox(width: 8),
+          Flexible(child: FilledButton(key: const ValueKey('pause-apply'),
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 48), padding: const EdgeInsets.symmetric(horizontal: 12)),
+            onPressed: _draft == widget.initialPauses ? null : () => widget.onApply(_draft),
+            child: Text(T('applyPauseSettings'), maxLines: 1, overflow: TextOverflow.ellipsis))),
+        ])),
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(T('pauseDescription'),
+        style: Theme.of(context).textTheme.bodyMedium)),
       for (final kind in SpeechPauseKind.values) Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(children: [
           SizedBox(width: 48, child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
-            child: Text(T('pause-${kind.name}'), maxLines: 1, style: const TextStyle(fontSize: 14)))),
+            child: Text(T('pause-${kind.name}'), maxLines: 1, style: const TextStyle(fontSize: 16)))),
           SizedBox(width: 80, child: TextButton(key: ValueKey('pause-${kind.name}'),
             child: FittedBox(fit: BoxFit.scaleDown, child: Text(
               T('pauseSeconds', {'n': (_draft.millisecondsFor(kind) / 1000).toStringAsFixed(2)}),
-              style: const TextStyle(fontSize: 14))),
+              style: const TextStyle(fontSize: 16))),
             onPressed: () async {
               final value = await showDialog<int>(context: context, builder: (_) => _PauseSecondsInputDialog(
                 title: T('pause-${kind.name}'), milliseconds: _draft.millisecondsFor(kind),

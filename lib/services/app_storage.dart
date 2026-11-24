@@ -59,7 +59,12 @@ class AppStorage {
   }
 
   // ---------- 书籍列表 ----------
-  Future<List<BookMeta>> loadBooks() async {
+  Future<List<BookMeta>> loadBooks() => _loadBooks(repairPaths: true);
+
+  /// Exact persisted metadata for previews; never repairs or saves iOS paths.
+  Future<List<BookMeta>> loadBooksSnapshot() => _loadBooks(repairPaths: false);
+
+  Future<List<BookMeta>> _loadBooks({required bool repairPaths}) async {
     final sp = await _sp;
     final raw = sp.getString(_booksKey);
     if (raw == null || raw.isEmpty) return [];
@@ -68,7 +73,7 @@ class AppStorage {
       final books = list
           .map((e) => BookMeta.fromJson(e as Map<String, dynamic>))
           .toList();
-      return await _repairBookPaths(books);
+      return repairPaths ? await _repairBookPaths(books) : books;
     } catch (_) {
       return [];
     }
@@ -464,6 +469,9 @@ class AppStorage {
     return _loadProgress(await resolveBookId(bookId));
   }
 
+  /// Read this exact stored ID without alias resolution or shelf repair.
+  Future<BookProgress?> loadProgressSnapshot(String bookId) => _loadProgress(bookId);
+
   Future<BookProgress?> _loadProgress(String bookId) async {
     final sp = await _sp;
     final raw = sp.getString(_progressPrefix + bookId);
@@ -597,6 +605,8 @@ class ReadingSettings {
   static const defaultPrefetchSentences = 8;
   static const minPrefetchSentences = 0;
   static const maxPrefetchSentences = 100;
+  static const paragraphSpacingLevels = <int>[0, 1, 2, 3];
+  static int normalizeParagraphSpacingLevel(Object? value) => value is int && value >= 0 && value <= 3 ? value : 0;
   double brightness = 0.25;
   bool automaticBrightness = true;
   int autoPageSeconds = 20;
@@ -618,10 +628,12 @@ class ReadingSettings {
   String informationFilterLevel = 'links';
   double fontSize = 20.0;
   double lineHeight = 1.6;
+  int paragraphSpacingLevel = 0;
   double speechRate = 1.0; // edge-tts 语速倍数：1.0=正常, 0.5=慢速, 2.0=快速
   int prefetchSentences = defaultPrefetchSentences;
   bool systemFallbackEnabled = false;
   bool systemFallbackActive = false;
+  bool systemVoiceEnhancedOnly = true;
   String voice = '';
   String themeMode = 'system';
   int themeIndex = 0; // 书页背景主题索引
@@ -676,10 +688,13 @@ class ReadingSettings {
         'informationFilterLevel': informationFilterLevel,
         'fontSize': fontSize,
         'lineHeight': lineHeight,
+        'paragraphSpacingModel': 'fixed',
+        'paragraphSpacingLevel': normalizeParagraphSpacingLevel(paragraphSpacingLevel),
         'speechRate': speechRate,
         'prefetchSentences': prefetchSentences,
         'systemFallbackEnabled': systemFallbackEnabled,
         'systemFallbackActive': systemFallbackActive,
+        'systemVoiceEnhancedOnly': systemVoiceEnhancedOnly,
         'voice': voice,
         'themeMode': themeMode,
         'themeIndex': themeIndex,
@@ -728,12 +743,22 @@ class ReadingSettings {
     s.informationFilterLevel = ['links', 'ads', 'extra'].contains(level) ? level as String : 'links';
     s.fontSize = ((json['fontSize'] as num?)?.toDouble() ?? s.fontSize).clamp(14, 64);
     s.lineHeight = (json['lineHeight'] as num?)?.toDouble() ?? s.lineHeight;
+    if (json['paragraphSpacingModel'] == 'fixed') {
+      s.paragraphSpacingLevel = normalizeParagraphSpacingLevel(json['paragraphSpacingLevel']);
+    } else {
+      // Previous levels described a tiny geometry-dependent spacing budget,
+      // including a persisted default of 2. They do not express consent to
+      // the new visible fixed gaps. Migrate once to no extra gap; toJson's
+      // model marker preserves subsequent explicit choices in the new UI.
+      s.paragraphSpacingLevel = 0;
+    }
     s.speechRate = normalizeSpeechRate((json['speechRate'] as num?)?.toDouble() ?? s.speechRate);
     s.prefetchSentences = ((json['prefetchSentences'] as num?)?.toInt() ?? defaultPrefetchSentences)
       .clamp(minPrefetchSentences, maxPrefetchSentences);
     s.voice = json['voice'] as String? ?? '';
     s.systemFallbackEnabled = json['systemFallbackEnabled'] as bool? ?? false;
     s.systemFallbackActive = s.systemFallbackEnabled && (json['systemFallbackActive'] as bool? ?? false);
+    s.systemVoiceEnhancedOnly = json['systemVoiceEnhancedOnly'] is bool ? json['systemVoiceEnhancedOnly'] as bool : true;
     final themeMode = json['themeMode'];
     s.themeMode = ['system', 'dark', 'light'].contains(themeMode) ? themeMode as String : 'system';
     s.themeIndex = (json['themeIndex'] as num?)?.toInt() ?? 0;

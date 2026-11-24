@@ -59,6 +59,34 @@ void main() {
       expect(r.displayOffsetOfTts(r.tts.length), r.display.length);
     });
 
+    test('URL speech starts and visible cursors use retained characters after collapsed slashes', () {
+      final r = cleaner.clean('https://example.com');
+      final speech = r.tts.indexOf('example');
+      final visible = r.display.indexOf('example');
+      expect(speech, 7); expect(visible, 8);
+      expect(r.displayOffsetOfTts(speech), 7,
+        reason: 'Existing sentence boundary mapping must remain compatible');
+      expect(r.displayStartOfTts(speech), visible);
+      expect(r.ttsOffsetOfDisplay(visible), speech);
+      expect(r.ttsOffsetOfDisplay(visible - 1), speech,
+        reason: 'A removed duplicate slash should advance to the next spoken character');
+    });
+
+    test('speech cursor starts round-trip across repeated punctuation, spaces and removed glyphs', () {
+      for (final source in ['你好！！！世界', '甲    乙', '  甲😄乙  ', 'name__tag@example.com', '甲\u200B乙']) {
+        final r = cleaner.clean(source);
+        for (var i = 0; i < r.tts.length; i++) {
+          final start = r.displayStartOfTts(i);
+          expect(start, inInclusiveRange(0, source.length - 1));
+          expect(r.ttsOffsetOfDisplay(start), i, reason: '$source / $i');
+        }
+        expect(r.displayStartOfTts(r.tts.length), source.length);
+        expect(r.ttsOffsetOfDisplay(source.length), r.tts.length);
+      }
+      expect(cleaner.clean('').displayStartOfTts(0), 0);
+      expect(cleaner.clean('').ttsOffsetOfDisplay(0), 0);
+    });
+
     test('空文本安全', () {
       final r = cleaner.clean('');
       expect(r.display, '');

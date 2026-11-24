@@ -14,7 +14,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('对话框渲染四个输入框 + 两个开关 + 三个按钮', (tester) async {
+  testWidgets('对话框保留双向同步并提供上传、下载', (tester) async {
     final storage = AppStorage();
     await tester.pumpWidget(MaterialApp(
       home: SyncScreen(storage: storage, annotations: AnnotationStore()),
@@ -24,6 +24,8 @@ void main() {
     expect(find.byType(TextField), findsNWidgets(4));
     expect(find.byType(Switch), findsNWidgets(2));
     expect(find.byType(FilledButton), findsOneWidget);
+    expect(find.byKey(const ValueKey('sync-push')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sync-pull')), findsOneWidget);
     // 默认提示与未同步状态
     expect(find.textContaining('尚未同步'), findsOneWidget);
     // 远端目录默认值

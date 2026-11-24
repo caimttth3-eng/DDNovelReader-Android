@@ -10,20 +10,22 @@ class MediaSpeechText {
   final List<({int start, int end})> _ranges;
   final int _contentStart;
 
+  // Width windows apply only inside an individual punctuation-delimited
+  // clause. Even a one-character clause must never absorb the next one.
   MediaSpeechText(this.text, {int maxColumns = 32})
       : _ranges = _split(text, maxColumns < 1 ? 1 : maxColumns),
         _contentStart = text.length - text.trimLeft().length;
 
-  /// No usable range information means displaying the complete original line,
-  /// with only its paragraph-leading layout whitespace omitted.
+  /// No usable range information selects the first fragment without guessing
+  /// any progress. Only paragraph-leading layout whitespace is omitted.
   /// An exact end-of-text position still selects its last displayed fragment.
   String textAt(int? utf16Offset) {
-    if (utf16Offset == null || utf16Offset < 0 || utf16Offset > text.length ||
-        _ranges.length < 2) return text.substring(_contentStart);
+    if (_ranges.length < 2) return text.substring(_contentStart);
     // Keep all cached ranges and incoming offsets in the untouched source's
     // UTF-16 coordinates. A range in indentation alone selects the first real
     // text rather than publishing an empty fragment for that indentation.
-    final offset = utf16Offset < _contentStart ? _contentStart : utf16Offset;
+    final requested = utf16Offset == null || utf16Offset < 0 || utf16Offset > text.length ? _contentStart : utf16Offset;
+    final offset = requested < _contentStart ? _contentStart : requested;
     if (offset == text.length) {
       final range = _ranges.last;
       return _displayRange(range.start, range.end);
@@ -46,56 +48,68 @@ class MediaSpeechText {
 
   static final _punctuation = RegExp(r'^[，、。；：！？…—,.;:!?]');
   static final _word = RegExp(r"^[\p{L}\p{N}_'’-]", unicode: true);
-  static const _closing = '”’」』）》】〉〕〗〙〛»›)]}';
-  static const _opening = '“‘「『（《【〈〔〖〘〚«‹([{';
+  static const _closing = '”’」』）》】〉〕〗〙〛»›)]}"';
+  static const _opening = '“‘「『（《【〈〔〖〘〚«‹([{"';
 
   static List<({int start, int end})> _split(String text, int budget) {
     if (text.isEmpty) return const [];
     final clusters = text.characters.toList(growable: false);
     final offsets = <int>[0];
     final widths = <int>[];
-    final word = <bool>[];
+    final words = <bool>[];
     for (final cluster in clusters) {
       offsets.add(offsets.last + cluster.length);
       final width = cluster.runes.any(_wide) ? 2 : 1;
       widths.add(width);
-      word.add(width == 1 && _word.hasMatch(cluster));
+      words.add(width == 1 && _word.hasMatch(cluster));
     }
     final ranges = <({int start, int end})>[];
+    void addClause(int start, int limit) {
+      var trailingWhitespace = limit;
+      while (trailingWhitespace > start && clusters[trailingWhitespace - 1].trim().isEmpty) { trailingWhitespace--; }
+      while (start < limit) {
+        var end = start, columns = 0, whitespaceEnd = -1;
+        while (end < limit && (columns + widths[end] <= budget || end == start)) {
+          columns += widths[end++];
+          if (columns * 2 >= budget && clusters[end - 1].trim().isEmpty) whitespaceEnd = end;
+        }
+        if (end < limit) {
+          if (whitespaceEnd > start) {
+            end = whitespaceEnd;
+          } else if (words[end - 1] && words[end]) {
+            var wordStart = end - 1;
+            while (wordStart > start && words[wordStart - 1]) { wordStart--; }
+            if (wordStart > start) end = wordStart;
+          }
+          while (end > start + 1 && _opening.contains(clusters[end - 1])) { end--; }
+          // Punctuation/closing marks and trailing layout whitespace stay
+          // attached to the text they terminate, including at a width edge.
+          while (end < limit && (_punctuation.hasMatch(clusters[end]) ||
+              _closing.contains(clusters[end]))) {
+            end++;
+          }
+          if (end >= trailingWhitespace) end = limit;
+        }
+        ranges.add((start: offsets[start], end: offsets[end]));
+        start = end;
+      }
+    }
     var start = 0;
-    while (start < clusters.length) {
-      var end = start, columns = 0, punctuationEnd = -1, whitespaceEnd = -1;
-      while (end < clusters.length && (columns + widths[end] <= budget || end == start)) {
-        columns += widths[end];
+    var end = 0;
+    while (end < clusters.length) {
+      final cluster = clusters[end++];
+      if (!_punctuation.hasMatch(cluster) && !cluster.contains('\n') && !cluster.contains('\r')) continue;
+      // A punctuation run and its closing quotation marks belong to the
+      // preceding clause. Never publish a punctuation-only or whitespace-only
+      // successor while waiting for the next actual word range.
+      while (end < clusters.length && (_punctuation.hasMatch(clusters[end]) ||
+          _closing.contains(clusters[end]) || clusters[end].trim().isEmpty)) {
         end++;
-        // Any punctuation within the budget is a better boundary than
-        // cutting the next clause in half, even near the fragment's start.
-        if (_punctuation.hasMatch(clusters[end - 1])) punctuationEnd = end;
-        if (columns * 2 >= budget && clusters[end - 1].trim().isEmpty) whitespaceEnd = end;
       }
-      if (end < clusters.length) {
-        if (punctuationEnd > start) {
-          end = punctuationEnd;
-        } else if (whitespaceEnd > start) {
-          end = whitespaceEnd;
-        } else if (word[end - 1] && word[end]) {
-          // Keep a normal word together. A word longer than the whole budget
-          // falls back to grapheme boundaries, so one huge token stays usable.
-          var wordStart = end - 1;
-          while (wordStart > start && word[wordStart - 1]) { wordStart--; }
-          if (wordStart > start) end = wordStart;
-        }
-        while (end > start + 1 && _opening.contains(clusters[end - 1])) { end--; }
-        // A closing quotation mark or punctuation belongs to the preceding
-        // fragment, even if this slightly exceeds its preferred width budget.
-        while (end < clusters.length &&
-            (_closing.contains(clusters[end]) || _punctuation.hasMatch(clusters[end]))) {
-          end++;
-        }
-      }
-      ranges.add((start: offsets[start], end: offsets[end]));
+      addClause(start, end);
       start = end;
     }
+    if (start < clusters.length) addClause(start, clusters.length);
     return ranges;
   }
 

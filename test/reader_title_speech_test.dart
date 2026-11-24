@@ -115,15 +115,29 @@ void main() {
       List<(int, double)> viewport() => list(tester).itemPositionsNotifier!.itemPositions.value
         .where((p) => p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0)
         .map((p) => (p.index, p.itemLeadingEdge)).toList()..sort((a, b) => a.$1.compareTo(b.$1));
-      final initial = viewport();
+      int firstVisibleSource() {
+        final render = paragraph(tester, '000甲乙丙丁');
+        final body = tester.getRect(find.byKey(const ValueKey('reader-body')));
+        final origin = render.localToGlobal(Offset.zero);
+        final plain = render.text.toPlainText();
+        final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: plain.length),
+          boxHeightStyle: ui.BoxHeightStyle.tight);
+        final first = boxes.firstWhere((box) => box.bottom - box.top > 2 && box.top + origin.dy >= body.top - .25 &&
+          box.bottom + origin.dy <= body.bottom + .25);
+        final offset = render.getPositionForOffset(Offset(first.left - 1, (first.top + first.bottom) / 2)).offset;
+        return ReaderTypography.sourceOffset(text, offset);
+      }
+      final initialSource = firstVisibleSource();
       await start(tester);
-      expect(viewport(), initial, reason: 'Starting speech must not align the sentence to the first line.');
+      expect(firstVisibleSource(), initialSource,
+        reason: 'Entering fixed pages may remove top leading, but must retain the same complete source row');
+      final initial = viewport();
       final clipFinder = find.byKey(const ValueKey('reader-page-clip'));
       final clip = tester.widget<ClipRect>(clipFinder), size = tester.getSize(clipFinder);
       final bottom = tester.getTopLeft(clipFinder).dy + clip.clipper!.getClip(size).bottom;
       final render = paragraph(tester, '000甲乙丙丁'), plain = render.text.toPlainText();
       final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: plain.length),
-        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+        boxHeightStyle: ui.BoxHeightStyle.tight);
       final nextRow = boxes.firstWhere((box) => box.toRect().height > 2 &&
         render.localToGlobal(Offset(0, box.bottom)).dy > bottom + 0.5).toRect();
       final layoutOffset = render.getPositionForOffset(Offset(nextRow.left - 1, nextRow.center.dy)).offset;
@@ -177,7 +191,7 @@ void main() {
       final origin = render.localToGlobal(Offset.zero).dy - tester.getTopLeft(body).dy;
       final plain = render.text.toPlainText();
       final boxes = render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: plain.length),
-        boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle);
+        boxHeightStyle: ui.BoxHeightStyle.tight);
       final clip = tester.widget<ClipRect>(clipFinder).clipper!.getClip(tester.getSize(clipFinder));
       final row = boxes.firstWhere((box) => box.top + origin >= -.25 && box.bottom + origin <= clip.bottom + .25);
       final offset = ReaderTypography.sourceOffset(text,
@@ -228,24 +242,24 @@ void main() {
   }, timeout: const Timeout(Duration(seconds: 45)));
 
   for (final scenario in [('short', '第 3 章 一寸金03', TextDirection.ltr),
-    ('rtl', 'אבגדהוזח', TextDirection.rtl), ('bottom-padding', '第 3 章 一寸金03', TextDirection.ltr)]) {
+    ('rtl', 'אבגדהוזח', TextDirection.rtl), ('paragraph-gap', '第 3 章 一寸金03', TextDirection.ltr)]) {
     testWidgets('visible short title starts at its first logical character: ${scenario.$1}', (tester) async {
       final speech = await open(tester, source(scenario.$1, [scenario.$2, List.filled(50, '后续正文持续显示。').join()]), direction: scenario.$3);
       list(tester).itemScrollController!.jumpTo(index: 1, alignment: 0); await tester.pumpAndSettle();
-      if (scenario.$1 == 'bottom-padding') {
+      if (scenario.$1 == 'paragraph-gap') {
         final render = paragraph(tester, scenario.$2), body = tester.getRect(find.byKey(const ValueKey('reader-body')));
         final delta = render.localToGlobal(Offset.zero).dy + render.size.height - body.top + 0.5;
         await _action(tester, list(tester).scrollOffsetController!.animateScroll(offset: delta, duration: const Duration(milliseconds: 1)));
         await tester.pumpAndSettle();
         final positions = list(tester).itemPositionsNotifier!.itemPositions.value.where((p) => p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0).toList()
           ..sort((a, b) => a.index.compareTo(b.index));
-        expect(positions.first.index, 1, reason: 'Only paragraph padding should remain at the top, before the following paragraph');
-        expect(paragraph(tester, scenario.$2).localToGlobal(Offset(0, render.size.height)).dy,
-          lessThan(tester.getRect(find.byKey(const ValueKey('reader-body'))).top));
+        expect(positions.first.index, 2,
+          reason: 'A single-sided gap belongs to the following paragraph; the preceding title has no trailing padding');
       }
       await start(tester);
-      expect(spoken.single['text'], const TextCleaner().clean(scenario.$2).tts,
-        reason: 'A short title or its trailing padding must not become its final character');
+      expect(spoken.single['text'], const TextCleaner().clean(
+        scenario.$1 == 'paragraph-gap' ? '后续正文持续显示。' : scenario.$2).tts,
+        reason: 'A visible title starts at its beginning; after it leaves the page, the following paragraph starts at its beginning');
       expect(speech.currentTtsOffset, 0);
       await tester.pumpWidget(const SizedBox()); await tester.pumpAndSettle();
     }, timeout: const Timeout(Duration(seconds: 45)));
@@ -257,7 +271,7 @@ void main() {
     list(tester).itemScrollController!.jumpTo(index: 1, alignment: 0); await tester.pumpAndSettle();
     final render = paragraph(tester, '甲乙'), plain = render.text.toPlainText();
     final rows = <Rect>[];
-    for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: plain.length), boxHeightStyle: ui.BoxHeightStyle.includeLineSpacingMiddle)) {
+    for (final box in render.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: plain.length), boxHeightStyle: ui.BoxHeightStyle.tight)) {
       final rect = box.toRect();
       if (rect.width > 0.01 && rect.height > 2 && rows.every((row) => (row.top - rect.top).abs() > 0.5)) rows.add(rect);
     }

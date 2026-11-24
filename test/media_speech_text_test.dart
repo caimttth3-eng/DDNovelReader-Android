@@ -17,20 +17,21 @@ void main() {
     final empty = MediaSpeechText('');
     expect(empty.textAt(null), '');
     expect(empty.textAt(0), '');
-    const text = '他说：“你好。”';
+    const text = '“你好。”';
     final media = MediaSpeechText(text);
     for (var offset = 0; offset <= text.length; offset++) {
       expect(media.textAt(offset), text);
     }
   });
 
-  test('missing and out-of-range cursors do not invent a speaking position', () {
+  test('missing and out-of-range cursors stay on the first fragment without flashing the whole sentence', () {
     const text = '甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥，后面的正文。';
     final media = MediaSpeechText(text);
-    expect(media.textAt(null), text);
-    expect(media.textAt(-1), text);
-    expect(media.textAt(text.length + 1), text);
     final parts = observedParts(text);
+    expect(media.textAt(null), parts.first);
+    expect(media.textAt(-1), parts.first);
+    expect(media.textAt(text.length + 1), parts.first);
+    expect(parts.first, isNot(text));
     expect(parts.length, greaterThan(1));
     expect(parts.join(), text);
     expect(media.textAt(text.length), parts.last);
@@ -54,13 +55,48 @@ void main() {
     expect(MediaSpeechText(text, maxColumns: 16).textAt(2), parts[1]);
   });
 
-  test('use the last available punctuation and keep its closing quote', () {
+  test('each short comma clause is independent even when several fit in one window', () {
     const text = '甲，乙，丙丁戊己庚辛壬癸子丑。';
-    expect(observedParts(text, maxColumns: 16).first, '甲，乙，');
+    final parts = observedParts(text, maxColumns: 16);
+    expect(parts.take(2), ['甲，', '乙，']);
+    expect(parts.join(), text);
     const quoted = '“甲，”乙丙丁戊己庚辛壬癸子丑寅卯辰巳。';
-    final parts = observedParts(quoted, maxColumns: 16);
-    expect(parts.first, '“甲，”');
-    expect(parts.join(), quoted);
+    final quotedParts = observedParts(quoted, maxColumns: 16);
+    expect(quotedParts.first, '“甲，”');
+    expect(quotedParts.join(), quoted);
+  });
+
+  test('one and two character clauses never borrow text beyond their punctuation', () {
+    const text = '好，真的？嗯！走吧；前方：左、右。';
+    final parts = observedParts(text, maxColumns: 100);
+    expect(parts, ['好，', '真的？', '嗯！', '走吧；', '前方：', '左、', '右。']);
+    final media = MediaSpeechText(text, maxColumns: 100);
+    expect(media.textAt(text.indexOf('，')), '好，', reason: 'The comma still belongs to the preceding words');
+    expect(media.textAt(text.indexOf('真')), '真的？');
+    expect(media.textAt(text.length), '右。');
+  });
+
+  test('punctuation runs closing quotes and trailing whitespace do not produce empty follow-up cards', () {
+    const text = '“好？！”  「真的……」\n下一段。  ';
+    final parts = observedParts(text, maxColumns: 100);
+    expect(parts, ['“好？！”  ', '「真的……」\n', '下一段。  ']);
+    expect(parts.join(), text);
+    final media = MediaSpeechText(text, maxColumns: 100);
+    for (final position in [text.indexOf('？'), text.indexOf('！'), text.indexOf('”'), text.indexOf('  ')]) {
+      expect(media.textAt(position), parts.first);
+    }
+    expect(parts.every((part) => part.trim().isNotEmpty), isTrue);
+    expect(observedParts('"OK,"next.', maxColumns: 100), ['"OK,"', 'next.']);
+  });
+
+  test('only a long individual clause uses width windows and never absorbs its short neighbors', () {
+    const text = '好，甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳，嗯。';
+    final parts = observedParts(text, maxColumns: 8);
+    expect(parts.first, '好，');
+    expect(parts.last, '嗯。');
+    expect(parts.sublist(1, parts.length - 1), ['甲乙丙丁', '戊己庚辛', '壬癸子丑', '寅卯辰巳，']);
+    expect(parts.join(), text);
+    expect(observedParts(text, maxColumns: 100), ['好，', '甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳，', '嗯。']);
   });
 
   test('ordinary English words stay together and whitespace is lossless', () {

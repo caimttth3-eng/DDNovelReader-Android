@@ -130,10 +130,13 @@ void main() {
     await file.writeAsString('{broken');
     cache.clearMemoryCache();
     expect((await cache.lookup(meta, settings)).snapshot, isNull);
-    final json = jsonDecode(good) as Map<String, dynamic>; json['schema'] = 999;
-    await file.writeAsString(jsonEncode(json));
-    cache.clearMemoryCache();
-    expect((await cache.lookup(meta, settings)).snapshot, isNull);
+    for (final schema in [3, 999]) {
+      final json = jsonDecode(good) as Map<String, dynamic>; json['schema'] = schema;
+      await file.writeAsString(jsonEncode(json));
+      cache.clearMemoryCache();
+      expect((await cache.lookup(meta, settings)).snapshot, isNull,
+        reason: 'Old snapshots with generated section labels must be reparsed');
+    }
     final handle = await file.open(mode: FileMode.write);
     await handle.truncate(BookSnapshotCache.maxBytes + 1); await handle.close();
     cache.clearMemoryCache();

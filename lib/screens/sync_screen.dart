@@ -2,8 +2,63 @@ import 'package:flutter/material.dart';
 
 import '../i18n.dart';
 import '../services/annotation_store.dart';
+import '../services/app_appearance.dart';
 import '../services/app_storage.dart';
 import '../services/sync_engine.dart';
+
+/// Shared preview and target checks for the library and reader entrypoints.
+class SyncActionPreview {
+  static bool sameTarget(Map<String, dynamic> left, Map<String, dynamic> right) {
+    Object? value(Map<String, dynamic> settings, String key) {
+      if (key == SyncEngine.cfgVerifyTls) return settings[key] ?? true;
+      final text = settings[key] as String? ?? '';
+      if (key == SyncEngine.cfgPass) return text;
+      if (key == SyncEngine.cfgDir && text.trim().isEmpty) return SyncEngine.remoteDirDefault;
+      return text.trim();
+    }
+    return [SyncEngine.cfgServer, SyncEngine.cfgUser, SyncEngine.cfgPass,
+      SyncEngine.cfgDir, SyncEngine.cfgVerifyTls].every((key) => value(left, key) == value(right, key));
+  }
+
+  static String label(String mode) => T(switch (mode) {
+    'push' => 'syncPush', 'pull' => 'syncPull', _ => 'syncRun',
+  });
+
+  static String description(SyncReport report) {
+    final lines = <String>[];
+    void add(String key, int count) {
+      if (count > 0) lines.add(T(key, {'n': '$count'}));
+    }
+    if (report.mode != 'pull') {
+      add('syncWillPush', report.pushed);
+      add('syncWillDelete', report.deleted);
+      add('syncWillUploadSource', report.sourceUploaded);
+    }
+    if (report.mode != 'push') {
+      add('syncWillPull', report.pulled);
+      add('syncWillImport', report.imported);
+      add('syncWillRemove', report.removed);
+      add('syncWillRecordDeletion', report.deletionUpdates);
+    }
+    if (lines.isEmpty && report.hasChanges) lines.add(T('syncWillReconcile'));
+    if (report.remoteOnly.isNotEmpty) lines.add(T('syncRemoteOnly', {'n': '${report.remoteOnly.length}'}));
+    lines.add(T('syncPreviewNotice'));
+    return lines.join('\n');
+  }
+
+  static Future<bool> confirm(BuildContext context, SyncReport report, {ThemeData? theme}) async =>
+    await showDialog<bool>(context: context, builder: (dialog) => Theme(
+      data: theme ?? AppAppearance.menuTheme(Theme.of(dialog)),
+      child: AlertDialog(key: const ValueKey('sync-preview'),
+        title: Text(label(report.mode)),
+        content: Text(description(report)),
+        actions: [
+          TextButton(key: const ValueKey('sync-preview-cancel'),
+            onPressed: () => Navigator.of(dialog).pop(false), child: Text(T('cancel'))),
+          FilledButton(key: const ValueKey('sync-preview-confirm'),
+            onPressed: () => Navigator.of(dialog).pop(true), child: Text(T('syncContinue'))),
+        ]))) == true;
+}
 
 /// 数据同步（WebDAV）。与 PC 版「设置 → 数据同步」同一套协议：
 /// 远端 v1/books/<content_key>.json、v1/devices/<device_id>.json、v1/meta.json。
@@ -12,12 +67,14 @@ class SyncScreen extends StatefulWidget {
   final AppStorage storage;
   final AnnotationStore annotations;
   final VoidCallback? onSynced;
+  final SyncEngine? syncEngine;
 
   const SyncScreen({
     super.key,
     required this.storage,
     required this.annotations,
     this.onSynced,
+    this.syncEngine,
   });
 
   static Future<void> show(
@@ -55,7 +112,7 @@ class _SyncScreenState extends State<SyncScreen> {
   double _lastTime = 0;
 
   late final SyncEngine _engine =
-      SyncEngine(storage: widget.storage, annotations: widget.annotations);
+      widget.syncEngine ?? SyncEngine(storage: widget.storage, annotations: widget.annotations);
 
   @override
   void initState() {
@@ -109,6 +166,7 @@ class _SyncScreenState extends State<SyncScreen> {
   }
 
   Future<void> _run(bool testOnly) async {
+    if (!testOnly) return _runMode('both');
     if (_busy) return;
     if (_serverCtl.text.trim().isEmpty) {
       setState(() => _status = T('syncNeedServer'));
@@ -121,27 +179,67 @@ class _SyncScreenState extends State<SyncScreen> {
     try {
       await _persist();
       if (!mounted) return;
-      if (testOnly) {
-        final (ok, msg) = await _engine.testConnection();
-        if (!mounted) return;
-        setState(() {
-          _busy = false;
-          _status = msg;
-        });
+      final (_, message) = await _engine.testConnection();
+      if (!mounted) return;
+      setState(() => _status = message);
+    } catch (error) {
+      if (mounted) setState(() => _status = T('operationFailed', {'err': '$error'}));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _runMode(String mode) async {
+    if (_busy) return;
+    if (_serverCtl.text.trim().isEmpty) {
+      setState(() => _status = T('syncNeedServer'));
+      return;
+    }
+    setState(() { _busy = true; _status = T('syncChecking'); });
+    try {
+      await _persist();
+      if (!mounted) return;
+      final target = await _engine.settings();
+      if (!mounted) return;
+      final preview = await _engine.sync(mode: mode, dryRun: true, expectedSettings: target);
+      if (!mounted) return;
+      if (!preview.ok) {
+        setState(() => _status = preview.error.isEmpty ? T('syncFailed') : preview.error);
         return;
       }
-      final report = await _engine.sync();
+      if (!SyncActionPreview.sameTarget(target, await _engine.settings())) {
+        if (mounted) setState(() => _status = T('syncTargetChanged'));
+        return;
+      }
+      if (!mounted) return;
+      if (!preview.hasChanges) {
+        setState(() => _status = preview.remoteOnly.isEmpty ? T('syncNoChange') :
+          '${T('syncNoChange')}\n${T('syncRemoteOnly', {'n': '${preview.remoteOnly.length}'})}');
+        return;
+      }
+      final confirmed = await SyncActionPreview.confirm(context, preview);
+      if (!mounted) return;
+      if (!confirmed) {
+        setState(() => _status = T('syncCancelled'));
+        return;
+      }
+      if (!SyncActionPreview.sameTarget(target, await _engine.settings())) {
+        if (mounted) setState(() => _status = T('syncTargetChanged'));
+        return;
+      }
+      if (!mounted) return;
+      setState(() => _status = T('syncRunning'));
+      final report = await _engine.sync(mode: mode, expectedSettings: target);
       if (!mounted) return;
       setState(() {
-        _busy = false;
         _status = report.summary;
-        _lastTime = report.ok
-            ? DateTime.now().millisecondsSinceEpoch / 1000.0
-            : _lastTime;
+        if (report.ok) _lastTime = DateTime.now().millisecondsSinceEpoch / 1000.0;
       });
       if (report.ok) widget.onSynced?.call();
     } catch (error) {
-      if (mounted) setState(() { _busy = false; _status = '同步失败：$error'; });
+      if (mounted) setState(() => _status = T('operationFailed', {'err': '$error'}));
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -162,6 +260,7 @@ class _SyncScreenState extends State<SyncScreen> {
           const SizedBox(height: 4),
           TextField(
             controller: ctl,
+            enabled: !_busy,
             obscureText: obscure,
             keyboardType: type,
             style: TextStyle(fontSize: 14, color: _colors.onSurface),
@@ -202,7 +301,8 @@ class _SyncScreenState extends State<SyncScreen> {
         ),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-          child: Column(
+          child: LayoutBuilder(builder: (context, constraints) {
+            final content = Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -255,7 +355,7 @@ class _SyncScreenState extends State<SyncScreen> {
                         contentPadding: EdgeInsets.zero,
                         dense: true,
                         value: _auto,
-                        onChanged: (v) => setState(() => _auto = v),
+                        onChanged: _busy ? null : (v) => setState(() => _auto = v),
                         title: Text(T('syncAuto'),
                             style: const TextStyle(fontSize: 13)),
                       ),
@@ -263,11 +363,14 @@ class _SyncScreenState extends State<SyncScreen> {
                         contentPadding: EdgeInsets.zero,
                         dense: true,
                         value: _verifyTls,
-                        onChanged: (v) => setState(() => _verifyTls = v),
+                        onChanged: _busy ? null : (v) => setState(() => _verifyTls = v),
                         title: Text(T('syncVerifyTls'),
                             style: const TextStyle(fontSize: 13)),
                       ),
                       const SizedBox(height: 4),
+                      Text(T('syncHint'), style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: _colors.onSurfaceVariant)),
+                      const SizedBox(height: 8),
                     ],
                   ),
                 ),
@@ -308,8 +411,20 @@ class _SyncScreenState extends State<SyncScreen> {
                   ),
                 ],
               ),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(child: OutlinedButton(key: const ValueKey('sync-push'),
+                  onPressed: _busy ? null : () => _runMode('push'),
+                  child: Text(T('syncPush'), textAlign: TextAlign.center))),
+                const SizedBox(width: 10),
+                Expanded(child: OutlinedButton(key: const ValueKey('sync-pull'),
+                  onPressed: _busy ? null : () => _runMode('pull'),
+                  child: Text(T('syncPull'), textAlign: TextAlign.center))),
+              ]),
             ],
-          ),
+            );
+            return constraints.maxHeight < 380 ? SingleChildScrollView(child: content) : content;
+          }),
         ),
       ),
     );
